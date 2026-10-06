@@ -24,45 +24,55 @@ export async function runPaidPostPaymentTasks(orderId: string, paymentId: string
     invoice: "PROVIDER_REQUIRED",
   };
 
-  try {
-    const print = await enqueueNewOrderPrintJob(orderId, { ignoreAutoPrintGate: true });
+  const settled = await Promise.allSettled([
+    enqueueNewOrderPrintJob(orderId, { ignoreAutoPrintGate: true }),
+    notifyNewOrder(orderId),
+    notifyCustomerPaymentSuccess(orderId),
+  ]);
+
+  const printResult = settled[0];
+  if (printResult.status === "fulfilled") {
+    const print = printResult.value;
     post.print = print.status === "created" || print.status === "already_exists" ? "CREATED" : "FAILED";
     paymentAudit("PRINT_JOB_CREATED", {
       orderId,
       paymentAttemptId: paymentId,
       extra: { printStatus: print.status },
     });
-  } catch (error) {
+  } else {
     post.print = "FAILED";
     paymentAudit("PRINT_JOB_CREATED", {
       orderId,
       paymentAttemptId: paymentId,
-      providerErrorCode: error instanceof Error ? error.message : "print_failed",
+      providerErrorCode:
+        printResult.reason instanceof Error ? printResult.reason.message : "print_failed",
     });
   }
 
-  try {
-    const admin = await notifyNewOrder(orderId);
+  const adminResult = settled[1];
+  if (adminResult.status === "fulfilled") {
+    const admin = adminResult.value;
     post.adminEmail = taskStatus(admin);
-    paymentAudit(admin.status === "failed" ? "ADMIN_EMAIL_SENT" : "ADMIN_EMAIL_SENT", {
+    paymentAudit("ADMIN_EMAIL_SENT", {
       orderId,
       paymentAttemptId: paymentId,
       extra: { adminEmail: admin.status },
     });
-  } catch (error) {
+  } else {
     post.adminEmail = "FAILED";
-    console.error("[hyp] admin email after pay failed", error);
+    console.error("[hyp] admin email after pay failed", adminResult.reason);
   }
 
-  try {
-    const customer = await notifyCustomerPaymentSuccess(orderId);
-    post.customerEmail = taskStatus(customer);
-  } catch (error) {
+  const customerResult = settled[2];
+  if (customerResult.status === "fulfilled") {
+    post.customerEmail = taskStatus(customerResult.value);
+  } else {
     post.customerEmail = "FAILED";
     paymentAudit("CUSTOMER_EMAIL_FAILED", {
       orderId,
       paymentAttemptId: paymentId,
-      providerErrorCode: error instanceof Error ? error.message : "customer_email_failed",
+      providerErrorCode:
+        customerResult.reason instanceof Error ? customerResult.reason.message : "customer_email_failed",
     });
   }
 

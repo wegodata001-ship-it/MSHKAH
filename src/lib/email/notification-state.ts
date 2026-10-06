@@ -117,7 +117,7 @@ export async function claimNotification(
 export async function markNotificationSent(
   ref: DocumentReference,
   field: string,
-  opts: { messageId?: string; fingerprint?: string; attempts?: number }
+  opts: { messageId?: string; fingerprint?: string; attempts?: number; deliveryStatus?: string }
 ): Promise<void> {
   const payload: Record<string, unknown> = {
     status: "SENT",
@@ -128,6 +128,7 @@ export async function markNotificationSent(
   if (opts.messageId) payload.messageId = opts.messageId;
   if (opts.fingerprint) payload.fingerprint = opts.fingerprint;
   if (opts.attempts != null) payload.attempts = opts.attempts;
+  if (opts.deliveryStatus) payload.deliveryStatus = opts.deliveryStatus;
 
   await ref.update({
     [`notifications.${field}`]: payload,

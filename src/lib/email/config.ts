@@ -36,10 +36,25 @@ export function getMishkahNotificationEmails() {
   };
 }
 
-/** Business order alerts — primary café inbox */
+/** Canonical Mishkat inbox. Prefer notification, then admin. */
+export function getAdminNotificationEmail(): string {
+  const { notification, admin } = getMishkahNotificationEmails();
+  return notification || admin || "";
+}
+
+/** Unique configured business alert recipients. */
+export function getAdminNotificationEmails(): string[] {
+  const { recipients } = getMishkahNotificationEmails();
+  return recipients;
+}
+
+/** Business order alerts — configured café inboxes */
 export function getBusinessAlertRecipients(): string[] {
-  const { notification } = getMishkahNotificationEmails();
-  return notification ? [notification] : [];
+  const recipients = getAdminNotificationEmails();
+  if (recipients.length === 0) {
+    console.error("[email] ADMIN_NOTIFICATION_EMAIL_MISSING");
+  }
+  return recipients;
 }
 
 export function getPublicSiteUrl(): string {

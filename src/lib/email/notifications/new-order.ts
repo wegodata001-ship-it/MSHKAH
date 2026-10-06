@@ -7,6 +7,7 @@ import {
 } from "@/lib/email/notification-state";
 import { firestoreOrderToEmailPayload } from "@/lib/email/order-email-payload";
 import { sendNewOrderNotificationEmail } from "@/lib/email/send";
+import { getBrevoDeliveryStatus } from "@/lib/email/brevo";
 import type { FirestoreOrder } from "@/types/firestore";
 
 export type NotifyResult =
@@ -67,9 +68,11 @@ export async function notifyNewOrder(
     return { status: "failed", error: result.error };
   }
 
-  await markNotificationSent(ref, FIELD, { messageId: result.messageId }).catch(
-    () => undefined
-  );
+  const deliveryStatus = await getBrevoDeliveryStatus(result.messageId);
+  await markNotificationSent(ref, FIELD, {
+    messageId: result.messageId,
+    deliveryStatus,
+  }).catch(() => undefined);
   await ref
     .update({ "notifications.newOrderEmailSent": true })
     .catch(() => undefined);

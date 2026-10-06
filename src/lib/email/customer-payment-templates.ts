@@ -16,8 +16,8 @@ function formatIls(amount: number): string {
 function copy(locale: MailLocale) {
   if (locale === "ar") {
     return {
-      successSubject: (n: string) => `تم تأكيد طلبك من مشكاة كافيه — #${n}`,
-      successTitle: "شكراً لطلبك",
+      successSubject: (n: string) => `تم تأكيد طلبك ودفعه بنجاح — مشكاة كافيه #${n}`,
+      successTitle: "تم استلام الطلب",
       successLead: "تم الدفع بنجاح ✓",
       paymentMethod: "بطاقة ائتمان",
       paymentStatus: "تم الدفع",

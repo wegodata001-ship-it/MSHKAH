@@ -97,3 +97,35 @@ export async function sendViaBrevo(input: SendEmailInput): Promise<SendEmailResu
     };
   }
 }
+
+/** Latest safe Brevo event name for a transactional messageId. Never logs recipients. */
+export async function getBrevoDeliveryStatus(messageId?: string): Promise<string | undefined> {
+  if (!messageId) return undefined;
+  const ready = assertBrevoReady();
+  if (!ready.ok) return undefined;
+  const cfg = getBrevoConfig();
+  try {
+    const listed = await fetch(
+      `${cfg.baseUrl}/smtp/emails?messageId=${encodeURIComponent(messageId)}`,
+      { headers: { accept: "application/json", "api-key": cfg.apiKey } }
+    );
+    if (!listed.ok) return undefined;
+    const list = (await listed.json()) as { transactionalEmails?: Array<{ uuid?: string }> };
+    const uuid = list.transactionalEmails?.[0]?.uuid;
+    if (!uuid) return "accepted";
+    const detail = await fetch(`${cfg.baseUrl}/smtp/emails/${uuid}`, {
+      headers: { accept: "application/json", "api-key": cfg.apiKey },
+    });
+    if (!detail.ok) return "accepted";
+    const body = (await detail.json()) as { events?: Array<{ name?: string }> };
+    const names = (body.events ?? []).map((event) => event.name).filter(Boolean);
+    if (names.includes("hardBounce") || names.includes("softBounce") || names.includes("blocked")) {
+      return names.find((name) => name === "hardBounce" || name === "softBounce" || name === "blocked");
+    }
+    if (names.includes("delivered")) return "delivered";
+    if (names.includes("sent")) return "sent";
+    return names.at(-1) || "accepted";
+  } catch {
+    return undefined;
+  }
+}

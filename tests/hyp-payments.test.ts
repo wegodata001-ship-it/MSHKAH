@@ -135,6 +135,7 @@ describe("HYP customer prefill", () => {
 
   it("normalizes customer emails", () => {
     expect(normalizeCustomerEmail("  A@Ex.Com ")).toBe("a@ex.com");
+    expect(normalizeCustomerEmail("user@gmal.com")).toBe("user@gmail.com");
     expect(normalizeCustomerEmail("not-an-email")).toBeNull();
     expect(normalizeCustomerEmail("")).toBeNull();
   });

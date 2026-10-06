@@ -7,6 +7,7 @@ import {
 } from "@/lib/email/notification-state";
 import { firestoreOrderToEmailPayload } from "@/lib/email/order-email-payload";
 import { sendMishkahEmail } from "@/lib/email/send";
+import { getBrevoDeliveryStatus } from "@/lib/email/brevo";
 import {
   customerRetryUrl,
   renderCustomerPaymentFailedEmail,
@@ -35,6 +36,9 @@ export async function notifyCustomerPaymentSuccess(
   const data = snap.data() as FirestoreOrder;
   const email = normalizeCustomerEmail(data.customerEmail);
   if (!email) return { status: "skipped", reason: "no_customer_email" };
+  if (email !== (data.customerEmail ?? "").trim().toLowerCase()) {
+    await ref.update({ customerEmail: email }).catch(() => undefined);
+  }
 
   const claim = await claimNotification(ref, SUCCESS_FIELD, {
     allowRetryFailed: true,
@@ -63,8 +67,12 @@ export async function notifyCustomerPaymentSuccess(
     return { status: "failed", error: result.error };
   }
 
-  await markNotificationSent(ref, SUCCESS_FIELD, { messageId: result.messageId }).catch(() => undefined);
-  paymentAudit("CUSTOMER_EMAIL_SENT", { orderId });
+  const deliveryStatus = await getBrevoDeliveryStatus(result.messageId);
+  await markNotificationSent(ref, SUCCESS_FIELD, {
+    messageId: result.messageId,
+    deliveryStatus,
+  }).catch(() => undefined);
+  paymentAudit("CUSTOMER_EMAIL_SENT", { orderId, extra: { deliveryStatus } });
   return { status: "sent", messageId: result.messageId };
 }
 
