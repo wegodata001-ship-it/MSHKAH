@@ -1,9 +1,9 @@
 /* MSHKAH PWA service worker — static assets only; dynamic data stays network-first. */
-const SW_VERSION = "mshkah-pwa-1";
+const SW_VERSION = "mshkah-pwa-3";
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const PAGES_CACHE = `${SW_VERSION}-pages`;
 
-const PRECACHE_URLS = ["/offline", "/icons/icon-192.png", "/icons/icon-512.png"];
+const PRECACHE_URLS = ["/offline", "/icon-192.png", "/icon-512.png", "/favicon.ico"];
 
 function isApiRequest(url) {
   return url.pathname.startsWith("/api/");

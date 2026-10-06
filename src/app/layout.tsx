@@ -84,7 +84,7 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
-  title: BRAND.name,
+  title: "Mishkat Cafe | مشكاة كافيه",
   description: `${BRAND.taglineAlt} — ${BRAND.tagline}`,
   applicationName: PWA_APP_NAME,
   appleWebApp: {
@@ -97,23 +97,24 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
+      { url: PWA_ICONS.favicon, sizes: "48x48" },
       { url: PWA_ICONS.icon192, sizes: "192x192", type: "image/png" },
       { url: PWA_ICONS.icon512, sizes: "512x512", type: "image/png" },
-      { url: BRAND.logo, type: "image/png" },
     ],
     apple: [{ url: PWA_ICONS.appleTouch, sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
-    title: BRAND.name,
+    title: "Mishkat Cafe | مشكاة كافيه",
     description: BRAND.taglineAlt,
-    images: [{ url: BRAND.logo, width: 1059, height: 931, alt: BRAND.name }],
+    images: [{ url: "/og-image.jpg", width: 1200, height: 630, alt: "Mishkat Cafe" }],
     type: "website",
+    siteName: "Mishkat Cafe",
   },
   twitter: {
     card: "summary_large_image",
-    title: BRAND.name,
+    title: "Mishkat Cafe | مشكاة كافيه",
     description: BRAND.taglineAlt,
-    images: [BRAND.logo],
+    images: ["/og-image.jpg"],
   },
 };
 
