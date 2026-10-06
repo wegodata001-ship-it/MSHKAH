@@ -91,6 +91,7 @@ export const orderSchema = z.object({
   paymentMethod: z.string().default("cash"),
   paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).optional(),
   customerPhone: z.string().optional(),
+  customerEmail: z.string().email().optional(),
   orderType: z.enum(["pickup", "delivery"]).optional(),
   deliveryAddress: z.string().optional(),
   notes: z.string().default(""),

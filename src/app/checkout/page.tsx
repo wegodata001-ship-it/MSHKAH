@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2,
+  Mail,
   Phone,
   User,
   MessageSquare,
@@ -25,8 +26,9 @@ import { useT, useLocale } from "@/components/providers/locale-provider";
 import { useLocalizedProduct } from "@/hooks/useLocalizedContent";
 import { useCart } from "@/features/cart/cart-context";
 import { createOrderFromCart, getOrCreateGuestCustomer, GUEST_CUSTOMER_ID } from "@/services";
+import { normalizeCustomerEmail } from "@/lib/orders/customer-email";
 import { requestNewOrderEmailNotification, requestNewOrderPrintJob, requestCriticalCheckoutFailureNotification } from "@/lib/email/client-notify";
-import { formatPrice } from "@/lib/utils";
+import { formatPrice, cn } from "@/lib/utils";
 import { calculateLineTotal } from "@/lib/product-builder/engine";
 
 function OrderLineItem({ item }: { item: import("@/types").CartItem }) {
@@ -58,11 +60,36 @@ export default function CheckoutPage() {
   } = useCart();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [payment, setPayment] = useState<"cash" | "card">("cash");
+  const [hypAvailability, setHypAvailability] = useState<"unknown" | "enabled" | "disabled">("unknown");
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/payments/hyp/status")
+      .then((res) => res.json())
+      .then((data: { enabled?: boolean }) => {
+        if (cancelled) return;
+        setHypAvailability(data.enabled ? "enabled" : "disabled");
+      })
+      .catch(() => {
+        if (!cancelled) setHypAvailability("disabled");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (hypAvailability === "disabled" && payment === "card") setPayment("cash");
+  }, [hypAvailability, payment]);
+
+  const cardDisabled = hypAvailability === "disabled";
 
   if (items.length === 0 && !success) {
     return (
@@ -84,6 +111,11 @@ export default function CheckoutPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !phone) { setError(t("validation.required")); return; }
+    const normalizedEmail = email.trim() ? normalizeCustomerEmail(email) : null;
+    if (email.trim() && !normalizedEmail) {
+      setError(t("validation.email"));
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -98,30 +130,55 @@ export default function CheckoutPage() {
         .filter(Boolean)
         .join("\n");
 
-      const result = await createOrderFromCart(items, GUEST_CUSTOMER_ID, name, {
-        subtotal,
-        discount,
-        total,
-        paymentMethod: payment,
-        customerPhone: phone.trim(),
-        notes: orderNotes || undefined,
-        locale,
-      });
-      if (!result.success) {
-        console.error("[checkout] order failed:", result.error, result.code);
-        if (result.code === "ORDER_SAVE_FAILED") {
-          requestCriticalCheckoutFailureNotification({
-            message: result.error || "Order save failed",
-            code: result.code,
-          });
+      let orderId = pendingOrderId;
+      if (!orderId) {
+        const result = await createOrderFromCart(items, GUEST_CUSTOMER_ID, name, {
+          subtotal,
+          discount,
+          total,
+          paymentMethod: payment,
+          customerPhone: phone.trim(),
+          customerEmail: normalizedEmail || undefined,
+          notes: orderNotes || undefined,
+          locale,
+        });
+        if (!result.success) {
+          console.error("[checkout] order failed:", result.error, result.code);
+          if (result.code === "ORDER_SAVE_FAILED") {
+            requestCriticalCheckoutFailureNotification({
+              message: result.error || "Order save failed",
+              code: result.code,
+            });
+          }
+          setError(t("checkout.orderSaveError"));
+          return;
         }
-        setError(t("checkout.orderSaveError"));
+        orderId = result.data.id;
+      }
+
+      if (payment === "card") {
+        setPendingOrderId(orderId);
+        const payRes = await fetch("/api/payments/hyp/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId,
+            customerName: name.trim(),
+            customerPhone: phone.trim(),
+            customerEmail: normalizedEmail || undefined,
+          }),
+        });
+        const payData = (await payRes.json()) as { ok?: boolean; paymentUrl?: string };
+        if (!payRes.ok || !payData.ok || !payData.paymentUrl) {
+          setError(t("checkout.hypOpenError"));
+          return;
+        }
+        window.location.assign(payData.paymentUrl);
         return;
       }
 
-      // Notification only — never block or fail the completed order.
-      requestNewOrderEmailNotification(result.data.id);
-      requestNewOrderPrintJob(result.data.id);
+      requestNewOrderEmailNotification(orderId);
+      requestNewOrderPrintJob(orderId);
 
       setSuccess(true);
       clearCart();
@@ -181,6 +238,18 @@ export default function CheckoutPage() {
                         <Input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" className="mt-1" required />
                       </div>
                       <div>
+                        <Label className="flex items-center gap-1"><Mail className="h-3.5 w-3.5" strokeWidth={1.75} /> {t("checkout.email")}</Label>
+                        <Input
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          type="email"
+                          inputMode="email"
+                          autoComplete="email"
+                          className="mt-1"
+                          placeholder="name@email.com"
+                        />
+                      </div>
+                      <div>
                         <Label className="flex items-center gap-1"><MessageSquare className="h-3.5 w-3.5" strokeWidth={1.75} /> {t("checkout.notes")}</Label>
                         <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1" placeholder={t("checkout.notes")} />
                       </div>
@@ -189,23 +258,57 @@ export default function CheckoutPage() {
 
                   <div className="rounded-2xl bg-warm-white p-5 shadow-soft">
                     <h2 className="text-sm font-semibold">{t("checkout.payment")}</h2>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      {(["cash", "card"] as const).map((method) => (
-                        <button
-                          key={method}
-                          type="button"
-                          onClick={() => setPayment(method)}
-                          className={`flex items-center justify-center gap-2 rounded-xl border-2 p-4 transition-all ${
-                            payment === method ? "border-turquoise bg-turquoise/5" : "border-beige-dark/30"
-                          }`}
-                        >
-                          {method === "cash" ? <Banknote className="h-5 w-5" strokeWidth={1.75} /> : <CreditCard className="h-5 w-5" strokeWidth={1.75} />}
-                          <span className="font-medium">
-                            {method === "cash" ? t("checkout.paymentCash") : t("checkout.paymentCard")}
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setPayment("cash")}
+                        className={cn(
+                          "flex min-h-11 w-full flex-col items-start gap-1 rounded-2xl border-2 px-4 py-4 text-start transition-all",
+                          payment === "cash"
+                            ? "border-turquoise bg-turquoise/5"
+                            : "border-beige-dark/30 bg-warm-white"
+                        )}
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-2">
+                            <Banknote className="h-5 w-5 shrink-0" strokeWidth={1.75} />
+                            <span className="font-semibold">{t("checkout.paymentCash")}</span>
                           </span>
-                        </button>
-                      ))}
+                          {payment === "cash" && (
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-turquoise" strokeWidth={1.75} />
+                          )}
+                        </div>
+                        <span className="ps-7 text-xs text-coffee/55">{t("checkout.paymentCashHint")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!cardDisabled) setPayment("card");
+                        }}
+                        disabled={cardDisabled}
+                        className={cn(
+                          "flex min-h-11 w-full flex-col items-start gap-1 rounded-2xl border-2 px-4 py-4 text-start transition-all",
+                          cardDisabled && "cursor-not-allowed opacity-55",
+                          !cardDisabled && payment === "card"
+                            ? "border-turquoise bg-turquoise/5"
+                            : "border-beige-dark/30 bg-warm-white"
+                        )}
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-2">
+                            <CreditCard className="h-5 w-5 shrink-0" strokeWidth={1.75} />
+                            <span className="font-semibold">{t("checkout.paymentCard")}</span>
+                          </span>
+                          {!cardDisabled && payment === "card" && (
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-turquoise" strokeWidth={1.75} />
+                          )}
+                        </div>
+                        <span className="ps-7 text-xs text-coffee/55">{t("checkout.paymentCardHint")}</span>
+                      </button>
                     </div>
+                    {cardDisabled && (
+                      <p className="mt-3 text-sm text-coffee/60">{t("checkout.hypUnavailable")}</p>
+                    )}
                   </div>
                 </div>
 
@@ -232,8 +335,17 @@ export default function CheckoutPage() {
                       </div>
                     </div>
                     {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-                    <Button type="submit" variant="turquoise" size="lg" className="mt-4 w-full" disabled={loading}>
-                      {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : t("checkout.placeOrder")}
+                    <Button type="submit" variant="turquoise" size="lg" className="mt-4 w-full" disabled={loading || (payment === "card" && cardDisabled)}>
+                      {loading ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {payment === "card" ? t("checkout.redirecting") : t("checkout.placeOrder")}
+                        </span>
+                      ) : payment === "card" ? (
+                        t("checkout.paySecure")
+                      ) : (
+                        t("checkout.placeOrder")
+                      )}
                     </Button>
                   </div>
                 </div>

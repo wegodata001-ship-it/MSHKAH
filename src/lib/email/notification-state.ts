@@ -53,7 +53,7 @@ export type ClaimResult =
 export async function claimNotification(
   ref: DocumentReference,
   field: string,
-  options?: { fingerprint?: string; allowRetryFailed?: boolean }
+  options?: { fingerprint?: string; allowRetryFailed?: boolean; forceResend?: boolean }
 ): Promise<ClaimResult> {
   const db = ref.firestore;
   return db.runTransaction(async (tx) => {
@@ -73,7 +73,7 @@ export async function claimNotification(
       return { ok: false as const, reason: "already_sent" as const };
     }
 
-    if (record?.status === "SENT") {
+    if (record?.status === "SENT" && !options?.forceResend) {
       if (
         options?.fingerprint &&
         record.fingerprint &&

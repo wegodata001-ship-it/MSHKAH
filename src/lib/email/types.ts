@@ -15,6 +15,7 @@ export type MishkahEmailKind =
   | "new_order"
   | "order_updated"
   | "order_cancelled"
+  | "customer_payment"
   | "system";
 
 export type NewOrderEmailStatus = "SENDING" | "SENT" | "FAILED";

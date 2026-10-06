@@ -19,6 +19,7 @@ export const CUSTOMER_ONLY_PATH_PREFIXES = [
   "/catalog",
   "/cart",
   "/checkout",
+  "/payment",
   "/account",
   "/offline",
   "/pdf-smoke",

@@ -131,7 +131,17 @@ export function mapOrder(doc: FirestoreDoc<FirestoreOrder>): Order {
     total: doc.total,
     paymentMethod: doc.paymentMethod,
     paymentStatus: doc.paymentStatus ?? "pending",
+    paymentProvider: doc.paymentProvider,
+    paymentTransactionId: doc.paymentTransactionId,
     customerPhone: doc.customerPhone,
+    customerEmail: doc.customerEmail,
+    customerConfirmationStatus:
+      doc.notifications &&
+      typeof doc.notifications === "object" &&
+      doc.notifications.customerConfirmationEmail &&
+      typeof doc.notifications.customerConfirmationEmail === "object"
+        ? doc.notifications.customerConfirmationEmail.status
+        : undefined,
     orderType: doc.orderType,
     deliveryAddress: doc.deliveryAddress,
     notes: doc.notes,

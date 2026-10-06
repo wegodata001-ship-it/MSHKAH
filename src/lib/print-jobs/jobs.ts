@@ -93,9 +93,12 @@ function isReadyToClaim(data: FirebaseFirestore.DocumentData, now: number): bool
   return false;
 }
 
-export async function enqueueNewOrderPrintJob(orderId: string): Promise<EnqueueResult> {
+export async function enqueueNewOrderPrintJob(
+  orderId: string,
+  options?: { ignoreAutoPrintGate?: boolean }
+): Promise<EnqueueResult> {
   if (!orderId.trim()) return { status: "skipped", reason: "missing_orderId" };
-  if (!isAutoPrintNewOrdersEnabled()) {
+  if (!options?.ignoreAutoPrintGate && !isAutoPrintNewOrdersEnabled()) {
     return { status: "skipped", reason: "auto_print_disabled" };
   }
 

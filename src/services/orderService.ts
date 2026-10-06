@@ -95,6 +95,7 @@ function buildFirestoreOrder(
     createdAt: now,
   };
   if (parsed.customerPhone?.trim()) order.customerPhone = parsed.customerPhone.trim();
+  if (parsed.customerEmail?.trim()) order.customerEmail = parsed.customerEmail.trim().toLowerCase();
   if (parsed.orderType) order.orderType = parsed.orderType;
   if (parsed.deliveryAddress?.trim()) order.deliveryAddress = parsed.deliveryAddress.trim();
   if (parsed.locale) order.locale = parsed.locale;
@@ -278,6 +279,7 @@ export async function createOrderFromCart(
     paymentMethod?: string;
     paymentStatus?: PaymentStatus;
     customerPhone?: string;
+    customerEmail?: string;
     notes?: string;
     locale?: "ar" | "he" | "en";
   }
@@ -332,6 +334,7 @@ export async function createOrderFromCart(
     paymentMethod: checkout?.paymentMethod ?? "cash",
     paymentStatus: checkout?.paymentStatus ?? "pending",
     customerPhone: checkout?.customerPhone,
+    customerEmail: checkout?.customerEmail,
     orderType: NEW_ORDER_FULFILLMENT,
     notes: checkout?.notes?.trim() ?? "",
     locale,

@@ -100,6 +100,7 @@ export function OrderCard({
   onCancel,
   onPrint,
   onThermalReprint,
+  onResendCustomerEmail,
   onExportPdf,
   onCopyNumber,
   onEditItem,
@@ -112,6 +113,7 @@ export function OrderCard({
   onCancel: () => void;
   onPrint: () => void;
   onThermalReprint?: () => void;
+  onResendCustomerEmail?: () => void;
   onExportPdf?: () => void;
   onCopyNumber?: () => void;
   onEditItem?: (index: number) => void;
@@ -121,6 +123,10 @@ export function OrderCard({
   const age = orderAgeMinutes(order);
   const urgent = age >= 15 && order.status === "pending";
   const paymentStatus = effectivePaymentStatus(order);
+  const paidByCard =
+    paymentStatus === "paid" &&
+    (order.paymentProvider === "HYP" || (order.paymentMethod || "").toLowerCase() === "card");
+  const paymentLabelKey = paidByCard ? "admin.payment.paidCard" : `admin.payment.${paymentStatus}`;
 
   return (
     <article
@@ -149,7 +155,7 @@ export function OrderCard({
                       : "border-amber-300 bg-amber-50 text-amber-700"
               }
             >
-              {t(`admin.payment.${paymentStatus}`)}
+              {t(paymentLabelKey)}
             </Badge>
             <ChevronDown
               className={cn("h-4 w-4 text-coffee/40 transition-transform", expanded && "rotate-180")}
@@ -185,12 +191,31 @@ export function OrderCard({
             <p className="font-semibold">{t("orders.customer")}</p>
             <p>{order.customerName}</p>
             {order.customerPhone && <p dir="ltr" className="text-start">{order.customerPhone}</p>}
+            {order.customerEmail && <p dir="ltr" className="text-start">{order.customerEmail}</p>}
             {order.deliveryAddress && <p>{order.deliveryAddress}</p>}
           </div>
           <div className="space-y-1">
             <p className="font-semibold">{t("orders.date")}</p>
             <p>{formatDate(order.createdAt)}</p>
             <p>{t("admin.orders.paymentMethod")}: {order.paymentMethod || "—"}</p>
+            {order.paymentProvider && (
+              <p>{t("admin.payment.provider")}: {order.paymentProvider}</p>
+            )}
+            {paymentStatus === "paid" && (
+              <p>{t("admin.payment.paidAmount")}: {formatPrice(order.total)}</p>
+            )}
+            {order.paymentTransactionId && (
+              <p dir="ltr" className="text-start">
+                {t("admin.payment.transaction")}: {order.paymentTransactionId}
+              </p>
+            )}
+            {order.customerConfirmationStatus && (
+              <p>
+                {t("admin.payment.customerEmail")}: {t(`admin.payment.notify.${order.customerConfirmationStatus}`)}
+              </p>
+            )}
+            <p>{t("admin.payment.invoice")}: {t("admin.payment.notify.PROVIDER_REQUIRED")}</p>
+            <p>{t("admin.payment.message")}: {t("admin.payment.notify.NOT_CONFIGURED")}</p>
           </div>
           {order.notes && (
             <div className="rounded-xl bg-amber-50 p-3 text-amber-900 md:col-span-2">
@@ -241,6 +266,11 @@ export function OrderCard({
             title={t("admin.orders.thermalReprint", "הדפס מחדש")}
           >
             {t("admin.orders.thermalReprint", "הדפס מחדש")}
+          </Button>
+        )}
+        {onResendCustomerEmail && order.customerEmail && (
+          <Button type="button" variant="outline" onClick={onResendCustomerEmail}>
+            {t("admin.payment.resendEmail")}
           </Button>
         )}
         {expanded && onExportPdf && (

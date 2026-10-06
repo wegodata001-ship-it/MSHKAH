@@ -136,9 +136,11 @@ export type OrderEmailBase = {
   createdAt: string;
   customerName: string;
   customerPhone?: string;
+  customerEmail?: string;
   items: OrderEmailItem[];
   total: number;
   paymentMethod?: string;
+  paymentStatus?: string;
   orderType?: "pickup" | "delivery";
   status?: string;
   notes?: string;
@@ -227,6 +229,7 @@ function customerBlock(payload: OrderEmailBase, extraRows?: string): string {
       <div style="font-size:14px;line-height:1.7;color:${COLORS.primary};">
         <div><strong>שם:</strong> ${escapeHtml(payload.customerName)}</div>
         ${payload.customerPhone ? `<div><strong>טלפון:</strong> ${escapeHtml(payload.customerPhone)}</div>` : ""}
+        ${payload.customerEmail ? `<div><strong>אימייל:</strong> ${escapeHtml(payload.customerEmail)}</div>` : ""}
         <div><strong>תאריך:</strong> ${escapeHtml(date)}</div>
         ${time ? `<div><strong>שעה:</strong> ${escapeHtml(time)}</div>` : ""}
         <div><strong>סוג:</strong> ${escapeHtml(fulfillmentLabel(payload.orderType))}</div>
@@ -264,7 +267,11 @@ export function renderNewOrderEmail(payload: OrderEmailBase): {
   html: string;
   text: string;
 } {
-  const subject = `הזמנה חדשה #${payload.orderNumber} | MISHKAH CAFE`;
+  const paidCard =
+    payload.paymentMethod === "card" || payload.paymentStatus === "paid";
+  const subject = paidCard
+    ? `הזמנה חדשה שולמה — #${payload.orderNumber} — ${payload.total.toFixed(2)} ₪`
+    : `הזמנה חדשה #${payload.orderNumber} | MISHKAH CAFE`;
   const html = emailShell({
     title: subject,
     badge: "new",

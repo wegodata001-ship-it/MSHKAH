@@ -82,7 +82,10 @@ export interface FirestoreOrder {
   total: number;
   paymentMethod: string;
   paymentStatus?: PaymentStatus;
+  paymentProvider?: string;
+  paymentTransactionId?: string;
   customerPhone?: string;
+  customerEmail?: string;
   orderType?: "pickup" | "delivery";
   deliveryAddress?: string;
   notes: string;
@@ -121,6 +124,28 @@ export interface FirestoreOrder {
       lastError?: string;
       attempts?: number;
       fingerprint?: string;
+    };
+    customerConfirmationEmail?: {
+      status: "SENDING" | "SENT" | "FAILED";
+      provider?: "BREVO";
+      claimedAt?: Timestamp | null;
+      sentAt?: Timestamp | null;
+      failedAt?: Timestamp | null;
+      lastAttemptAt?: Timestamp | null;
+      messageId?: string;
+      lastError?: string;
+      attempts?: number;
+    };
+    customerFailureEmail?: {
+      status: "SENDING" | "SENT" | "FAILED";
+      provider?: "BREVO";
+      claimedAt?: Timestamp | null;
+      sentAt?: Timestamp | null;
+      failedAt?: Timestamp | null;
+      lastAttemptAt?: Timestamp | null;
+      messageId?: string;
+      lastError?: string;
+      attempts?: number;
     };
     orderCancelledEmail?: {
       status: "SENDING" | "SENT" | "FAILED";

@@ -90,7 +90,11 @@ export interface Order {
   total: number;
   paymentMethod?: string;
   paymentStatus?: PaymentStatus;
+  paymentProvider?: string;
+  paymentTransactionId?: string;
   customerPhone?: string;
+  customerEmail?: string;
+  customerConfirmationStatus?: "SENDING" | "SENT" | "FAILED";
   orderType?: "pickup" | "delivery";
   deliveryAddress?: string;
   notes?: string;
