@@ -72,13 +72,23 @@ export default function CheckoutPage() {
   useEffect(() => {
     let cancelled = false;
     fetch("/api/payments/hyp/status")
-      .then((res) => res.json())
-      .then((data: { enabled?: boolean }) => {
+      .then(async (res) => {
+        const data = (await res.json()) as { enabled?: boolean; missing?: string[] };
         if (cancelled) return;
-        setHypAvailability(data.enabled ? "enabled" : "disabled");
+        const hypAvailable = res.ok && data.enabled === true;
+        setHypAvailability(hypAvailable ? "enabled" : "disabled");
+        if (!hypAvailable) {
+          const missing = Array.isArray(data.missing) && data.missing.length > 0
+            ? data.missing.join(", ")
+            : "status endpoint unavailable";
+          console.warn(`[checkout] HYP disabled: missing ${missing}`);
+        }
       })
       .catch(() => {
-        if (!cancelled) setHypAvailability("disabled");
+        if (!cancelled) {
+          setHypAvailability("disabled");
+          console.warn("[checkout] HYP disabled: status endpoint unavailable");
+        }
       });
     return () => {
       cancelled = true;
@@ -313,6 +323,9 @@ export default function CheckoutPage() {
                     </div>
                     {cardDisabled && (
                       <p className="mt-3 text-sm text-coffee/60">{t("checkout.hypUnavailable")}</p>
+                    )}
+                    {!cardDisabled && payment === "card" && (
+                      <p className="mt-3 text-sm text-coffee/60">{t("checkout.hypRedirectHint")}</p>
                     )}
                   </div>
                 </div>
