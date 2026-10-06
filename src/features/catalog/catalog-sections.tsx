@@ -143,7 +143,7 @@ export function ProductCarousel({
             whileInView={{ opacity: 1, x: 0 }}
             viewport={{ once: true }}
             transition={{ delay: index * 0.03 }}
-            className="w-[228px] shrink-0 snap-start md:w-[268px]"
+            className="w-[240px] shrink-0 snap-start md:w-[280px]"
           >
             <ProductCard product={product} index={index} onClick={() => onProductClick(product)} />
           </motion.div>

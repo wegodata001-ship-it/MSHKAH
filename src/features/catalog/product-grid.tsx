@@ -5,7 +5,7 @@ import { ProductCard } from "./product-card";
 import { ProductGridSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useT } from "@/components/providers/locale-provider";
-import { CATALOG_GRID_CLASS } from "@/features/catalog/category-product-section";
+import { CATALOG_GRID_CLASS } from "@/features/catalog/catalog-grid";
 import { Search } from "lucide-react";
 import type { Product } from "@/types";
 
@@ -23,7 +23,7 @@ export function ProductGrid({
   const t = useT();
 
   if (loading) {
-    return <ProductGridSkeleton count={3} />;
+    return <ProductGridSkeleton count={4} />;
   }
 
   if (products.length === 0) {
@@ -42,30 +42,29 @@ export function ProductGrid({
 
   return (
     <div className={CATALOG_GRID_CLASS}>
-      <div className="px-3 sm:px-4">
-        <AnimatePresence mode="popLayout">
-          {products.map((product, index) => (
-            <motion.div
-              key={product.id}
-              layout
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{
-                duration: 0.3,
-                delay: Math.min(index, 8) * 0.03,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-            >
-              <ProductCard
-                product={product}
-                index={index}
-                onClick={onProductClick ? () => onProductClick(product) : undefined}
-              />
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+      <AnimatePresence mode="popLayout">
+        {products.map((product, index) => (
+          <motion.div
+            key={product.id}
+            layout
+            className="h-full min-w-0"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{
+              duration: 0.3,
+              delay: Math.min(index, 8) * 0.03,
+              ease: [0.22, 1, 0.36, 1],
+            }}
+          >
+            <ProductCard
+              product={product}
+              index={index}
+              onClick={onProductClick ? () => onProductClick(product) : undefined}
+            />
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }

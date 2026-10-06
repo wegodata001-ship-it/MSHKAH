@@ -76,13 +76,15 @@ type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.
    * custom — consumer owns all positioning (side panels / bottom sheets)
    */
   layout?: "center" | "custom";
+  /** Skip the default Dialog close control when the consumer renders its own. */
+  hideCloseButton?: boolean;
 };
 
 const DialogContent = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, overlayClassName, layout = "center", children, style, ...props }, ref) => {
-  const closeButton = (
+>(({ className, overlayClassName, layout = "center", hideCloseButton = false, children, style, ...props }, ref) => {
+  const closeButton = hideCloseButton ? null : (
     <DialogPrimitive.Close className="absolute end-4 top-4 z-10 rounded-lg p-1 text-coffee/60 transition-colors hover:bg-beige/60 hover:text-dark-brown focus:outline-none">
       <X className="h-4 w-4" />
       <span className="sr-only">Close</span>

@@ -147,6 +147,17 @@ function ProductDetailContent({
           <Share2 className="h-4 w-4 text-coffee/50" strokeWidth={1.75} />
         </button>
       </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenChange(false);
+        }}
+        aria-label={t("common.close")}
+        className="absolute top-[max(0.75rem,env(safe-area-inset-top))] end-3 z-30 flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-full bg-white text-dark-brown shadow-md ring-1 ring-black/5 sm:end-4"
+      >
+        <X className="h-5 w-5" strokeWidth={2.25} />
+      </button>
       <div className="absolute bottom-4 end-4 z-20 flex gap-2">
         {product.isPopular && <Badge variant="popular">{t("catalog.popularBadge")}</Badge>}
         {product.isNew && <Badge variant="new">{t("catalog.newBadge")}</Badge>}
@@ -253,7 +264,7 @@ function ProductDetailContent({
                   <Sparkles className="h-4 w-4" />
                   {t("builder.suggestions")}
                 </div>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   {suggestions.map(({ product: sug }) => (
                     <ProductCard
                       key={sug.id}
@@ -302,18 +313,6 @@ export function ProductDetailDrawer({
   onSelectProduct,
 }: ProductDetailDrawerProps) {
   const isPhone = useIsMobile(768);
-  const t = useT();
-
-  const closeButton = (
-    <button
-      type="button"
-      onClick={() => onOpenChange(false)}
-      aria-label={t("common.close")}
-      className="absolute top-4 end-4 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-warm-white/95 shadow-soft"
-    >
-      <X className="h-4 w-4" strokeWidth={1.75} />
-    </button>
-  );
 
   const body = product ? (
     <>
@@ -339,13 +338,10 @@ export function ProductDetailDrawer({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           layout="custom"
-          className={cn(
-            "inset-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 p-0 shadow-none",
-            "[&>button]:hidden"
-          )}
+          hideCloseButton
+          className="inset-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 p-0 shadow-none"
           style={{ backgroundColor: "#FFFFFF" }}
         >
-          {closeButton}
           {body}
         </DialogContent>
       </Dialog>
@@ -356,13 +352,13 @@ export function ProductDetailDrawer({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        hideCloseButton
         className={cn(
-          "flex gap-0 overflow-hidden p-0 [&>button]:hidden",
+          "flex gap-0 overflow-hidden p-0",
           "h-[min(780px,calc(100dvh-40px))] max-h-[calc(100dvh-40px)]",
           "w-[min(860px,calc(100vw-40px))] max-w-[860px]"
         )}
       >
-        {closeButton}
         {body}
       </DialogContent>
     </Dialog>

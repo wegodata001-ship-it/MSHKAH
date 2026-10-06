@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ProductCard } from "@/features/catalog/product-card";
+import { CATALOG_GRID_CLASS } from "@/features/catalog/catalog-grid";
 import { useT } from "@/components/providers/locale-provider";
 import { useLocalizedCategory } from "@/hooks/useLocalizedContent";
 import type { Category, Product } from "@/types";
@@ -35,9 +36,6 @@ const iconMap: Record<string, LucideIcon> = {
   cake: Cake,
   "ice-cream": IceCream,
 };
-
-const GRID_CLASS =
-  "overflow-hidden rounded-2xl bg-warm-white ring-1 ring-beige-dark/10";
 
 interface CategoryProductSectionProps {
   category: Category;
@@ -75,12 +73,13 @@ export function CategoryProductSection({
         </div>
       </div>
 
-      <div className={GRID_CLASS}>
+      <div className={CATALOG_GRID_CLASS}>
         <AnimatePresence mode="popLayout">
           {products.map((product, index) => (
             <motion.div
               key={product.id}
               layout
+              className="h-full min-w-0"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{
@@ -102,4 +101,4 @@ export function CategoryProductSection({
   );
 }
 
-export { GRID_CLASS as CATALOG_GRID_CLASS };
+export { CATALOG_GRID_CLASS } from "@/features/catalog/catalog-grid";

@@ -26,4 +26,22 @@ describe("catalog shows all category products", () => {
 
     expect(grid).toMatch(/products\.map/);
   });
+
+  it("uses a large-image card grid instead of the old thumbnail list", () => {
+    const card = readFileSync(
+      resolve(process.cwd(), "src/features/catalog/product-card.tsx"),
+      "utf8"
+    );
+    const layout = readFileSync(
+      resolve(process.cwd(), "src/features/catalog/catalog-grid.ts"),
+      "utf8"
+    );
+
+    expect(card).toMatch(/aspect-\[4\/3\]/);
+    expect(card).toMatch(/flex-col/);
+    expect(card).not.toMatch(/grid-cols-\[112px/);
+    expect(card).not.toMatch(/showProductThumbnails/);
+    expect(layout).toMatch(/grid-cols-1/);
+    expect(layout).toMatch(/sm:grid-cols-2/);
+  });
 });

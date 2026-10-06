@@ -70,7 +70,11 @@ export function ProductImage({
 
   const resolvedSizes =
     sizes ??
-    (thumbnail ? "56px" : compact ? "220px" : "(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 280px");
+    (thumbnail
+      ? "56px"
+      : compact
+        ? "220px"
+        : "(max-width: 639px) 100vw, min(50vw, 640px)");
 
   const useUnoptimized = isFirebaseUrl(src);
 
@@ -89,7 +93,7 @@ export function ProductImage({
         onLoad={() => setLoaded(true)}
         onError={handleError}
         className={cn(
-          "object-cover transition-opacity duration-300",
+          "object-cover object-center transition-opacity duration-300",
           loaded ? "opacity-100" : "opacity-0",
           className
         )}

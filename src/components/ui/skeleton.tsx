@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { CATALOG_GRID_CLASS } from "@/features/catalog/catalog-grid";
 
 function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
@@ -18,28 +19,27 @@ function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>)
 
 function ProductCardSkeleton() {
   return (
-    <div className="grid grid-cols-[72px_1fr_60px] items-center gap-3 py-4">
-      <div className="flex flex-col items-center gap-2">
-        <Skeleton className="h-5 w-14" />
-        <Skeleton className="h-9 w-9 rounded-full" />
-      </div>
-      <div className="space-y-2">
+    <div className="flex h-full flex-col overflow-hidden rounded-[22px] bg-warm-white ring-1 ring-black/[0.05]">
+      <Skeleton className="aspect-[4/3] w-full rounded-none" />
+      <div className="space-y-2 p-3 sm:p-4">
         <Skeleton className="h-4 w-3/4" />
         <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-2/3" />
+        <div className="flex items-center justify-between pt-3">
+          <Skeleton className="h-5 w-14" />
+          <Skeleton className="h-10 w-10 rounded-full" />
+        </div>
       </div>
-      <Skeleton className="h-[60px] w-[60px] rounded-xl" />
     </div>
   );
 }
 
-function ProductGridSkeleton({ count = 3 }: { count?: number }) {
+function ProductGridSkeleton({ count = 4 }: { count?: number }) {
   return (
-    <div className="overflow-hidden rounded-2xl bg-warm-white ring-1 ring-beige-dark/10">
-      <div className="divide-y divide-beige-dark/12 px-3 sm:px-4">
-        {Array.from({ length: count }).map((_, i) => (
-          <ProductCardSkeleton key={i} />
-        ))}
-      </div>
+    <div className={CATALOG_GRID_CLASS}>
+      {Array.from({ length: count }).map((_, i) => (
+        <ProductCardSkeleton key={i} />
+      ))}
     </div>
   );
 }

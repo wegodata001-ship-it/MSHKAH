@@ -156,8 +156,8 @@ export function MenuProductDetailsModal({
           className={cn(
             "inset-x-0 bottom-0 top-auto flex max-h-[90dvh] w-full max-w-none flex-col overflow-hidden rounded-t-3xl border-0 p-0 shadow-elevated",
             "pb-[env(safe-area-inset-bottom,0px)]",
-            "[&>button]:hidden"
           )}
+          hideCloseButton
           style={{ backgroundColor: "#FFFFFF" }}
         >
           <div className="mx-auto mt-2.5 h-1.5 w-12 shrink-0 rounded-full bg-beige-dark/45" aria-hidden />
@@ -172,8 +172,9 @@ export function MenuProductDetailsModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         dir={dir}
+        hideCloseButton
         className={cn(
-          "flex gap-0 overflow-hidden p-0 [&>button]:hidden",
+          "flex gap-0 overflow-hidden p-0",
           "h-auto max-h-[min(860px,calc(100dvh-48px))] w-[min(640px,calc(100vw-40px))] max-w-[640px]"
         )}
       >
