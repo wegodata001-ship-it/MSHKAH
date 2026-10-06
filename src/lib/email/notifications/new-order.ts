@@ -19,7 +19,10 @@ export type NotifyResult =
 const FIELD = "newOrderEmail";
 
 /** New order business alert — once per orderId. */
-export async function notifyNewOrder(orderId: string): Promise<NotifyResult> {
+export async function notifyNewOrder(
+  orderId: string,
+  options?: { force?: boolean }
+): Promise<NotifyResult> {
   if (!orderId.trim()) return { status: "skipped", reason: "missing orderId" };
 
   const ref = getAdminDb().collection(COLLECTIONS.orders).doc(orderId);
@@ -33,9 +36,9 @@ export async function notifyNewOrder(orderId: string): Promise<NotifyResult> {
     // Legacy boolean support
     const legacy = (snap.data() as { notifications?: { newOrderEmailSent?: boolean } })
       .notifications?.newOrderEmailSent;
-    if (legacy === true) return { status: "already_sent" };
+    if (legacy === true && options?.force !== true) return { status: "already_sent" };
 
-    const claim = await claimNotification(ref, FIELD);
+    const claim = await claimNotification(ref, FIELD, { forceResend: options?.force === true });
     if (!claim.ok) {
       if (claim.reason === "already_sent") return { status: "already_sent" };
       return { status: "in_progress" };

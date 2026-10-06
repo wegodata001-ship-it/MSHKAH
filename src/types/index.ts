@@ -39,6 +39,8 @@ export interface Product {
   available: boolean;
   active: boolean;
   sortOrder: number;
+  /** Temporary HYP / QA item. Exclude from real sales stats when supported. */
+  isTestProduct?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,10 +96,14 @@ export interface Order {
   paymentTransactionId?: string;
   customerPhone?: string;
   customerEmail?: string;
+  customerFullName?: string;
+  adminNotificationStatus?: "SENDING" | "SENT" | "FAILED";
   customerConfirmationStatus?: "SENDING" | "SENT" | "FAILED";
   orderType?: "pickup" | "delivery";
   deliveryAddress?: string;
   notes?: string;
+  /** True when the cart contained a marked test product (HYP ₪2 verification). */
+  isTestOrder?: boolean;
   /** UI locale at checkout (ar/he/en). Optional on legacy orders. */
   locale?: "ar" | "he" | "en";
   createdAt: string;

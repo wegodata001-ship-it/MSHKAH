@@ -186,6 +186,22 @@ export function OrdersAdmin() {
     }
   };
 
+  const resendAdminEmail = async (order: Order) => {
+    try {
+      const res = await authFetch(`/api/admin/orders/${order.id}/retry-admin-email`, {
+        method: "POST",
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || json.ok === false) {
+        pushToast(json.error || t("admin.payment.resendAdminEmail"), "error");
+        return;
+      }
+      pushToast(t("admin.payment.resendAdminEmail"));
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Admin email retry failed", "error");
+    }
+  };
+
   const reprintThermal = async (order: Order) => {
     try {
       const res = await authFetch("/api/admin/printer/reprint", {
@@ -353,6 +369,7 @@ export function OrdersAdmin() {
               onPrint={() => printKitchenTicket(order)}
               onThermalReprint={() => void reprintThermal(order)}
               onResendCustomerEmail={() => void resendCustomerEmail(order)}
+              onResendAdminEmail={() => void resendAdminEmail(order)}
               onExportPdf={() => exportHtmlAsPdf(order.orderNumber, kitchenTicketHtml(order))}
               onCopyNumber={() => {
                 void navigator.clipboard.writeText(order.orderNumber).then(

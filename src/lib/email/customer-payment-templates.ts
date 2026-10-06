@@ -18,12 +18,14 @@ function copy(locale: MailLocale) {
     return {
       successSubject: (n: string) => `تم تأكيد طلبك من مشكاة كافيه — #${n}`,
       successTitle: "شكراً لطلبك",
-      successLead: "تم الدفع بنجاح بواسطة بطاقة ائتمان",
+      successLead: "تم الدفع بنجاح ✓",
+      paymentMethod: "بطاقة ائتمان",
+      paymentStatus: "تم الدفع",
       failSubject: (n: string) => `لم نتمكن من إتمام الدفع للطلب #${n}`,
       failTitle: "لم يكتمل الدفع",
       failLead: "لم يُسجَّل تأكيد نجاح للدفع. يمكنك المحاولة مرة أخرى بأمان.",
       retry: "إعادة محاولة الدفع",
-      pickup: "استلام من المشكاة",
+      pickup: "استلام ذاتي من المحل",
       total: "المبلغ المدفوع",
       payment: "الدفع",
     };
@@ -32,7 +34,9 @@ function copy(locale: MailLocale) {
     return {
       successSubject: (n: string) => `Your Mishkat Cafe order is confirmed — #${n}`,
       successTitle: "Thank you for your order",
-      successLead: "Paid successfully by credit card",
+      successLead: "Paid successfully ✓",
+      paymentMethod: "Credit Card",
+      paymentStatus: "Paid",
       failSubject: (n: string) => `We could not complete payment for order #${n}`,
       failTitle: "Payment was not completed",
       failLead: "No successful payment was recorded. You can retry safely.",
@@ -45,7 +49,9 @@ function copy(locale: MailLocale) {
   return {
     successSubject: (n: string) => `ההזמנה ממשקאה אושרה — #${n}`,
     successTitle: "תודה על ההזמנה",
-    successLead: "התשלום בוצע בהצלחה בכרטיס אשראי",
+      successLead: "התשלום בוצע בהצלחה ✓",
+      paymentMethod: "אשראי",
+      paymentStatus: "שולם",
     failSubject: (n: string) => `לא הצלחנו להשלים את התשלום עבור הזמנה #${n}`,
     failTitle: "התשלום לא הושלם",
     failLead: "לא נרשם אישור הצלחה. אפשר לנסות שוב בבטחה.",
@@ -95,6 +101,7 @@ export function renderCustomerPaymentSuccessEmail(
       <p style="margin:0 0 18px;text-align:center;font-size:15px;color:${COLORS.accent};font-weight:700;">${t.successLead}</p>
       <p style="text-align:center;font-size:16px;font-weight:700;">#${escapeHtml(payload.orderNumber)}</p>
       <p style="text-align:center;font-size:14px;color:#6B5A52;">${escapeHtml(payload.customerName)}</p>
+      <p style="text-align:center;font-size:13px;color:#6B5A52;">${t.payment}: ${t.paymentMethod} · ${t.paymentStatus}</p>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemsHtml(payload.items)}</table>
       <p style="margin:16px 0 0;text-align:center;font-size:13px;color:#6B5A52;">${t.pickup}</p>
       <p style="margin:8px 0 0;text-align:center;font-size:22px;font-weight:700;color:${COLORS.primary};">${t.total}: ${formatIls(payload.total)}</p>

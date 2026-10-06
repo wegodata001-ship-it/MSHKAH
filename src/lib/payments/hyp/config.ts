@@ -51,7 +51,11 @@ export function getHypMissingEnvNames(): string[] {
   return missing;
 }
 
+let loggedHypEnvStatus = false;
+
 export function logHypEnvStatus(): void {
+  if (loggedHypEnvStatus) return;
+  loggedHypEnvStatus = true;
   const missing = getHypMissingEnvNames();
   const credentialMissing = missing.filter((name) =>
     (REQUIRED_CREDENTIAL_NAMES as readonly string[]).includes(name)

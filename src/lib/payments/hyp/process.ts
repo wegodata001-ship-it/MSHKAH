@@ -96,7 +96,10 @@ export async function createHypPaymentAttempt(
   const nextName = customer?.name?.trim();
   const nextPhone = customer?.phone?.trim();
   const nextEmail = normalizeCustomerEmail(customer?.email);
-  if (nextName) customerPatch.customerName = nextName;
+  if (nextName) {
+    customerPatch.customerName = nextName;
+    customerPatch.customerFullName = nextName;
+  }
   if (nextPhone) customerPatch.customerPhone = nextPhone;
   if (nextEmail) customerPatch.customerEmail = nextEmail;
   if (Object.keys(customerPatch).length > 0) {
@@ -113,6 +116,8 @@ export async function createHypPaymentAttempt(
   }
 
   const customerEmail = normalizeCustomerEmail(order.customerEmail);
+  const customerFullName = (order.customerFullName || order.customerName || "").trim();
+  const customerPhone = order.customerPhone?.trim() || "";
   const paymentRef = db.collection(COLLECTIONS.payments).doc();
   const now = FieldValue.serverTimestamp();
   await paymentRef.set({
@@ -124,6 +129,9 @@ export async function createHypPaymentAttempt(
     currency: HYP_CURRENCY,
     status: "pending",
     customerEmail: customerEmail || null,
+    customerName: customerFullName || null,
+    customerFullName: customerFullName || null,
+    customerPhone: customerPhone || null,
     createdAt: now,
     updatedAt: now,
   });
@@ -140,8 +148,8 @@ export async function createHypPaymentAttempt(
       amount: formatHypAmount(amount),
       orderRef: paymentRef.id,
       info: `Mishkat ${order.orderNumber}`,
-      clientName: order.customerName?.trim() || undefined,
-      cell: order.customerPhone?.trim() || undefined,
+      clientName: customerFullName || undefined,
+      cell: customerPhone || undefined,
       email: customerEmail || undefined,
       pageLang: pageLangFromLocale(order.locale),
     });
@@ -213,7 +221,8 @@ export async function handleHypReturn(rawQuery: string): Promise<{
     order: order.orderNumber,
     amount: formatHypAmount(payment.amount),
   });
-  if (order.customerName?.trim()) successParams.set("name", order.customerName.trim());
+  const successName = (order.customerFullName || order.customerName || "").trim();
+  if (successName) successParams.set("name", successName);
   const successPath = `/payment/success?${successParams.toString()}`;
   paymentAudit("HYP_RETURN_RECEIVED", {
     orderId: payment.orderId,

@@ -9,6 +9,7 @@ import {
   parseHypAmount,
 } from "@/lib/payments/hyp/amounts";
 import { applyHypCustomerParams } from "@/lib/payments/hyp/client";
+import { splitHypCustomerName } from "@/lib/payments/hyp/names";
 import { normalizeCustomerEmail } from "@/lib/orders/customer-email";
 import { hasRequiredHypCredentials } from "@/lib/payments/hyp/config";
 import { decidePaymentUpdate } from "@/lib/payments/hyp/decide";
@@ -66,6 +67,27 @@ describe("HYP amount handling", () => {
   });
 });
 
+describe("HYP name split", () => {
+  it("keeps a single token as first name", () => {
+    expect(splitHypCustomerName("תסנים")).toEqual({ firstName: "תסנים", lastName: "" });
+  });
+
+  it("uses first token / remainder for multi-word names", () => {
+    expect(splitHypCustomerName("תסנים אבוליל")).toEqual({
+      firstName: "תסנים",
+      lastName: "אבוליל",
+    });
+    expect(splitHypCustomerName("تسنيم أبو ليل")).toEqual({
+      firstName: "تسنيم",
+      lastName: "أبو ليل",
+    });
+    expect(splitHypCustomerName("Tasneem Abuliel")).toEqual({
+      firstName: "Tasneem",
+      lastName: "Abuliel",
+    });
+  });
+});
+
 describe("HYP customer prefill", () => {
   it("uses documented email / ClientName / cell and never Fild fields", () => {
     const params = applyHypCustomerParams(new URLSearchParams(), {
@@ -78,12 +100,37 @@ describe("HYP customer prefill", () => {
       pageLang: "HEB",
     });
     expect(params.get("email")).toBe("guest@example.com");
-    expect(params.get("ClientName")).toBe("Test Customer");
+    expect(params.get("ClientName")).toBe("Test");
+    expect(params.get("ClientLName")).toBe("Customer");
+    expect(params.get("UTF8")).toBe("True");
+    expect(params.get("UTF8out")).toBe("True");
     expect(params.get("cell")).toBe("0500000000");
     expect(params.get("phone")).toBe("0500000000");
     expect(params.get("Order")).toBe("pay-1");
     expect(params.get("Fild1")).toBeNull();
     expect(params.get("Fild2")).toBeNull();
+    expect(params.toString().includes("%25")).toBe(false);
+  });
+
+  it("encodes Hebrew and Arabic names once for HYP", () => {
+    const he = applyHypCustomerParams(new URLSearchParams(), {
+      amount: "2.00",
+      orderRef: "pay-he",
+      clientName: "תסנים אבוליל",
+      pageLang: "HEB",
+    });
+    expect(he.get("ClientName")).toBe("תסנים");
+    expect(he.get("ClientLName")).toBe("אבוליל");
+    expect(decodeURIComponent(he.toString())).toContain("תסנים");
+
+    const ar = applyHypCustomerParams(new URLSearchParams(), {
+      amount: "2.00",
+      orderRef: "pay-ar",
+      clientName: "تسنيم أبو ليل",
+      pageLang: "HEB",
+    });
+    expect(ar.get("ClientName")).toBe("تسنيم");
+    expect(ar.get("ClientLName")).toBe("أبو ليل");
   });
 
   it("normalizes customer emails", () => {

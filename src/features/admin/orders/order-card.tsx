@@ -101,6 +101,7 @@ export function OrderCard({
   onPrint,
   onThermalReprint,
   onResendCustomerEmail,
+  onResendAdminEmail,
   onExportPdf,
   onCopyNumber,
   onEditItem,
@@ -114,6 +115,7 @@ export function OrderCard({
   onPrint: () => void;
   onThermalReprint?: () => void;
   onResendCustomerEmail?: () => void;
+  onResendAdminEmail?: () => void;
   onExportPdf?: () => void;
   onCopyNumber?: () => void;
   onEditItem?: (index: number) => void;
@@ -143,6 +145,11 @@ export function OrderCard({
             <Badge variant="outline" className={STATUS_STYLE[order.status]}>
               {t(`admin.status.${order.status}`)}
             </Badge>
+            {order.isTestOrder && (
+              <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-800">
+                TEST
+              </Badge>
+            )}
             <Badge
               variant="outline"
               className={
@@ -189,7 +196,7 @@ export function OrderCard({
         <div className="mt-4 grid gap-4 border-t border-beige-dark/15 pt-4 text-sm md:grid-cols-2">
           <div className="space-y-1">
             <p className="font-semibold">{t("orders.customer")}</p>
-            <p>{order.customerName}</p>
+            <p>{order.customerFullName || order.customerName}</p>
             {order.customerPhone && <p dir="ltr" className="text-start">{order.customerPhone}</p>}
             {order.customerEmail && <p dir="ltr" className="text-start">{order.customerEmail}</p>}
             {order.deliveryAddress && <p>{order.deliveryAddress}</p>}
@@ -214,11 +221,14 @@ export function OrderCard({
                 {t("admin.payment.transaction")}: {order.paymentTransactionId}
               </p>
             )}
-            {order.customerConfirmationStatus && (
-              <p>
-                {t("admin.payment.customerEmail")}: {t(`admin.payment.notify.${order.customerConfirmationStatus}`)}
-              </p>
-            )}
+            <p>
+              {t("admin.payment.customerEmail")}:{" "}
+              {t(`admin.payment.notify.${order.customerConfirmationStatus || "PENDING"}`)}
+            </p>
+            <p>
+              {t("admin.payment.adminEmail")}:{" "}
+              {t(`admin.payment.notify.${order.adminNotificationStatus || "PENDING"}`)}
+            </p>
             <p>{t("admin.payment.invoice")}: {t("admin.payment.notify.PROVIDER_REQUIRED")}</p>
             <p>{t("admin.payment.message")}: {t("admin.payment.notify.NOT_CONFIGURED")}</p>
           </div>
@@ -276,6 +286,11 @@ export function OrderCard({
         {onResendCustomerEmail && order.customerEmail && (
           <Button type="button" variant="outline" onClick={onResendCustomerEmail}>
             {t("admin.payment.resendEmail")}
+          </Button>
+        )}
+        {onResendAdminEmail && (
+          <Button type="button" variant="outline" onClick={onResendAdminEmail}>
+            {t("admin.payment.resendAdminEmail")}
           </Button>
         )}
         {expanded && onExportPdf && (

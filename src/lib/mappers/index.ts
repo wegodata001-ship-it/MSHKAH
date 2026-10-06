@@ -87,6 +87,7 @@ export function mapProduct(doc: FirestoreDoc<FirestoreProduct>): Product {
     available: doc.available,
     active: doc.active ?? true,
     sortOrder: doc.sortOrder,
+    isTestProduct: doc.isTestProduct === true,
     createdAt: timestampToIso(doc.createdAt),
     updatedAt: timestampToIso(doc.updatedAt),
   };
@@ -135,6 +136,7 @@ export function mapOrder(doc: FirestoreDoc<FirestoreOrder>): Order {
     paymentTransactionId: doc.paymentTransactionId,
     customerPhone: doc.customerPhone,
     customerEmail: doc.customerEmail,
+    customerFullName: doc.customerFullName,
     customerConfirmationStatus:
       doc.notifications &&
       typeof doc.notifications === "object" &&
@@ -142,9 +144,17 @@ export function mapOrder(doc: FirestoreDoc<FirestoreOrder>): Order {
       typeof doc.notifications.customerConfirmationEmail === "object"
         ? doc.notifications.customerConfirmationEmail.status
         : undefined,
+    adminNotificationStatus:
+      doc.notifications &&
+      typeof doc.notifications === "object" &&
+      doc.notifications.newOrderEmail &&
+      typeof doc.notifications.newOrderEmail === "object"
+        ? doc.notifications.newOrderEmail.status
+        : undefined,
     orderType: doc.orderType,
     deliveryAddress: doc.deliveryAddress,
     notes: doc.notes,
+    isTestOrder: doc.isTestOrder === true,
     locale: doc.locale,
     createdAt: timestampToIso(doc.createdAt),
     confirmedAt: doc.confirmedAt ? timestampToIso(doc.confirmedAt) : null,

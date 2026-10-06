@@ -42,6 +42,7 @@ export interface FirestoreProduct {
   newProduct: boolean;
   active: boolean;
   sortOrder: number;
+  isTestProduct?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -86,9 +87,11 @@ export interface FirestoreOrder {
   paymentTransactionId?: string;
   customerPhone?: string;
   customerEmail?: string;
+  customerFullName?: string;
   orderType?: "pickup" | "delivery";
   deliveryAddress?: string;
   notes: string;
+  isTestOrder?: boolean;
   /** UI locale at checkout (ar/he/en). Optional on legacy orders. */
   locale?: "ar" | "he" | "en";
   createdAt: Timestamp;

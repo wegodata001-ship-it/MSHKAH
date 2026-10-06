@@ -96,9 +96,13 @@ function buildFirestoreOrder(
   };
   if (parsed.customerPhone?.trim()) order.customerPhone = parsed.customerPhone.trim();
   if (parsed.customerEmail?.trim()) order.customerEmail = parsed.customerEmail.trim().toLowerCase();
+  if (parsed.customerFullName?.trim() || parsed.customerName?.trim()) {
+    order.customerFullName = (parsed.customerFullName || parsed.customerName).trim();
+  }
   if (parsed.orderType) order.orderType = parsed.orderType;
   if (parsed.deliveryAddress?.trim()) order.deliveryAddress = parsed.deliveryAddress.trim();
   if (parsed.locale) order.locale = parsed.locale;
+  if (parsed.isTestOrder) order.isTestOrder = true;
   return order;
 }
 
@@ -321,6 +325,11 @@ export async function createOrderFromCart(
     );
   const discount = checkout?.discount ?? 0;
   const total = Math.max(subtotal - discount, 0.01);
+  const isTestOrder = cartItems.some((item) => item.product.isTestProduct === true);
+  const testNote = "TEST — HYP payment verification. Do not include in sales reports.";
+  const notes = [isTestOrder ? testNote : "", checkout?.notes?.trim() ?? ""]
+    .filter(Boolean)
+    .join("\n");
 
   return createOrder({
     customerId,
@@ -335,8 +344,10 @@ export async function createOrderFromCart(
     paymentStatus: checkout?.paymentStatus ?? "pending",
     customerPhone: checkout?.customerPhone,
     customerEmail: checkout?.customerEmail,
+    customerFullName: customerName.trim(),
     orderType: NEW_ORDER_FULFILLMENT,
-    notes: checkout?.notes?.trim() ?? "",
+    notes,
+    isTestOrder: isTestOrder || undefined,
     locale,
   });
 }

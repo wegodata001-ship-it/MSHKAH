@@ -1,4 +1,5 @@
 import { getHypApiBase, getHypConfig } from "@/lib/payments/hyp/config";
+import { splitHypCustomerName } from "@/lib/payments/hyp/names";
 import {
   hypLogFields,
   isHypSuccessCCode,
@@ -15,8 +16,14 @@ export function applyHypCustomerParams(
   params.set("Coin", "1");
   params.set("Order", request.orderRef);
   params.set("PageLang", request.pageLang);
+  params.set("UTF8", "True");
+  params.set("UTF8out", "True");
   if (request.info) params.set("Info", request.info);
-  if (request.clientName) params.set("ClientName", request.clientName);
+  if (request.clientName) {
+    const { firstName, lastName } = splitHypCustomerName(request.clientName);
+    if (firstName) params.set("ClientName", firstName);
+    if (lastName) params.set("ClientLName", lastName);
+  }
   if (request.cell) {
     params.set("cell", request.cell);
     params.set("phone", request.cell);

@@ -245,7 +245,14 @@ export default function CheckoutPage() {
                     <div className="mt-4 space-y-4">
                       <div>
                         <Label className="flex items-center gap-1"><User className="h-3.5 w-3.5" strokeWidth={1.75} /> {t("checkout.name")}</Label>
-                        <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" required />
+                        <Input
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          autoComplete="name"
+                          name="name"
+                          className="mt-1"
+                          required
+                        />
                       </div>
                       <div>
                         <Label className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" strokeWidth={1.75} /> {t("checkout.phone")}</Label>

@@ -35,7 +35,7 @@ export function firestoreOrderToEmailPayload(
     orderId,
     orderNumber: data.orderNumber,
     createdAt: timestampToIso(data.createdAt),
-    customerName: data.customerName,
+    customerName: (data.customerFullName || data.customerName || "").trim(),
     customerPhone: data.customerPhone,
     customerEmail: data.customerEmail,
     items,
