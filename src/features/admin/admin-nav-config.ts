@@ -15,6 +15,7 @@ import {
   FileText,
   Printer,
   QrCode,
+  Calculator,
 } from "lucide-react";
 import { adminPath, toInternalAdminPath } from "@/lib/domains/host-routing";
 import type { AdminSurface } from "@/lib/domains/host-routing";
@@ -54,6 +55,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     items: [
       { segment: "orders", labelKey: "admin.orders", icon: ClipboardList },
       { segment: "customers", labelKey: "admin.customers", icon: Users },
+      { segment: "costing", labelKey: "admin.costing", icon: Calculator, adminOnly: true },
     ],
   },
   {
@@ -96,6 +98,7 @@ export const ADMIN_PAGE_TITLES: Record<string, string> = {
   "/admin/banners": "admin.banners.title",
   "/admin/menu-builder": "admin.menuBuilder",
   "/admin/qr": "admin.qr.title",
+  "/admin/costing": "admin.costing.title",
   "/admin/media": "admin.media.title",
   "/admin/assistant": "admin.assistant.title",
   "/admin/printer": "admin.printer.title",

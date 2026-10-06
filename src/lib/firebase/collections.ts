@@ -22,6 +22,12 @@ export const COLLECTIONS = {
   pdfMenuPages: "pdfMenuPages",
   printJobs: "printJobs",
   printAgentHeartbeats: "printAgentHeartbeats",
+  payments: "payments",
+  ingredients: "ingredients",
+  dishRecipes: "dishRecipes",
+  ingredientPriceHistory: "ingredientPriceHistory",
+  costingSettings: "costingSettings",
+  costingSnapshots: "costingSnapshots",
 } as const;
 
 export const DEFAULT_STORE_ID = "mishkah";

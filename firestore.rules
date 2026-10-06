@@ -18,6 +18,10 @@ service cloud.firestore {
       return isActiveUser() && userDoc().data.role in ['Admin', 'Manager', 'Employee'];
     }
 
+    function isAdmin() {
+      return isActiveUser() && userDoc().data.role == 'Admin';
+    }
+
     match /categories/{id} {
       allow read: if true;
       allow write: if isStaff();
@@ -129,6 +133,31 @@ service cloud.firestore {
     match /printAgentHeartbeats/{id} {
       allow read: if isStaff();
       allow write: if false;
+    }
+
+    match /payments/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    match /ingredients/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    match /dishRecipes/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    match /ingredientPriceHistory/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    match /costingSettings/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    match /costingSnapshots/{id} {
+      allow read, write: if isAdmin();
     }
   }
 }

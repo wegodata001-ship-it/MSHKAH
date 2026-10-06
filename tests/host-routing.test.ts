@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   adminPath,
+  isMenuBlockedApiPath,
   isMenuHost,
   isOrderingPath,
   isPortalHost,
@@ -49,6 +50,8 @@ describe("host-routing", () => {
   it("builds surface-aware admin hrefs", () => {
     expect(adminPath("products", "portal")).toBe("/products");
     expect(adminPath("products", "dev")).toBe("/admin/products");
+    expect(adminPath("costing", "dev")).toBe("/admin/costing");
+    expect(adminPath("costing", "portal")).toBe("/costing");
     expect(adminPath("login", "portal")).toBe("/login");
     expect(adminPath("", "portal")).toBe("/");
   });
@@ -68,6 +71,8 @@ describe("host-routing", () => {
     expect(isViewOnlyMenuSurface("menu.mishkatcafe.dev")).toBe(true);
     expect(isViewOnlyMenuSurface("localhost", "/menu-display")).toBe(true);
     expect(isViewOnlyMenuSurface("mishkatcafe.dev", "/")).toBe(false);
+    expect(isMenuBlockedApiPath("/api/payments/hyp/create")).toBe(true);
+    expect(isMenuBlockedApiPath("/api/orders/notify-new")).toBe(true);
   });
 });
 

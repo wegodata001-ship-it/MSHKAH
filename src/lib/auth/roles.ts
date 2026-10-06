@@ -12,3 +12,7 @@ export function canManageUsers(role: string): boolean {
 export function canWriteCatalog(role: string): boolean {
   return role === "Admin" || role === "Manager";
 }
+
+export function canViewCosting(role: string): boolean {
+  return role === "Admin";
+}

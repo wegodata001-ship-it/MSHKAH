@@ -35,7 +35,7 @@ export const ORDERING_PATH_PREFIXES = [
 ] as const;
 
 /** Order-related API prefixes blocked on menu host */
-export const MENU_BLOCKED_API_PREFIXES = ["/api/orders", "/api/seed"] as const;
+export const MENU_BLOCKED_API_PREFIXES = ["/api/orders", "/api/seed", "/api/payments"] as const;
 
 export function normalizeHostname(host: string | null | undefined): string {
   return (host ?? "").toLowerCase().split(":")[0] ?? "";
@@ -121,7 +121,7 @@ export function getAdminSurface(host: string | null | undefined): AdminSurface {
  * - dev (localhost): /admin/products
  */
 export function adminPath(
-  segment: "" | "login" | "products" | "categories" | "modifier-groups" | "product-builder" | "business-rules" | "orders" | "customers" | "banners" | "menu-builder" | "qr" | "assistant" | "printer" | "printer-test" | "users" | "settings" | "media" | "ai-assistant",
+  segment: "" | "login" | "products" | "categories" | "modifier-groups" | "product-builder" | "business-rules" | "orders" | "customers" | "banners" | "menu-builder" | "qr" | "assistant" | "printer" | "printer-test" | "users" | "settings" | "media" | "ai-assistant" | "costing",
   surface: AdminSurface = "dev"
 ): string {
   if (segment === "login") {

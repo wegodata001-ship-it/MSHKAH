@@ -1,0 +1,86 @@
+export type PurchaseUnit = "kg" | "g" | "liter" | "ml" | "unit";
+export type BaseUnit = "g" | "ml" | "unit";
+export type PriceRoundMode = "none" | "shekel" | "half" | "ninety" | "five";
+export type ProfitStatus = "good" | "watch" | "low" | "none";
+export type CustomCostType = "fixed" | "percent";
+
+export type CostingIngredient = {
+  id: string;
+  name: string;
+  category?: string;
+  purchasePrice: number;
+  purchaseQuantity: number;
+  purchaseUnit: PurchaseUnit;
+  baseUnit: BaseUnit;
+  costPerBaseUnit: number;
+  supplier?: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RecipeLine = {
+  ingredientId: string;
+  quantity: number;
+  unit: BaseUnit;
+};
+
+export type CustomCost = {
+  name: string;
+  type: CustomCostType;
+  value: number;
+};
+
+export type OverheadSettings = {
+  packaging?: number;
+  labor?: number;
+  laborPercent?: number;
+  creditCardPercent?: number;
+  platformPercent?: number;
+  overheadPercent?: number;
+  customCosts?: CustomCost[];
+};
+
+export type DishRecipe = {
+  id: string;
+  productId: string;
+  variantId?: string;
+  ingredients: RecipeLine[];
+  overheadSettings?: OverheadSettings;
+  targetFoodCostPercent?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IngredientPriceHistory = {
+  id: string;
+  ingredientId: string;
+  previousPrice: number;
+  newPrice: number;
+  previousQuantity: number;
+  newQuantity: number;
+  changedAt: string;
+  changedBy?: string;
+};
+
+export type CostingSettings = {
+  targetFoodCostPercent: number;
+  priceRoundMode: PriceRoundMode;
+};
+
+export type CostingSnapshot = {
+  id: string;
+  productId: string;
+  variantId?: string;
+  ingredientCost: number;
+  sellingPrice: number;
+  foodCostPercent: number | null;
+  createdAt: string;
+};
+
+export const DEFAULT_TARGET_FOOD_COST = 30;
+
+export const DEFAULT_COSTING_SETTINGS: CostingSettings = {
+  targetFoodCostPercent: DEFAULT_TARGET_FOOD_COST,
+  priceRoundMode: "none",
+};
