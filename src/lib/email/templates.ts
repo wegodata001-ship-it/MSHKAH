@@ -167,7 +167,7 @@ function formatDateHe(iso: string): { date: string; time: string } {
 function paymentLabel(method?: string): string {
   if (!method) return "—";
   if (method === "cash") return "מזומן";
-  if (method === "card") return "כרטיס אשראי";
+  if (method === "card") return "אשראי — HYP";
   return method;
 }
 
@@ -270,7 +270,7 @@ export function renderNewOrderEmail(payload: OrderEmailBase): {
   const paidCard =
     payload.paymentMethod === "card" || payload.paymentStatus === "paid";
   const subject = paidCard
-    ? `הזמנה חדשה שולמה — #${payload.orderNumber} — ${payload.total.toFixed(2)} ₪`
+    ? `הזמנה חדשה שולמה באשראי — #${payload.orderNumber} — ${payload.total.toFixed(2)} ₪`
     : `הזמנה חדשה #${payload.orderNumber} | MISHKAH CAFE`;
   const html = emailShell({
     title: subject,
@@ -281,7 +281,12 @@ export function renderNewOrderEmail(payload: OrderEmailBase): {
       <p style="margin:0 0 22px;text-align:center;font-size:15px;color:${COLORS.accent};font-weight:700;">
         הזמנה #${escapeHtml(payload.orderNumber)}
       </p>
-      ${customerBlock(payload)}
+      ${customerBlock(
+        payload,
+        paidCard
+          ? `<div><strong>ספק תשלום:</strong> HYP</div><div><strong>סטטוס תשלום:</strong> PAID</div>`
+          : undefined
+      )}
       <div style="font-size:12px;font-weight:700;letter-spacing:0.04em;color:${COLORS.muted};margin-bottom:8px;">פרטי ההזמנה</div>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemsHtml(payload.items)}</table>
       ${totalBlock(payload.total)}

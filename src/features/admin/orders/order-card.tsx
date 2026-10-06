@@ -197,7 +197,12 @@ export function OrderCard({
           <div className="space-y-1">
             <p className="font-semibold">{t("orders.date")}</p>
             <p>{formatDate(order.createdAt)}</p>
-            <p>{t("admin.orders.paymentMethod")}: {order.paymentMethod || "—"}</p>
+            <p>
+              {t("admin.orders.paymentMethod")}:{" "}
+              {order.paymentProvider === "HYP" || (order.paymentMethod || "").toLowerCase() === "card"
+                ? t("admin.payment.methodCardHyp")
+                : t("admin.payment.methodCash")}
+            </p>
             {order.paymentProvider && (
               <p>{t("admin.payment.provider")}: {order.paymentProvider}</p>
             )}

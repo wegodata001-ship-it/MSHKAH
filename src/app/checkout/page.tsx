@@ -111,7 +111,11 @@ export default function CheckoutPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !phone) { setError(t("validation.required")); return; }
-    const normalizedEmail = email.trim() ? normalizeCustomerEmail(email) : null;
+    const normalizedEmail = normalizeCustomerEmail(email);
+    if (payment === "card" && !normalizedEmail) {
+      setError(t("validation.email"));
+      return;
+    }
     if (email.trim() && !normalizedEmail) {
       setError(t("validation.email"));
       return;
@@ -247,6 +251,7 @@ export default function CheckoutPage() {
                           autoComplete="email"
                           className="mt-1"
                           placeholder="name@email.com"
+                          required={payment === "card"}
                         />
                       </div>
                       <div>
