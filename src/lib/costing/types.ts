@@ -15,6 +15,10 @@ export type CostingIngredient = {
   costPerBaseUnit: number;
   supplier?: string;
   notes?: string;
+  minStock?: number;
+  recommendedStock?: number;
+  lastSupplierId?: string;
+  lastReceivedAt?: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -68,6 +72,9 @@ export type IngredientPriceHistory = {
 export type CostingSettings = {
   targetFoodCostPercent: number;
   priceRoundMode: PriceRoundMode;
+  vatRate?: number;
+  foodCostVatMode?: "before" | "including";
+  costBasis?: "latest" | "weighted";
 };
 
 export type CostingSnapshot = {
@@ -85,4 +92,7 @@ export const DEFAULT_TARGET_FOOD_COST = 30;
 export const DEFAULT_COSTING_SETTINGS: CostingSettings = {
   targetFoodCostPercent: DEFAULT_TARGET_FOOD_COST,
   priceRoundMode: "none",
+  vatRate: 0.18,
+  foodCostVatMode: "before",
+  costBasis: "latest",
 };

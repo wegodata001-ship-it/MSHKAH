@@ -52,6 +52,10 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
     costPerBaseUnit: asNumber(data.costPerBaseUnit, costPerBaseUnit(purchasePrice, purchaseQuantity, purchaseUnit)),
     supplier: data.supplier ? String(data.supplier) : undefined,
     notes: data.notes ? String(data.notes) : undefined,
+    minStock: data.minStock != null ? asNumber(data.minStock) : undefined,
+    recommendedStock: data.recommendedStock != null ? asNumber(data.recommendedStock) : undefined,
+    lastSupplierId: data.lastSupplierId ? String(data.lastSupplierId) : undefined,
+    lastReceivedAt: data.lastReceivedAt ? timestampToIso(data.lastReceivedAt as never) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
@@ -143,6 +147,9 @@ export function subscribeToCostingSettings(
       onData({
         targetFoodCostPercent: asNumber(data.targetFoodCostPercent, DEFAULT_COSTING_SETTINGS.targetFoodCostPercent),
         priceRoundMode: (data.priceRoundMode as PriceRoundMode) || "none",
+        vatRate: data.vatRate != null ? asNumber(data.vatRate, 0.18) : 0.18,
+        foodCostVatMode: data.foodCostVatMode === "including" ? "including" : "before",
+        costBasis: data.costBasis === "weighted" ? "weighted" : "latest",
       });
     },
     (error) => onError?.(error.message)
@@ -184,6 +191,8 @@ export type IngredientWriteInput = {
   purchaseUnit: PurchaseUnit;
   supplier?: string;
   notes?: string;
+  minStock?: number;
+  recommendedStock?: number;
   active?: boolean;
 };
 
@@ -204,6 +213,8 @@ function ingredientPayload(input: IngredientWriteInput) {
     costPerBaseUnit: costPerBaseUnit(input.purchasePrice, input.purchaseQuantity, purchaseUnit),
     supplier: input.supplier?.trim() || null,
     notes: input.notes?.trim() || null,
+    minStock: input.minStock ?? null,
+    recommendedStock: input.recommendedStock ?? null,
     active: input.active !== false,
   });
 }
@@ -220,6 +231,12 @@ function writeFailure(error: unknown, fallback: string): ServiceResult<never> {
 export async function createIngredient(input: IngredientWriteInput): Promise<ServiceResult<CostingIngredient>> {
   try {
     if (!input.name.trim()) return failure(new ServiceError("Name required", "VALIDATION"));
+    if (!Number.isFinite(input.purchasePrice) || input.purchasePrice < 0) {
+      input = { ...input, purchasePrice: 0 };
+    }
+    if (!Number.isFinite(input.purchaseQuantity) || input.purchaseQuantity <= 0) {
+      input = { ...input, purchaseQuantity: 1 };
+    }
     const now = nowTimestamp();
     const payload = { ...ingredientPayload(input), createdAt: now, updatedAt: now };
     const ref = await addDoc(collection(getDb(), COLLECTIONS.ingredients), payload);
@@ -381,6 +398,9 @@ export async function saveCostingSettings(settings: CostingSettings): Promise<Se
       sanitizeFirestoreData({
         targetFoodCostPercent: settings.targetFoodCostPercent,
         priceRoundMode: settings.priceRoundMode,
+        vatRate: settings.vatRate ?? 0.18,
+        foodCostVatMode: settings.foodCostVatMode ?? "before",
+        costBasis: settings.costBasis ?? "latest",
         updatedAt: nowTimestamp(),
       }),
       { merge: true }
@@ -389,6 +409,21 @@ export async function saveCostingSettings(settings: CostingSettings): Promise<Se
   } catch (error) {
     return failure(error, "Failed to save settings");
   }
+}
+
+export async function recordCostingImportHistory(input: {
+  fileName: string;
+  importedBy?: string;
+  rowsProcessed: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+}): Promise<void> {
+  await addDoc(collection(getDb(), COLLECTIONS.costingImportHistory), sanitizeFirestoreData({
+    ...input,
+    importedAt: nowTimestamp(),
+  }));
 }
 
 export async function writeIngredientImpactSnapshots(input: {

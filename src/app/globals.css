@@ -222,14 +222,97 @@ html.dark .mobile-bottom-nav {
   print-color-adjust: exact;
 }
 
+.report-table th,
+.report-table td {
+  padding: 0.5rem 0.4rem;
+  text-align: start;
+  border-bottom: 1px solid rgb(61 43 36 / 0.08);
+}
+.report-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(61 43 36 / 0.55);
+  background: #f8f3ed;
+}
+.report-table .num {
+  text-align: end;
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+.report-table .count-blank {
+  min-width: 5rem;
+  height: 2rem;
+}
+.tone-ok { color: #047857; }
+.tone-watch { color: #b45309; }
+.tone-critical { color: #b91c1c; }
+
 @media print {
   @page {
-    size: A4;
-    margin: 0;
+    size: A4 portrait;
+    margin: 12mm 10mm 16mm;
+  }
+  body[data-report-orientation="landscape"] {
+    --report-page: landscape;
+  }
+  body[data-report-orientation="landscape"] .report-print {
+    page: report-landscape;
+  }
+  @page report-landscape {
+    size: A4 landscape;
+    margin: 10mm;
   }
   .menu-pdf-page,
   .pdf-export-page {
     width: 210mm !important;
     height: 297mm !important;
   }
+  .a11y-fab,
+  .a11y-panel,
+  [data-pwa-install],
+  .report-no-print,
+  [data-admin] header,
+  [data-admin] aside {
+    display: none !important;
+  }
+  .report-print {
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .report-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  .report-table thead {
+    display: table-header-group;
+  }
+  .report-table th,
+  .report-table td {
+    border-bottom: 1px solid #e7ddd4;
+    padding: 6px 5px;
+    page-break-inside: avoid;
+  }
+  .report-row,
+  .report-summary {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .report-print-footer {
+    position: fixed;
+    bottom: 0;
+    inset-inline: 0;
+  }
+  .report-table th {
+    background: #f8f3ed;
+  }
+  .report-table .num {
+    text-align: end;
+    unicode-bidi: isolate;
+    direction: ltr;
+  }
+  .tone-ok { color: #047857; }
+  .tone-watch { color: #b45309; }
+  .tone-critical { color: #b91c1c; }
 }

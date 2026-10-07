@@ -198,7 +198,7 @@ export function AccessibilityCenter() {
         aria-controls="a11y-panel"
         aria-label={t("a11y.openMenu")}
         className={cn(
-          "a11y-fab fixed z-40 flex h-14 w-14 items-center justify-center rounded-full",
+          "a11y-fab print:hidden fixed z-40 flex h-14 w-14 items-center justify-center rounded-full",
           "glass shadow-premium border border-white/30",
           "text-turquoise transition-transform hover:scale-105 active:scale-95",
           "bottom-40 end-4 md:bottom-6 md:end-24",

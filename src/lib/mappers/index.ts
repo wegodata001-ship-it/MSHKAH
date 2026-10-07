@@ -157,15 +157,37 @@ export function mapOrder(doc: FirestoreDoc<FirestoreOrder>): Order {
     isTestOrder: doc.isTestOrder === true,
     locale: doc.locale,
     createdAt: timestampToIso(doc.createdAt),
+    receivedAt: doc.receivedAt ? timestampToIso(doc.receivedAt) : null,
     confirmedAt: doc.confirmedAt ? timestampToIso(doc.confirmedAt) : null,
     preparationStartedAt: doc.preparationStartedAt
       ? timestampToIso(doc.preparationStartedAt)
       : null,
     readyAt: doc.readyAt ? timestampToIso(doc.readyAt) : null,
+    deliveredAt: doc.deliveredAt ? timestampToIso(doc.deliveredAt) : doc.completedAt ? timestampToIso(doc.completedAt) : null,
     completedAt: doc.completedAt ? timestampToIso(doc.completedAt) : null,
     cancelledAt: doc.cancelledAt ? timestampToIso(doc.cancelledAt) : null,
+    paidAt: doc.paidAt ? timestampToIso(doc.paidAt) : null,
     cancelReason: doc.cancelReason,
     cancelledBy: doc.cancelledBy,
+    alerts: doc.alerts
+      ? {
+          receivedCritical: mapAlert(doc.alerts.receivedCritical),
+          preparingCritical: mapAlert(doc.alerts.preparingCritical),
+          readyCritical: mapAlert(doc.alerts.readyCritical),
+          preparingEscalation: mapAlert(doc.alerts.preparingEscalation),
+          readyEscalation: mapAlert(doc.alerts.readyEscalation),
+        }
+      : undefined,
+  };
+}
+
+function mapAlert(alert?: { status?: "SENDING" | "SENT" | "FAILED"; sentAt?: unknown; attemptedAt?: unknown; lastError?: string }) {
+  if (!alert) return undefined;
+  return {
+    status: alert.status,
+    sentAt: alert.sentAt ? timestampToIso(alert.sentAt as never) : null,
+    attemptedAt: alert.attemptedAt ? timestampToIso(alert.attemptedAt as never) : null,
+    error: alert.lastError,
   };
 }
 

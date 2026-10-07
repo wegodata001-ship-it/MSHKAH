@@ -11,6 +11,7 @@ import type { Order, OrderStatus } from "@/types";
 export function KitchenView({
   open,
   orders,
+  now,
   updatingIds,
   onClose,
   onStatusChange,
@@ -20,6 +21,7 @@ export function KitchenView({
 }: {
   open: boolean;
   orders: Order[];
+  now?: number;
   updatingIds: Set<string>;
   onClose: () => void;
   onStatusChange: (order: Order, status: OrderStatus) => void;
@@ -67,6 +69,7 @@ export function KitchenView({
                 key={order.id}
                 order={order}
                 expanded
+                now={now}
                 updating={updatingIds.has(order.id)}
                 onToggle={() => {}}
                 onStatusChange={(status) => onStatusChange(order, status)}

@@ -1,13 +1,10 @@
 import type { Order, OrderStatus, PaymentStatus } from "@/types";
+import { orderAgeMs } from "@/lib/orders/overdue";
+import { minutesBetween } from "@/lib/orders/time";
 
-export const ORDER_STATUSES: OrderStatus[] = [
-  "pending",
-  "confirmed",
-  "preparing",
-  "ready",
-  "delivered",
-  "cancelled",
-];
+export { ORDER_STATUSES, nextOrderStatus, isActiveOrder } from "@/lib/orders/status";
+export { effectivePaymentStatus } from "@/lib/orders/dashboard";
+export { isJerusalemToday as isToday } from "@/lib/orders/time";
 
 export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [
   "pending",
@@ -16,49 +13,18 @@ export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [
   "ready",
 ];
 
-const NEXT_STATUS: Partial<Record<OrderStatus, OrderStatus>> = {
-  pending: "confirmed",
-  confirmed: "preparing",
-  preparing: "ready",
-  ready: "delivered",
-};
-
-export function nextOrderStatus(status: OrderStatus): OrderStatus | null {
-  return NEXT_STATUS[status] ?? null;
-}
-
-export function isActiveOrder(order: Order): boolean {
-  return ACTIVE_ORDER_STATUSES.includes(order.status);
-}
-
-export function isToday(value: string, now = new Date()): boolean {
-  const date = new Date(value);
-  return (
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  );
-}
-
 export function orderAgeMinutes(order: Order, now = Date.now()): number {
-  return Math.max(0, Math.floor((now - new Date(order.createdAt).getTime()) / 60_000));
+  return Math.max(0, Math.floor(orderAgeMs(order, now) / 60_000));
 }
 
 export function averagePreparationMinutes(orders: Order[]): number | null {
   const durations = orders.flatMap((order) => {
-    if (!order.preparationStartedAt || !order.readyAt) return [];
-    const duration =
-      (new Date(order.readyAt).getTime() -
-        new Date(order.preparationStartedAt).getTime()) /
-      60_000;
-    return Number.isFinite(duration) && duration >= 0 ? [duration] : [];
+    if (order.isTestOrder) return [];
+    const duration = minutesBetween(order.preparationStartedAt, order.readyAt);
+    return duration == null ? [] : [duration];
   });
   if (durations.length === 0) return null;
   return Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length);
-}
-
-export function effectivePaymentStatus(order: Order): PaymentStatus {
-  return order.paymentStatus ?? "pending";
 }
 
 export function orderSearchText(order: Order): string {
@@ -81,3 +47,5 @@ export function orderSearchText(order: Order): string {
     .join(" ")
     .toLocaleLowerCase();
 }
+
+export type { OrderStatus, PaymentStatus };

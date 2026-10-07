@@ -76,7 +76,7 @@ export function QuickCreateIngredientPanel({
     [purchasePrice, purchaseQuantity, purchaseUnit]
   );
 
-  const valid = name.trim().length > 0 && preview != null;
+  const valid = name.trim().length > 0;
 
   const submit = async () => {
     if (saving || !valid) {
@@ -96,8 +96,8 @@ export function QuickCreateIngredientPanel({
       const result = await createIngredient({
         name,
         category,
-        purchasePrice: Number(purchasePrice),
-        purchaseQuantity: Number(purchaseQuantity),
+        purchasePrice: Number(purchasePrice) || 0,
+        purchaseQuantity: Number(purchaseQuantity) || 1,
         purchaseUnit,
         supplier,
       });
@@ -239,6 +239,11 @@ export function QuickCreateIngredientPanel({
                 <p className="mt-1 text-sm text-coffee/45">—</p>
               )}
             </div>
+            {!supplier.trim() && (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {t("admin.inventory.missingSupplierWarning")}
+              </p>
+            )}
             {error && <p className="text-sm text-red-600">{error}</p>}
             {duplicate && (
               <Button

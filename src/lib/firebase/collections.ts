@@ -28,6 +28,16 @@ export const COLLECTIONS = {
   ingredientPriceHistory: "ingredientPriceHistory",
   costingSettings: "costingSettings",
   costingSnapshots: "costingSnapshots",
+  costingImportHistory: "costingImportHistory",
+  suppliers: "suppliers",
+  supplierOffers: "supplierOffers",
+  purchaseInvoices: "purchaseInvoices",
+  purchasePriceRecords: "purchasePriceRecords",
+  inventoryMovements: "inventoryMovements",
+  posImports: "posImports",
+  posProductMaps: "posProductMaps",
+  stockCounts: "stockCounts",
+  reportRuns: "reportRuns",
 } as const;
 
 export const DEFAULT_STORE_ID = "mishkah";

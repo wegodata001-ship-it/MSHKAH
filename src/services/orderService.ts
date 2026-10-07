@@ -9,6 +9,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  serverTimestamp,
   type Unsubscribe,
   type DocumentData,
   type Timestamp,
@@ -21,6 +22,7 @@ import { mapOrder } from "@/lib/mappers";
 import { selectedModifierToFirestore } from "@/lib/mappers/modifier-mappers";
 import { orderSchema, type OrderInput } from "@/lib/validation/schemas";
 import { forcePickupForNewOrder, NEW_ORDER_FULFILLMENT } from "@/lib/orders/fulfillment";
+import { normalizeOrderStatus, toStoredOrderStatus } from "@/lib/orders/status";
 import { isViewOnlyMenuSurface } from "@/lib/domains/host-routing";
 import {
   requestOrderCancelledEmailNotification,
@@ -93,6 +95,7 @@ function buildFirestoreOrder(
     paymentStatus: parsed.paymentStatus ?? "pending",
     notes: parsed.notes?.trim() ?? "",
     createdAt: now,
+    receivedAt: now,
   };
   if (parsed.customerPhone?.trim()) order.customerPhone = parsed.customerPhone.trim();
   if (parsed.customerEmail?.trim()) order.customerEmail = parsed.customerEmail.trim().toLowerCase();
@@ -378,21 +381,32 @@ export async function updateOrderStatus(
   metadata?: { cancelReason?: string; cancelledBy?: string }
 ): Promise<ServiceResult<void>> {
   try {
-    const now = nowTimestamp();
-    const patch: Record<string, unknown> = { status };
+    const stored = toStoredOrderStatus(normalizeOrderStatus(status));
+    const ref = doc(getDb(), COLLECTIONS.orders, id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      return failure(new ServiceError("Order not found", "NOT_FOUND"));
+    }
+    const current = snap.data() as FirestoreOrder;
+    const stamp = serverTimestamp();
+    const patch: Record<string, unknown> = { status: stored };
 
-    if (status === "confirmed") patch.confirmedAt = now;
-    if (status === "preparing") patch.preparationStartedAt = now;
-    if (status === "ready") patch.readyAt = now;
-    if (status === "delivered") patch.completedAt = now;
-    if (status === "cancelled") {
-      patch.cancelledAt = now;
+    if (stored === "pending" && !current.receivedAt) patch.receivedAt = stamp;
+    if (stored === "confirmed" && !current.confirmedAt) patch.confirmedAt = stamp;
+    if (stored === "preparing" && !current.preparationStartedAt) patch.preparationStartedAt = stamp;
+    if (stored === "ready" && !current.readyAt) patch.readyAt = stamp;
+    if (stored === "delivered") {
+      if (!current.deliveredAt) patch.deliveredAt = stamp;
+      if (!current.completedAt) patch.completedAt = stamp;
+    }
+    if (stored === "cancelled") {
+      if (!current.cancelledAt) patch.cancelledAt = stamp;
       patch.cancelReason = metadata?.cancelReason?.trim() || "other";
       patch.cancelledBy = metadata?.cancelledBy?.trim() || "admin";
     }
 
-    await updateDoc(doc(getDb(), COLLECTIONS.orders, id), patch);
-    if (status === "cancelled") {
+    await updateDoc(ref, patch);
+    if (stored === "cancelled") {
       requestOrderCancelledEmailNotification(id);
     }
     return success(undefined);

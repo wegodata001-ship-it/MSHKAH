@@ -36,12 +36,13 @@ import { AdminKpiCard } from "./components/admin-kpi-card";
 import { AdminCard } from "./components/admin-card";
 import { AdminEmptyState } from "./components/admin-empty-state";
 import { QrLinksGrid } from "./qr-links-admin";
+import { DashboardReportsWidget } from "@/features/admin/reports/dashboard-reports-widget";
+import { isActiveOrder } from "@/lib/orders/status";
+import { isJerusalemToday } from "@/lib/orders/time";
 import type { OrderStatus } from "@/types";
 
 function isToday(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  return d.toDateString() === now.toDateString();
+  return isJerusalemToday(iso);
 }
 
 function isThisMonth(iso: string) {
@@ -50,7 +51,6 @@ function isThisMonth(iso: string) {
   return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
 }
 
-const ACTIVE_STATUSES: OrderStatus[] = ["pending", "preparing", "ready"];
 
 export function AdminDashboard() {
   const t = useT();
@@ -66,7 +66,7 @@ export function AdminDashboard() {
     const delivered = orders.filter((o) => o.status === "delivered");
     const todayOrders = orders.filter((o) => isToday(o.createdAt));
     const monthOrders = orders.filter((o) => isThisMonth(o.createdAt));
-    const activeOrders = orders.filter((o) => ACTIVE_STATUSES.includes(o.status));
+    const activeOrders = orders.filter((o) => isActiveOrder(o));
     const todaySales = todayOrders.reduce((s, o) => s + o.total, 0);
     const monthSales = monthOrders.reduce((s, o) => s + o.total, 0);
     const totalRevenue = delivered.reduce((s, o) => s + o.total, 0);
@@ -173,6 +173,8 @@ export function AdminDashboard() {
           <AdminKpiCard key={card.label} {...card} loading={loading} index={i} />
         ))}
       </div>
+
+      <DashboardReportsWidget />
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold text-dark-brown dark:text-warm-white">{t("admin.qr.title")}</h2>

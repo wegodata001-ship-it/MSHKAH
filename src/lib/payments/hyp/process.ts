@@ -340,6 +340,7 @@ export async function handleHypReturn(rawQuery: string): Promise<{
         paymentMethod: "card",
         paymentProvider: HYP_PROVIDER,
         paymentTransactionId: redirect.id,
+        paidAt: now,
       });
       return false;
     }

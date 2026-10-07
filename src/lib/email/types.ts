@@ -16,7 +16,8 @@ export type MishkahEmailKind =
   | "order_updated"
   | "order_cancelled"
   | "customer_payment"
-  | "system";
+  | "system"
+  | "overdue_order";
 
 export type NewOrderEmailStatus = "SENDING" | "SENT" | "FAILED";
 

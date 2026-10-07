@@ -24,7 +24,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         data-admin
       >
         {/* Drawer overlay — mobile & tablet only (< lg) */}
-        <AdminMobileDrawer open={mobileOpen} onClose={() => setMobileOpen(false)} />
+        <div className="print:hidden">
+          <AdminMobileDrawer open={mobileOpen} onClose={() => setMobileOpen(false)} />
+        </div>
 
         {/*
           Desktop layout (lg+): CSS Grid — Sidebar | Main (Header + Content)
@@ -42,9 +44,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25 }}
-              className="min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8"
+              className="min-w-0 flex-1 px-4 py-6 print:p-0 md:px-6 md:py-8"
             >
-              <div className="mx-auto w-full max-w-7xl">{children}</div>
+              <div className="mx-auto w-full max-w-7xl print:max-w-none">{children}</div>
             </motion.main>
           </div>
         </div>

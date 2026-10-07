@@ -71,6 +71,18 @@ export interface FirestoreOrderItem {
   kitchenNotes?: string[];
 }
 
+export type FirestoreOrderAlert = {
+  status?: "SENDING" | "SENT" | "FAILED";
+  sentAt?: Timestamp | null;
+  attemptedAt?: Timestamp | null;
+  claimedAt?: Timestamp | null;
+  failedAt?: Timestamp | null;
+  lastAttemptAt?: Timestamp | null;
+  lastError?: string;
+  messageId?: string;
+  attempts?: number;
+};
+
 export interface FirestoreOrder {
   orderNumber: string;
   customerId: string;
@@ -95,11 +107,21 @@ export interface FirestoreOrder {
   /** UI locale at checkout (ar/he/en). Optional on legacy orders. */
   locale?: "ar" | "he" | "en";
   createdAt: Timestamp;
+  receivedAt?: Timestamp | null;
   confirmedAt?: Timestamp | null;
   preparationStartedAt?: Timestamp | null;
   readyAt?: Timestamp | null;
+  deliveredAt?: Timestamp | null;
   completedAt?: Timestamp | null;
   cancelledAt?: Timestamp | null;
+  paidAt?: Timestamp | null;
+  alerts?: {
+    receivedCritical?: FirestoreOrderAlert;
+    preparingCritical?: FirestoreOrderAlert;
+    readyCritical?: FirestoreOrderAlert;
+    preparingEscalation?: FirestoreOrderAlert;
+    readyEscalation?: FirestoreOrderAlert;
+  };
   cancelReason?: string;
   cancelledBy?: string;
   /** Server-managed email notification flags (Admin SDK only). */

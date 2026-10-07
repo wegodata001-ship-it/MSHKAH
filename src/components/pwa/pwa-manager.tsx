@@ -105,7 +105,7 @@ export function PwaManager() {
   if (!updateReady && !showInstall) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+0.75rem)] z-[95] flex justify-center px-4 md:bottom-6">
+    <div data-pwa-install className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+0.75rem)] z-[95] flex justify-center px-4 print:hidden md:bottom-6">
       <div className="pointer-events-auto flex w-full max-w-md flex-col gap-2">
         {updateReady && (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-beige-dark/25 bg-warm-white/95 px-4 py-3 shadow-elevated backdrop-blur-md">

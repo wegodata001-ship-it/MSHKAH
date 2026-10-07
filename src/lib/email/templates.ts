@@ -1,6 +1,7 @@
 import { BRAND_COLORS } from "@/lib/brand";
 import { getPublicSiteUrl } from "@/lib/email/config";
 import type { OrderChange } from "@/lib/email/significant-diff";
+import { formatJerusalemDateTime } from "@/lib/orders/time";
 
 const COLORS = {
   primary: BRAND_COLORS.primary,
@@ -400,5 +401,52 @@ export function renderCriticalCheckoutFailureEmail(payload: {
     subject,
     html,
     text: `MISHKAH CAFE\nתקלה בתהליך הזמנה\n${payload.code ?? ""}\n${payload.message}`,
+  };
+}
+
+export function renderOverdueOrderEmail(payload: {
+  orderNumber: string;
+  statusLabel: string;
+  waitLabel: string;
+  total: number;
+  customerName: string;
+  customerPhone?: string;
+  createdAt: string;
+  viewUrl: string;
+  escalation?: boolean;
+}): { subject: string; html: string; text: string } {
+  const subject = payload.escalation
+    ? `تنبيه عاجل — الطلب ما زال بدون معالجة — #${payload.orderNumber}`
+    : `تنبيه طلب متأخر — #${payload.orderNumber}`;
+  const when = formatJerusalemDateTime(payload.createdAt);
+  const html = emailShell({
+    title: subject,
+    badge: "critical",
+    preheader: "طلب يحتاج إلى متابعة",
+    bodyHtml: `
+      <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;text-align:center;color:${COLORS.warning};">طلب يحتاج إلى متابعة</h1>
+      <div style="padding:14px 16px;border-radius:12px;background:#FFFAEB;border:1px solid #FEDF89;font-size:14px;line-height:1.8;color:${COLORS.primary};">
+        <div><strong>رقم الطلب:</strong> ${escapeHtml(payload.orderNumber)}</div>
+        <div><strong>الحالة:</strong> ${escapeHtml(payload.statusLabel)}</div>
+        <div><strong>مدة الانتظار:</strong> ${escapeHtml(payload.waitLabel)}</div>
+        <div><strong>المبلغ:</strong> ${escapeHtml(formatIls(payload.total))}</div>
+        <div><strong>العميل:</strong> ${escapeHtml(payload.customerName || "—")}</div>
+        <div><strong>الهاتف:</strong> ${escapeHtml(payload.customerPhone || "—")}</div>
+        <div><strong>وقت الطلب:</strong> ${escapeHtml(when)}</div>
+      </div>
+      ${ctaButton(payload.viewUrl, "فتح الطلب في لوحة الإدارة")}
+    `,
+  });
+  return {
+    subject,
+    html,
+    text: [
+      "طلب يحتاج إلى متابعة",
+      payload.orderNumber,
+      payload.statusLabel,
+      payload.waitLabel,
+      formatIls(payload.total),
+      payload.viewUrl,
+    ].join("\n"),
   };
 }

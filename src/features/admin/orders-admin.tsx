@@ -8,6 +8,8 @@ import { useAuth } from "@/components/providers/auth-provider";
 import { OrderItemExtrasDialog } from "@/features/admin/orders/order-item-extras-dialog";
 import { OrderCard } from "@/features/admin/orders/order-card";
 import { CancelOrderDialog } from "@/features/admin/orders/cancel-order-dialog";
+import { PermanentDeleteOrderDialog } from "@/features/admin/orders/permanent-delete-dialog";
+import { isAdminRole } from "@/lib/auth/roles";
 import { KitchenView } from "@/features/admin/orders/kitchen-view";
 import { AdminToastStack, createToast, type AdminToast } from "@/features/admin/components/admin-toast";
 import { Button } from "@/components/ui/button";
@@ -21,14 +23,17 @@ import {
 } from "@/components/ui/select";
 import { formatPrice, cn } from "@/lib/utils";
 import {
-  ACTIVE_ORDER_STATUSES,
-  ORDER_STATUSES,
-  averagePreparationMinutes,
   effectivePaymentStatus,
   isActiveOrder,
   isToday,
   orderSearchText,
 } from "@/lib/orders/operations";
+import { computeOrderDashboard, matchesOperationalFilter } from "@/lib/orders/dashboard";
+import {
+  OPERATIONAL_FILTERS,
+  type OperationalOrderStatus,
+} from "@/lib/orders/status";
+import { formatDuration } from "@/lib/orders/format-age";
 import { kitchenTicketHtml, printKitchenTicket } from "@/lib/orders/kitchen-ticket";
 import { exportHtmlAsPdf } from "@/lib/export-pdf";
 import { useT } from "@/components/providers/locale-provider";
@@ -38,6 +43,7 @@ import type { Order, OrderStatus, PaymentStatus } from "@/types";
 
 type OrdersTab = "active" | "history";
 type DateFilter = "today" | "week" | "all";
+type StatusFilter = OperationalOrderStatus | "all" | "overdue";
 
 export function OrdersAdmin() {
   const t = useT();
@@ -47,14 +53,16 @@ export function OrdersAdmin() {
   const [tab, setTab] = useState<OrdersTab>("active");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("today");
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [now, setNow] = useState(() => Date.now());
   const [paymentFilter, setPaymentFilter] = useState<PaymentStatus | "all">("all");
   const [typeFilter, setTypeFilter] = useState<"pickup" | "delivery" | "all">("all");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<Record<string, OrderStatus>>({});
   const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
+  const [deleteOrder, setDeleteOrder] = useState<Order | null>(null);
   const [kitchenOpen, setKitchenOpen] = useState(false);
   const [toasts, setToasts] = useState<AdminToast[]>([]);
   const [extrasDialog, setExtrasDialog] = useState<{ order: Order; itemIndex: number } | null>(null);
@@ -66,6 +74,11 @@ export function OrdersAdmin() {
     const timer = setTimeout(() => setSearch(searchInput.trim().toLocaleLowerCase()), 275);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!realtimeReady.current) {
@@ -104,18 +117,9 @@ export function OrdersAdmin() {
     [orders, optimistic]
   );
 
-  const todayOrders = useMemo(() => effectiveOrders.filter((order) => isToday(order.createdAt)), [effectiveOrders]);
-  const averagePrep = useMemo(() => averagePreparationMinutes(todayOrders), [todayOrders]);
-  const todayRevenue = useMemo(
-    () =>
-      todayOrders
-        .filter((order) => order.status !== "cancelled")
-        .reduce((sum, order) => sum + order.total, 0),
-    [todayOrders]
-  );
+  const stats = useMemo(() => computeOrderDashboard(effectiveOrders, new Date(now)), [effectiveOrders, now]);
 
   const filtered = useMemo(() => {
-    const now = Date.now();
     return effectiveOrders
       .filter((order) => (tab === "active" ? isActiveOrder(order) : !isActiveOrder(order)))
       .filter((order) => {
@@ -123,17 +127,17 @@ export function OrdersAdmin() {
         if (dateFilter === "week") return now - new Date(order.createdAt).getTime() <= 7 * 86_400_000;
         return true;
       })
-      .filter((order) => statusFilter === "all" || order.status === statusFilter)
+      .filter((order) => matchesOperationalFilter(order, statusFilter))
       .filter((order) => paymentFilter === "all" || effectivePaymentStatus(order) === paymentFilter)
       .filter((order) => typeFilter === "all" || order.orderType === typeFilter)
       .filter((order) => !search || orderSearchText(order).includes(search))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [dateFilter, effectiveOrders, paymentFilter, search, statusFilter, tab, typeFilter]);
+  }, [dateFilter, effectiveOrders, now, paymentFilter, search, statusFilter, tab, typeFilter]);
 
   const activeOrders = useMemo(
     () =>
       effectiveOrders
-        .filter((order) => isActiveOrder(order) && isToday(order.createdAt))
+        .filter((order) => isActiveOrder(order))
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     [effectiveOrders]
   );
@@ -220,11 +224,12 @@ export function OrdersAdmin() {
     }
   };
 
-  const kpis: { status: OrderStatus; value: number }[] = [
-    { status: "pending", value: todayOrders.filter((order) => order.status === "pending").length },
-    { status: "preparing", value: todayOrders.filter((order) => order.status === "preparing").length },
-    { status: "ready", value: todayOrders.filter((order) => order.status === "ready").length },
-    { status: "delivered", value: todayOrders.filter((order) => order.status === "delivered").length },
+  const kpis: { key: StatusFilter; value: string | number; hint: string; danger?: boolean }[] = [
+    { key: "received", value: stats.received, hint: t("admin.orders.kpi.receivedHint") },
+    { key: "preparing", value: stats.preparing, hint: t("admin.orders.kpi.preparingHint") },
+    { key: "ready", value: stats.ready, hint: t("admin.orders.kpi.readyHint") },
+    { key: "delivered", value: stats.deliveredToday, hint: t("admin.orders.kpi.deliveredHint") },
+    { key: "overdue", value: stats.overdue, hint: t("admin.orders.overdueHint"), danger: true },
   ];
 
   return (
@@ -240,33 +245,44 @@ export function OrdersAdmin() {
         }
       />
 
-      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {kpis.map(({ status, value }) => (
+      <div className="mt-5 flex gap-3 overflow-x-auto pb-1 xl:grid xl:grid-cols-7 xl:overflow-visible">
+        {kpis.map(({ key, value, hint, danger }) => (
           <button
-            key={status}
+            key={key}
             type="button"
             onClick={() => {
-              setTab(status === "delivered" ? "history" : "active");
-              setDateFilter("today");
-              setStatusFilter(status);
+              setTab(key === "delivered" ? "history" : "active");
+              setDateFilter(key === "delivered" ? "today" : "all");
+              setStatusFilter(key);
             }}
-            className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4 text-start shadow-soft transition hover:border-turquoise/40"
+            className={cn(
+              "min-w-[148px] rounded-2xl border bg-warm-white p-4 text-start shadow-soft transition hover:border-turquoise/40 xl:min-w-0",
+              statusFilter === key ? "border-turquoise" : "border-beige-dark/15",
+              danger && Number(value) > 0 && "border-amber-300"
+            )}
           >
-            <p className="text-2xl font-bold text-dark-brown dark:text-warm-white">{value}</p>
-            <p className="text-sm text-coffee/55">{t(`admin.status.${status}`)}</p>
+            <p className={cn("text-2xl font-bold", danger && Number(value) > 0 ? "text-amber-800" : "text-dark-brown dark:text-warm-white")}>
+              {value}
+            </p>
+            <p className="text-sm text-coffee/55">
+              {key === "overdue" ? t("admin.orders.overdue") : t(`admin.status.${key}`)}
+            </p>
+            <p className="mt-1 text-[11px] leading-4 text-coffee/40">{hint}</p>
           </button>
         ))}
-        <div className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft">
-          <p className="text-xl font-bold text-turquoise">{formatPrice(todayRevenue)}</p>
+        <div className="min-w-[148px] rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft xl:min-w-0">
+          <p className="text-xl font-bold text-turquoise">{formatPrice(stats.todayRevenue)}</p>
           <p className="text-sm text-coffee/55">{t("admin.orders.todayRevenue")}</p>
+          <p className="mt-1 text-[11px] leading-4 text-coffee/40">{t("admin.orders.kpi.revenueHint")}</p>
         </div>
-        <div className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft">
+        <div className="min-w-[148px] rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft xl:min-w-0">
           <p className="text-xl font-bold text-coffee">
-            {averagePrep == null
+            {stats.averagePrepMinutes == null
               ? "—"
-              : t("admin.orders.minutesShort").replace("{count}", String(averagePrep))}
+              : formatDuration(t, stats.averagePrepMinutes * 60_000)}
           </p>
           <p className="text-sm text-coffee/55">{t("admin.orders.averagePrep")}</p>
+          <p className="mt-1 text-[11px] leading-4 text-coffee/40">{t("admin.orders.kpi.prepHint")}</p>
         </div>
       </div>
 
@@ -307,11 +323,12 @@ export function OrdersAdmin() {
             <SelectItem value="all">{t("admin.status.all")}</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as OrderStatus | "all")}>
+        <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("admin.status.all")}</SelectItem>
-            {ORDER_STATUSES.map((status) => (
+            <SelectItem value="overdue">{t("admin.orders.overdue")}</SelectItem>
+            {OPERATIONAL_FILTERS.map((status) => (
               <SelectItem key={status} value={status}>{t(`admin.status.${status}`)}</SelectItem>
             ))}
           </SelectContent>
@@ -337,7 +354,7 @@ export function OrdersAdmin() {
 
       {statusFilter !== "all" && (
         <button className="mt-3 text-sm text-turquoise" onClick={() => setStatusFilter("all")}>
-          {t(`admin.status.${statusFilter}`)} ×
+          {statusFilter === "overdue" ? t("admin.orders.overdue") : t(`admin.status.${statusFilter}`)} ×
         </button>
       )}
 
@@ -361,6 +378,7 @@ export function OrdersAdmin() {
               order={order}
               expanded={expanded === order.id}
               updating={updatingIds.has(order.id)}
+              now={now}
               onToggle={() => setExpanded((current) => (current === order.id ? null : order.id))}
               onStatusChange={(status) =>
                 status === "cancelled" ? setCancelOrder(order) : void changeStatus(order, status)
@@ -378,6 +396,7 @@ export function OrdersAdmin() {
                 );
               }}
               onEditItem={(itemIndex) => setExtrasDialog({ order, itemIndex })}
+              onPermanentDelete={user && isAdminRole(user.role) ? () => setDeleteOrder(order) : undefined}
             />
           ))}
         </div>
@@ -395,6 +414,12 @@ export function OrdersAdmin() {
           });
         }}
       />
+      <PermanentDeleteOrderDialog
+        order={deleteOrder}
+        open={deleteOrder != null}
+        onOpenChange={(open) => !open && setDeleteOrder(null)}
+        onDeleted={() => pushToast(t("admin.orders.permanentlyDeleted"))}
+      />
       <OrderItemExtrasDialog
         order={extrasDialog?.order ?? null}
         itemIndex={extrasDialog?.itemIndex ?? null}
@@ -404,6 +429,7 @@ export function OrdersAdmin() {
       <KitchenView
         open={kitchenOpen}
         orders={activeOrders}
+        now={now}
         updatingIds={updatingIds}
         onClose={() => setKitchenOpen(false)}
         onStatusChange={(order, status) =>

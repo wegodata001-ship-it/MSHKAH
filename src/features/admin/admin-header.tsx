@@ -49,7 +49,7 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
         : t("admin.role.employee");
 
   return (
-    <header className="sticky top-0 z-30 border-b border-beige-dark/20 bg-warm-white/90 backdrop-blur-xl dark:border-white/10 dark:bg-[#1a1412]/90">
+    <header className="sticky top-0 z-30 border-b border-beige-dark/20 bg-warm-white/90 backdrop-blur-xl print:hidden dark:border-white/10 dark:bg-[#1a1412]/90">
       <div className="flex h-16 items-center gap-3 px-4 md:gap-4 md:px-6">
         <button
           onClick={onMenuClick}

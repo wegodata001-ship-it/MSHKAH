@@ -11,27 +11,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useT } from "@/components/providers/locale-provider";
+import { effectivePaymentStatus } from "@/lib/orders/operations";
 import {
-  ORDER_STATUSES,
-  effectivePaymentStatus,
-  nextOrderStatus,
-  orderAgeMinutes,
-} from "@/lib/orders/operations";
+  OPERATIONAL_FILTERS,
+  nextOperationalStatus,
+  operationalStatusOf,
+  toStoredOrderStatus,
+  type OperationalOrderStatus,
+} from "@/lib/orders/status";
+import { ageIsAtLeastOneDay, formatJerusalemDateTime } from "@/lib/orders/time";
+import { formatDuration, formatOrderAge } from "@/lib/orders/format-age";
+import { orderAgeMs, overdueLevel, stageAgeMs } from "@/lib/orders/overdue";
 import { formatDate, formatPrice, cn } from "@/lib/utils";
 import type { Order, OrderStatus } from "@/types";
 
-const STATUS_STYLE: Record<OrderStatus, string> = {
-  pending: "border-amber-300 bg-amber-50 text-amber-800",
-  confirmed: "border-sky-300 bg-sky-50 text-sky-800",
+const STATUS_STYLE: Record<OperationalOrderStatus, string> = {
+  received: "border-amber-300 bg-amber-50 text-amber-800",
   preparing: "border-violet-300 bg-violet-50 text-violet-800",
   ready: "border-emerald-300 bg-emerald-50 text-emerald-800",
   delivered: "border-stone-300 bg-stone-100 text-stone-700",
   cancelled: "border-red-300 bg-red-50 text-red-700",
 };
 
-const STATUS_BORDER: Record<OrderStatus, string> = {
-  pending: "border-s-amber-500",
-  confirmed: "border-s-sky-500",
+const STATUS_BORDER: Record<OperationalOrderStatus, string> = {
+  received: "border-s-amber-500",
   preparing: "border-s-violet-500",
   ready: "border-s-emerald-500",
   delivered: "border-s-stone-500",
@@ -95,6 +98,7 @@ export function OrderCard({
   order,
   expanded,
   updating,
+  now = Date.now(),
   onToggle,
   onStatusChange,
   onCancel,
@@ -105,10 +109,12 @@ export function OrderCard({
   onExportPdf,
   onCopyNumber,
   onEditItem,
+  onPermanentDelete,
 }: {
   order: Order;
   expanded: boolean;
   updating: boolean;
+  now?: number;
   onToggle: () => void;
   onStatusChange: (status: OrderStatus) => void;
   onCancel: () => void;
@@ -119,11 +125,14 @@ export function OrderCard({
   onExportPdf?: () => void;
   onCopyNumber?: () => void;
   onEditItem?: (index: number) => void;
+  onPermanentDelete?: () => void;
 }) {
   const t = useT();
-  const next = nextOrderStatus(order.status);
-  const age = orderAgeMinutes(order);
-  const urgent = age >= 15 && order.status === "pending";
+  const status = operationalStatusOf(order);
+  const next = nextOperationalStatus(status);
+  const ageMs = orderAgeMs(order, now);
+  const stageMs = stageAgeMs(order, now);
+  const delay = overdueLevel(order, now);
   const paymentStatus = effectivePaymentStatus(order);
   const paidByCard =
     paymentStatus === "paid" &&
@@ -134,17 +143,28 @@ export function OrderCard({
     <article
       className={cn(
         "rounded-2xl border border-beige-dark/15 border-s-4 bg-warm-white p-4 shadow-soft dark:border-white/10 dark:bg-white/5",
-        STATUS_BORDER[order.status],
-        urgent && "ring-2 ring-amber-400/40"
+        STATUS_BORDER[status],
+        delay === "warning" && "ring-2 ring-amber-400/50",
+        delay === "critical" && "ring-2 ring-red-400/60"
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-start">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-bold text-dark-brown dark:text-warm-white">{order.orderNumber}</span>
-            <Badge variant="outline" className={STATUS_STYLE[order.status]}>
-              {t(`admin.status.${order.status}`)}
+            <Badge variant="outline" className={STATUS_STYLE[status]}>
+              {t(`admin.status.${status}`)}
             </Badge>
+            {delay === "warning" && (
+              <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-800">
+                {t("admin.orders.warning")}
+              </Badge>
+            )}
+            {delay === "critical" && (
+              <Badge variant="outline" className="border-red-400 bg-red-50 text-red-700">
+                {t("admin.orders.critical")}
+              </Badge>
+            )}
             {order.isTestOrder && (
               <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-800">
                 TEST
@@ -170,13 +190,24 @@ export function OrderCard({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-coffee/55">
             <span className="font-medium text-coffee/75">{order.customerName}</span>
-            <span>{new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <span className={cn("inline-flex items-center gap-1", urgent && "font-bold text-amber-700")}>
-              <Clock className="h-3.5 w-3.5" />
-              {age < 1
-                ? t("admin.orders.justNow")
-                : t("admin.orders.minutesAgo").replace("{count}", String(age))}
+            <span title={formatJerusalemDateTime(order.createdAt)}>
+              {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
+            <span
+              className={cn("inline-flex items-center gap-1", delay !== "normal" && "font-bold text-amber-800")}
+              title={formatJerusalemDateTime(order.createdAt)}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              {formatOrderAge(t, ageMs)}
+            </span>
+            {ageIsAtLeastOneDay(ageMs) && (
+              <span className="text-coffee/45">{formatJerusalemDateTime(order.createdAt)}</span>
+            )}
+            {(status === "received" || status === "preparing" || status === "ready") && (
+              <span className="text-coffee/70">
+                {t(`admin.orders.stage.${status}`).replace("{age}", formatDuration(t, stageMs))}
+              </span>
+            )}
           </div>
         </button>
 
@@ -243,17 +274,17 @@ export function OrderCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Select
-          value={order.status}
-          onValueChange={(value) => onStatusChange(value as OrderStatus)}
+          value={status}
+          onValueChange={(value) => onStatusChange(toStoredOrderStatus(value as OperationalOrderStatus))}
           disabled={updating}
         >
           <SelectTrigger className="h-10 w-[145px]">
             {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <SelectValue />}
           </SelectTrigger>
           <SelectContent>
-            {ORDER_STATUSES.map((status) => (
-              <SelectItem key={status} value={status}>
-                {t(`admin.status.${status}`)}
+            {OPERATIONAL_FILTERS.map((value) => (
+              <SelectItem key={value} value={value}>
+                {t(`admin.status.${value}`)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -264,9 +295,9 @@ export function OrderCard({
             type="button"
             className="min-h-10 flex-1 rounded-xl sm:flex-none"
             disabled={updating}
-            onClick={() => onStatusChange(next)}
+            onClick={() => onStatusChange(toStoredOrderStatus(next))}
           >
-            {t(`admin.orders.next.${order.status}`)}
+            {t(`admin.orders.next.${status}`)}
           </Button>
         )}
 
@@ -303,9 +334,14 @@ export function OrderCard({
             <Copy className="h-4 w-4" />
           </Button>
         )}
-        {order.status !== "cancelled" && order.status !== "delivered" && (
+        {status !== "cancelled" && status !== "delivered" && (
           <Button type="button" variant="ghost" className="text-red-600" onClick={onCancel}>
             {t("admin.orders.cancel")}
+          </Button>
+        )}
+        {onPermanentDelete && (
+          <Button type="button" variant="ghost" className="text-red-700" onClick={onPermanentDelete}>
+            {t("admin.orders.permanentDelete")}
           </Button>
         )}
       </div>

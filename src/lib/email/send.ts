@@ -1,5 +1,6 @@
 import { sendViaBrevo } from "@/lib/email/brevo";
 import {
+  getAdminNotificationEmail,
   getBrevoConfig,
   getBusinessAlertRecipients,
   getMishkahNotificationEmails,
@@ -9,6 +10,7 @@ import {
   renderNewOrderEmail,
   renderOrderCancelledEmail,
   renderOrderUpdatedEmail,
+  renderOverdueOrderEmail,
   renderTestEmailHtml,
   type OrderEmailBase,
 } from "@/lib/email/templates";
@@ -104,6 +106,28 @@ export async function sendOrderCancelledNotificationEmail(
     html: content.html,
     text: content.text,
     kind: "order_cancelled",
+  });
+}
+
+export async function sendOverdueOrderEmail(payload: {
+  orderNumber: string;
+  statusLabel: string;
+  waitLabel: string;
+  total: number;
+  customerName: string;
+  customerPhone?: string;
+  createdAt: string;
+  viewUrl: string;
+  escalation?: boolean;
+}): Promise<SendEmailResult> {
+  const content = renderOverdueOrderEmail(payload);
+  const to = getAdminNotificationEmail();
+  return sendMishkahEmail({
+    to,
+    subject: content.subject,
+    html: content.html,
+    text: content.text,
+    kind: "overdue_order",
   });
 }
 

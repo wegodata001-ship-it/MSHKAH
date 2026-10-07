@@ -4,16 +4,19 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Calculator,
   Copy,
+  Download,
   Loader2,
   Pencil,
   Plus,
   Search,
   Shield,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useAuthFetch } from "@/lib/auth/auth-fetch";
 import { useLocale, useT } from "@/components/providers/locale-provider";
 import { AdminPageHeader } from "@/features/admin/components/admin-page-header";
 import { AdminKpiCard } from "@/features/admin/components/admin-kpi-card";
@@ -57,11 +60,15 @@ import {
   updateIngredient,
   writeIngredientImpactSnapshots,
 } from "@/services/costingService";
-import { getProductModifierGroups, subscribeToModifierOptions } from "@/services/modifierService";
+import {
+  getProductModifierGroups,
+  subscribeToAllProductModifierGroups,
+  subscribeToModifierOptions,
+} from "@/services/modifierService";
 import { getLocalizedName, getProductDisplayName } from "@/lib/i18n/localized-content";
 import { formatPrice } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import type { ModifierOption } from "@/types/modifiers";
+import type { ModifierOption, ProductModifierGroup } from "@/types/modifiers";
 import { StatusDot, perUnitKey, unitLabelKey } from "./costing-shared";
 import {
   IngredientFormModal,
@@ -70,8 +77,30 @@ import {
   type IngredientFormValue,
 } from "./ingredient-form";
 import { RecipeEditorModal } from "./recipe-editor";
+import { CostingImportWizard, downloadCostingWorkbook } from "./import-wizard";
+import { InventorySection, PosSection, PurchaseSection } from "@/features/admin/inventory/inventory-hub";
+import {
+  subscribeToInventoryMovements,
+  subscribeToPosImports,
+  subscribeToPosProductMaps,
+  subscribeToPurchaseInvoices,
+  subscribeToPurchasePriceRecords,
+  subscribeToSupplierOffers,
+  subscribeToSuppliers,
+  latestUnitCost,
+} from "@/services/inventoryService";
+import type {
+  InventoryMovement,
+  PosImport,
+  PosProductMap,
+  PurchaseInvoice,
+  PurchasePriceRecord,
+  Supplier,
+  SupplierOffer,
+} from "@/lib/inventory/types";
 
-type Tab = "dashboard" | "recipes" | "ingredients" | "history";
+type Hub = "inventory" | "purchase" | "costing" | "pos";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -81,8 +110,16 @@ export function CostingAdmin() {
   const { products, loading: productsLoading } = useProducts(undefined, { admin: true });
   const { categories } = useAllCategories();
 
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [hub, setHub] = useState<Hub>("inventory");
+  const [tab, setTab] = useState<Tab>("products");
   const [ingredients, setIngredients] = useState<CostingIngredient[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [offers, setOffers] = useState<SupplierOffer[]>([]);
+  const [movements, setMovements] = useState<InventoryMovement[]>([]);
+  const [priceRecords, setPriceRecords] = useState<PurchasePriceRecord[]>([]);
+  const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
+  const [posImports, setPosImports] = useState<PosImport[]>([]);
+  const [posMaps, setPosMaps] = useState<PosProductMap[]>([]);
   const [recipes, setRecipes] = useState<DishRecipe[]>([]);
   const [history, setHistory] = useState<IngredientPriceHistory[]>([]);
   const [snapshots, setSnapshots] = useState<CostingSnapshot[]>([]);
@@ -101,6 +138,10 @@ export function CostingAdmin() {
   const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
   const [linkedOptions, setLinkedOptions] = useState<ModifierOption[]>([]);
   const [settingsDraft, setSettingsDraft] = useState(settings);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMode, setImportMode] = useState<"upload" | "menu">("upload");
+  const [productGroups, setProductGroups] = useState<ProductModifierGroup[]>([]);
+  const authFetch = useAuthFetch();
 
   const toast = (message: string, variant: AdminToast["variant"] = "success") =>
     setToasts((current) => [...current, createToast(message, variant)]);
@@ -116,13 +157,31 @@ export function CostingAdmin() {
       }),
       subscribeToCostingSnapshots(setSnapshots),
       subscribeToModifierOptions(undefined, setOptions, () => undefined),
+      subscribeToAllProductModifierGroups(setProductGroups, () => undefined),
+      subscribeToSuppliers(setSuppliers),
+      subscribeToSupplierOffers(setOffers),
+      subscribeToInventoryMovements(setMovements),
+      subscribeToPurchasePriceRecords(setPriceRecords),
+      subscribeToPurchaseInvoices(setInvoices),
+      subscribeToPosImports(setPosImports),
+      subscribeToPosProductMaps(setPosMaps),
     ];
     return () => unsubs.forEach((fn) => fn());
   }, []);
 
+  const costingIngredients = useMemo(
+    () =>
+      ingredients.map((item) => {
+        const costs = latestUnitCost(item, priceRecords, settings.costBasis ?? "latest");
+        const unit = settings.foodCostVatMode === "including" ? costs.including : costs.before;
+        return { ...item, costPerBaseUnit: unit || item.costPerBaseUnit };
+      }),
+    [ingredients, priceRecords, settings.costBasis, settings.foodCostVatMode]
+  );
+
   const rows = useMemo(
-    () => buildDishRows(products, recipes, ingredients, settings),
-    [products, recipes, ingredients, settings]
+    () => buildDishRows(products, recipes, costingIngredients, settings),
+    [products, recipes, costingIngredients, settings]
   );
 
   const filteredRows = useMemo(() => {
@@ -139,6 +198,27 @@ export function CostingAdmin() {
   const selected = filteredRows.find((row) => row.product.id === selectedId) ?? filteredRows[0];
   const stats = dashboardStats(rows);
   const attention = attentionRows(rows);
+  const extrasByProduct = useMemo(() => {
+    const map = new Map<string, { name: string; priceDelta: number }[]>();
+    const paid = options.filter((option) => option.active && option.priceDelta !== 0);
+    for (const link of productGroups) {
+      if (!link.active) continue;
+      const extras = paid
+        .filter((option) => option.groupId === link.groupId)
+        .map((option) => ({ name: getLocalizedName(option, locale), priceDelta: option.priceDelta }));
+      if (!extras.length) continue;
+      map.set(link.productId, [...(map.get(link.productId) ?? []), ...extras]);
+    }
+    return map;
+  }, [options, productGroups, locale]);
+
+  const downloadWorkbook = async (kind: "blank" | "menu") => {
+    try {
+      await downloadCostingWorkbook(authFetch, kind, locale);
+    } catch {
+      toast(t("admin.costing.import.error.saveFailed"), "error");
+    }
+  };
 
   useEffect(() => {
     if (selected && selected.product.id !== selectedId) setSelectedId(selected.product.id);
@@ -169,8 +249,8 @@ export function CostingAdmin() {
     const payload = {
       name: value.name,
       category: value.category,
-      purchasePrice: Number(value.purchasePrice),
-      purchaseQuantity: Number(value.purchaseQuantity),
+      purchasePrice: Number(value.purchasePrice) || 0,
+      purchaseQuantity: Number(value.purchaseQuantity) || 1,
       purchaseUnit: value.purchaseUnit,
       supplier: value.supplier,
       notes: value.notes,
@@ -191,7 +271,7 @@ export function CostingAdmin() {
         await writeIngredientImpactSnapshots({
           ingredientId: ingredientForm.id,
           recipes,
-          ingredients: ingredients.map((item) =>
+          ingredients: costingIngredients.map((item) =>
             item.id === ingredientForm.id ? { ...item, ...payload, costPerBaseUnit: result.data.ingredient.costPerBaseUnit } : item
           ),
           sellingPriceByProduct: new Map(products.map((product) => [product.id, product.price])),
@@ -289,34 +369,121 @@ export function CostingAdmin() {
     );
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "dashboard", label: t("admin.costing.tab.dashboard") },
-    { id: "recipes", label: t("admin.costing.tab.recipes") },
-    { id: "ingredients", label: t("admin.costing.tab.ingredients") },
-    { id: "history", label: t("admin.costing.tab.history") },
+  const hubs: { id: Hub; label: string; tabs: { id: Tab; label: string }[] }[] = [
+    {
+      id: "inventory",
+      label: t("admin.inventory.hub"),
+      tabs: [
+        { id: "products", label: t("admin.inventory.tab.products") },
+        { id: "ledger", label: t("admin.inventory.tab.ledger") },
+        { id: "alerts", label: t("admin.inventory.tab.alerts") },
+      ],
+    },
+    {
+      id: "purchase",
+      label: t("admin.inventory.purchaseHub"),
+      tabs: [
+        { id: "invoices", label: t("admin.inventory.tab.invoices") },
+        { id: "suppliers", label: t("admin.inventory.tab.suppliers") },
+        { id: "compare", label: t("admin.inventory.tab.compare") },
+      ],
+    },
+    {
+      id: "costing",
+      label: t("admin.costing"),
+      tabs: [
+        { id: "dashboard", label: t("admin.costing.tab.dashboard") },
+        { id: "recipes", label: t("admin.costing.tab.recipes") },
+        { id: "ingredients", label: t("admin.costing.tab.ingredients") },
+        { id: "history", label: t("admin.costing.tab.history") },
+      ],
+    },
+    {
+      id: "pos",
+      label: t("admin.inventory.posHub"),
+      tabs: [
+        { id: "pos-upload", label: t("admin.inventory.tab.posUpload") },
+        { id: "pos-maps", label: t("admin.inventory.tab.posMaps") },
+        { id: "pos-history", label: t("admin.inventory.tab.posHistory") },
+      ],
+    },
   ];
+
+  const activeHub = hubs.find((item) => item.id === hub) ?? hubs[0];
+
+  const hubProps = {
+    ingredients,
+    suppliers,
+    offers,
+    movements,
+    records: priceRecords,
+    invoices,
+    posImports,
+    maps: posMaps,
+    recipes,
+    products,
+    locale,
+    settingsVatRate: settings.vatRate ?? 0.18,
+    onToast: toast,
+    onAddProduct: () => {
+      setIngredientError(null);
+      setIngredientForm("new");
+    },
+    onEditProduct: (item: CostingIngredient) => {
+      setIngredientError(null);
+      setIngredientForm(item);
+    },
+  };
 
   return (
     <div className="space-y-6">
-      <AdminPageHeader title={t("admin.costing.title")} subtitle={t("admin.costing.subtitle")} />
+      <AdminPageHeader title={t("admin.inventory.title")} subtitle={t("admin.inventory.subtitle")} />
 
       <div className="flex flex-wrap gap-2">
-        {tabs.map((item) => (
+        {hubs.map((item) => (
           <button
             key={item.id}
             type="button"
-            onClick={() => setTab(item.id)}
+            onClick={() => {
+              setHub(item.id);
+              setTab(item.tabs[0]!.id);
+            }}
             className={cn(
               "rounded-full px-4 py-2 text-sm font-medium transition-colors",
-              tab === item.id
-                ? "bg-coffee text-warm-white"
-                : "bg-beige/50 text-coffee/70 hover:bg-beige"
+              hub === item.id ? "bg-coffee text-warm-white" : "bg-beige/50 text-coffee/70 hover:bg-beige"
             )}
           >
             {item.label}
           </button>
         ))}
       </div>
+      <div className="flex flex-wrap gap-2">
+        {activeHub.tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setTab(item.id)}
+            className={cn(
+              "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
+              tab === item.id ? "bg-turquoise text-white" : "bg-beige/40 text-coffee/70 hover:bg-beige"
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {(tab === "products" || tab === "ledger" || tab === "alerts") && (
+        <InventorySection {...hubProps} pane={tab === "products" ? "products" : tab === "ledger" ? "ledger" : "alerts"} />
+      )}
+
+      {(tab === "invoices" || tab === "suppliers" || tab === "compare") && (
+        <PurchaseSection {...hubProps} pane={tab === "invoices" ? "invoices" : tab === "suppliers" ? "suppliers" : "compare"} />
+      )}
+
+      {(tab === "pos-upload" || tab === "pos-maps" || tab === "pos-history") && (
+        <PosSection {...hubProps} pane={tab === "pos-upload" ? "upload" : tab === "pos-maps" ? "maps" : "history"} />
+      )}
 
       {tab === "dashboard" && (
         <DashboardTab
@@ -337,7 +504,7 @@ export function CostingAdmin() {
           onSelect={setSelectedId}
           onSettings={setSettingsDraft}
           onSaveSettings={persistSettings}
-          ingredients={ingredients}
+          ingredients={costingIngredients}
           extras={selected ? extraRows(linkedOptions.filter((option) => option.priceDelta !== 0)) : []}
           onBuildRecipe={(productId) => setRecipeProductId(productId)}
         />
@@ -362,6 +529,16 @@ export function CostingAdmin() {
             setIngredientError(null);
             setIngredientForm("new");
           }}
+          onImport={() => {
+            setImportMode("upload");
+            setImportOpen(true);
+          }}
+          onDownloadTemplate={() => void downloadWorkbook("blank")}
+          onDownloadMenu={() => void downloadWorkbook("menu")}
+          onFromMenu={() => {
+            setImportMode("menu");
+            setImportOpen(true);
+          }}
           onEdit={(item) => {
             setIngredientError(null);
             setIngredientForm(item);
@@ -383,11 +560,29 @@ export function CostingAdmin() {
           initial={ingredientForm === "new" ? emptyIngredientForm() : formFromIngredient(ingredientForm)}
           saving={saving}
           formError={ingredientError}
+          product={ingredientForm === "new" ? null : ingredientForm}
+          suppliers={suppliers}
+          offers={offers}
+          records={priceRecords}
+          onToast={toast}
           onClose={() => {
             setIngredientForm(null);
             setIngredientError(null);
           }}
           onSave={saveIngredient}
+        />
+      )}
+
+      {importOpen && (
+        <CostingImportWizard
+          open
+          initialMode={importMode}
+          products={products}
+          ingredients={ingredients}
+          recipes={recipes}
+          extrasByProduct={extrasByProduct}
+          onClose={() => setImportOpen(false)}
+          onToast={toast}
         />
       )}
 
@@ -401,7 +596,7 @@ export function CostingAdmin() {
               : ""
           }
           recipe={recipes.find((recipe) => recipe.productId === recipeProductId && !recipe.variantId)}
-          ingredients={ingredients}
+          ingredients={costingIngredients}
           variants={linkedOptions}
           locale={locale}
           saving={saving}
@@ -655,6 +850,48 @@ function DashboardTab({
                           })
                         }
                       />
+                      <label className="text-xs text-coffee/60">{t("admin.inventory.vatRate")}</label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={((settingsDraft.vatRate ?? 0.18) * 100).toString()}
+                        onChange={(e) =>
+                          onSettings({
+                            ...settingsDraft,
+                            vatRate: Number(e.target.value) / 100,
+                          })
+                        }
+                      />
+                      <label className="text-xs text-coffee/60">{t("admin.inventory.foodCostVat")}</label>
+                      <select
+                        className="h-10 rounded-xl border border-beige-dark/40 px-3 text-sm"
+                        value={settingsDraft.foodCostVatMode ?? "before"}
+                        onChange={(e) =>
+                          onSettings({
+                            ...settingsDraft,
+                            foodCostVatMode: e.target.value as "before" | "including",
+                          })
+                        }
+                      >
+                        <option value="before">{t("admin.inventory.costBeforeVat")}</option>
+                        <option value="including">{t("admin.inventory.costIncludingVat")}</option>
+                      </select>
+                      <label className="text-xs text-coffee/60">{t("admin.inventory.costBasis")}</label>
+                      <select
+                        className="h-10 rounded-xl border border-beige-dark/40 px-3 text-sm"
+                        value={settingsDraft.costBasis ?? "latest"}
+                        onChange={(e) =>
+                          onSettings({
+                            ...settingsDraft,
+                            costBasis: e.target.value as "latest" | "weighted",
+                          })
+                        }
+                      >
+                        <option value="latest">{t("admin.inventory.latestCost")}</option>
+                        <option value="weighted">{t("admin.inventory.weightedCost")}</option>
+                      </select>
                       <select
                         className="h-10 rounded-xl border border-beige-dark/40 px-3 text-sm"
                         value={settingsDraft.priceRoundMode}
@@ -814,20 +1051,40 @@ function RecipesTab({
 function IngredientsTab({
   ingredients,
   onAdd,
+  onImport,
+  onDownloadTemplate,
+  onDownloadMenu,
+  onFromMenu,
   onEdit,
   onDelete,
 }: {
   ingredients: CostingIngredient[];
   onAdd: () => void;
+  onImport: () => void;
+  onDownloadTemplate: () => void;
+  onDownloadMenu: () => void;
+  onFromMenu: () => void;
   onEdit: (item: CostingIngredient) => void;
   onDelete: (item: CostingIngredient) => void;
 }) {
   const t = useT();
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
         <Button variant="turquoise" onClick={onAdd}>
           <Plus className="h-4 w-4" /> {t("admin.costing.addIngredient")}
+        </Button>
+        <Button variant="outline" onClick={onImport}>
+          <Upload className="h-4 w-4" /> {t("admin.costing.import.action")}
+        </Button>
+        <Button variant="outline" onClick={onDownloadTemplate}>
+          <Download className="h-4 w-4" /> {t("admin.costing.import.downloadTemplate")}
+        </Button>
+        <Button variant="outline" onClick={onDownloadMenu}>
+          <Download className="h-4 w-4" /> {t("admin.costing.import.downloadMenu")}
+        </Button>
+        <Button variant="outline" onClick={onFromMenu}>
+          {t("admin.costing.import.fromMenu")}
         </Button>
       </div>
       {ingredients.length === 0 ? (

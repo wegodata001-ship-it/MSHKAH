@@ -18,6 +18,8 @@ import { formatIls } from "@/lib/costing/money";
 import { liveCostPreview } from "@/lib/costing/units";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
+import type { PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
+import { SupplierOffersEditor } from "@/features/admin/inventory/inventory-hub";
 import { cn } from "@/lib/utils";
 
 const UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
@@ -73,6 +75,11 @@ export function IngredientFormModal({
   impactNote,
   onClose,
   onSave,
+  product,
+  suppliers = [],
+  offers = [],
+  records = [],
+  onToast,
 }: {
   open: boolean;
   mode: "create" | "edit";
@@ -83,6 +90,11 @@ export function IngredientFormModal({
   impactNote?: string;
   onClose: () => void;
   onSave: (value: IngredientFormValue) => Promise<boolean>;
+  product?: CostingIngredient | null;
+  suppliers?: Supplier[];
+  offers?: SupplierOffer[];
+  records?: PurchasePriceRecord[];
+  onToast?: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
   const [form, setForm] = useState(initial);
@@ -94,9 +106,7 @@ export function IngredientFormModal({
     return liveCostPreview(Number(form.purchasePrice), Number(form.purchaseQuantity), form.purchaseUnit);
   }, [form.purchasePrice, form.purchaseQuantity, form.purchaseUnit]);
 
-  const valid =
-    form.name.trim().length > 0 &&
-    preview != null;
+  const valid = form.name.trim().length > 0;
 
   const persistLastUnit = (unit: PurchaseUnit) => {
     window.localStorage.setItem(LAST_UNIT_KEY, unit);
@@ -160,7 +170,7 @@ export function IngredientFormModal({
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <Label>{t("admin.costing.paidPrice")} *</Label>
+                <Label>{t("admin.costing.paidPrice")}</Label>
                 <div className="relative mt-1">
                   <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-sm text-coffee/45">₪</span>
                   <Input
@@ -175,7 +185,7 @@ export function IngredientFormModal({
                 </div>
               </div>
               <div>
-                <Label>{t("admin.costing.howMuchBought")} *</Label>
+                <Label>{t("admin.costing.howMuchBought")}</Label>
                 <Input
                   className="mt-1 h-12"
                   type="number"
@@ -267,6 +277,18 @@ export function IngredientFormModal({
               </div>
             )}
 
+            {!form.supplier.trim() && (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{t("admin.inventory.missingSupplierWarning")}</p>
+            )}
+            {mode === "edit" && product && onToast && (
+              <SupplierOffersEditor
+                product={product}
+                suppliers={suppliers}
+                offers={offers}
+                records={records}
+                onToast={onToast}
+              />
+            )}
             {impactNote && <p className="text-sm text-coffee/65">{impactNote}</p>}
             {(localError || formError) && (
               <p className="text-sm text-red-600">{localError || formError}</p>

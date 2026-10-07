@@ -122,7 +122,7 @@ export function AdminSidebar() {
     <aside
       className={cn(
         ADMIN_LAYOUT.sidebarVisible,
-        "sticky top-0 h-screen shrink-0 flex-col",
+        "sticky top-0 h-screen shrink-0 flex-col print:hidden",
         "border-e border-beige-dark/20 bg-warm-white dark:border-white/10 dark:bg-[#1a1412]"
       )}
       style={{ width: ADMIN_SIDEBAR_WIDTH_PX }}

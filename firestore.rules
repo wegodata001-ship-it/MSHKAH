@@ -50,7 +50,8 @@ service cloud.firestore {
     match /orders/{id} {
       allow read: if isStaff();
       allow create: if true;
-      allow update, delete: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isAdmin();
     }
 
     match /banners/{id} {
@@ -169,6 +170,56 @@ service cloud.firestore {
     }
 
     match /costingSnapshots/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /costingImportHistory/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /suppliers/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /supplierOffers/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /purchaseInvoices/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /purchasePriceRecords/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /inventoryMovements/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /posImports/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /posProductMaps/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /stockCounts/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /reportRuns/{id} {
       allow read, create: if isAdmin();
       allow update, delete: if false;
     }

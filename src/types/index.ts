@@ -107,14 +107,33 @@ export interface Order {
   /** UI locale at checkout (ar/he/en). Optional on legacy orders. */
   locale?: "ar" | "he" | "en";
   createdAt: string;
+  receivedAt?: string | null;
   confirmedAt?: string | null;
   preparationStartedAt?: string | null;
   readyAt?: string | null;
+  deliveredAt?: string | null;
   completedAt?: string | null;
   cancelledAt?: string | null;
+  paidAt?: string | null;
   cancelReason?: string;
   cancelledBy?: string;
+  alerts?: OrderStageAlerts;
 }
+
+export type OrderAlertState = {
+  status?: "SENDING" | "SENT" | "FAILED";
+  sentAt?: string | null;
+  attemptedAt?: string | null;
+  error?: string;
+};
+
+export type OrderStageAlerts = {
+  receivedCritical?: OrderAlertState;
+  preparingCritical?: OrderAlertState;
+  readyCritical?: OrderAlertState;
+  preparingEscalation?: OrderAlertState;
+  readyEscalation?: OrderAlertState;
+};
 
 export interface CartItem {
   lineId: string;
