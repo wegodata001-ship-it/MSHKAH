@@ -4,6 +4,7 @@ import {
   MASTER_MENU_STATS,
 } from "@/data/master-menu";
 import type { Product, Category, ProductFilters } from "@/types";
+import { isPublicMenuProduct } from "@/lib/menu/category-tree";
 
 const SEED_ISO = "2026-01-01T00:00:00.000Z";
 
@@ -50,7 +51,9 @@ export function applyProductFilters(
   products: Product[],
   filters?: ProductFilters
 ): Product[] {
-  let result = products.filter((p) => p.active !== false);
+  let result = products.filter((p) =>
+    filters?.active === true ? isPublicMenuProduct(p) : p.active !== false
+  );
 
   if (filters?.categoryId && filters.categoryId !== "all") {
     if (filters.subcategoryId) {

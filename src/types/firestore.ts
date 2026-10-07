@@ -42,6 +42,7 @@ export interface FirestoreProduct {
   newProduct: boolean;
   active: boolean;
   sortOrder: number;
+  hidden?: boolean;
   isTestProduct?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;

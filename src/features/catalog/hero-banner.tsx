@@ -38,14 +38,14 @@ export function HeroBanner() {
 
   if (settingsLoading || bannersLoading) {
     return (
-      <Skeleton className="mx-4 mt-6 h-[280px] rounded-3xl md:mx-8 md:mt-8 md:h-[480px] lg:mx-auto lg:max-w-[1400px]" />
+      <Skeleton className="mx-4 mt-3 h-[min(38vh,240px)] rounded-3xl md:mx-8 md:mt-8 md:h-[480px] lg:mx-auto lg:max-w-[1400px]" />
     );
   }
 
   const activeBanner = banners[bannerIndex];
   if (activeBanner) {
     return (
-      <section className="relative mx-4 mt-6 md:mx-8 md:mt-8 lg:mx-auto lg:max-w-[1400px]">
+      <section className="relative mx-4 mt-3 md:mx-8 md:mt-8 lg:mx-auto lg:max-w-[1400px]">
         <div className="md:hidden">
           <BannerHero banner={activeBanner} device="mobile" />
         </div>
@@ -76,15 +76,15 @@ export function HeroBanner() {
   if (imageSrc === "/store.jpg") imageSrc = "/meskahphoto.png";
 
   return (
-    <section className="mx-4 mt-6 md:mx-8 md:mt-8 lg:mx-auto lg:max-w-[1400px]">
+    <section className="mx-4 mt-3 md:mx-8 md:mt-8 lg:mx-auto lg:max-w-[1400px]">
       <div className="overflow-hidden rounded-3xl bg-warm-white shadow-soft ring-1 ring-beige-dark/10">
-        <div className="grid min-h-[280px] md:min-h-[480px] lg:grid-cols-2 lg:min-h-[500px]">
+        <div className="grid min-h-[200px] md:min-h-[480px] lg:grid-cols-2 lg:min-h-[500px]">
           {/* Text */}
           <motion.div
             initial={{ opacity: 0, x: -24 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-col justify-center px-6 py-10 md:px-10 md:py-12 lg:px-14"
+            className="flex flex-col justify-center px-5 py-6 md:px-10 md:py-12 lg:px-14"
           >
             <p className="text-caption mb-3 uppercase tracking-[0.2em] text-turquoise">
               {t("hero.badge")}

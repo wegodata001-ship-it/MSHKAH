@@ -39,18 +39,20 @@ export function SiteHeader() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35 }}
       className={cn(
-        "sticky top-0 z-40 h-20 border-b bg-warm-white transition-shadow duration-300",
-        scrolled ? "border-beige-dark/20 shadow-soft" : "border-beige-dark/10 shadow-none"
+        "sticky top-0 z-40 border-b bg-warm-white transition-[height,box-shadow] duration-300",
+        "h-14 md:h-20",
+        scrolled && "h-12 shadow-soft md:h-20",
+        scrolled ? "border-beige-dark/20" : "border-beige-dark/10 shadow-none"
       )}
     >
-      <div className="mx-auto flex h-full max-w-[1400px] items-center gap-4 px-4 md:px-6 lg:px-8">
+      <div className="mx-auto flex h-full max-w-[1400px] items-center gap-3 px-4 md:gap-4 md:px-6 lg:px-8">
         {/* Logo block — start (right in RTL) */}
         <div className="shrink-0">
           <Logo
             size="sm"
             href="/"
             priority
-            className="h-10 w-auto md:h-12"
+            className={cn("w-auto md:h-12", scrolled ? "h-8 md:h-12" : "h-9 md:h-12")}
           />
         </div>
 

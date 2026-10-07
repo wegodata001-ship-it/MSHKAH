@@ -18,7 +18,7 @@ describe("menu category strip mobile UX", () => {
   });
 
   it("keeps desktop wrap path and avoids LTR direction hacks", () => {
-    expect(source).toMatch(/flex-wrap/);
+    expect(source).toMatch(/HorizontalScroller/);
     expect(source).not.toMatch(/direction:\s*ltr/);
     expect(source).not.toMatch(/dir=["']ltr["']/);
   });

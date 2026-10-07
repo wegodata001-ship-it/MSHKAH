@@ -20,6 +20,7 @@ import { productSchema, type ProductInput } from "@/lib/validation/schemas";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { nowTimestamp } from "@/types/firestore";
 import type { Product, ProductFilters } from "@/types";
+import { isPublicMenuProduct } from "@/lib/menu/category-tree";
 import type { FirestoreProduct, FirestoreDoc } from "@/types/firestore";
 
 function docToProduct(id: string, data: DocumentData): FirestoreDoc<FirestoreProduct> {
@@ -74,6 +75,9 @@ function applyFilters(items: Product[], filters?: ProductFilters): Product[] {
 
   if (filters?.active !== undefined) {
     result = result.filter((p) => p.active === filters.active);
+  }
+  if (filters?.active === true) {
+    result = result.filter(isPublicMenuProduct);
   }
 
   switch (filters?.sortBy) {

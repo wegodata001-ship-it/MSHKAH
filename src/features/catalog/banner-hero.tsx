@@ -67,7 +67,7 @@ export function BannerHero({
     <div
       className={cn(
         "relative isolate overflow-hidden rounded-3xl bg-dark-brown text-warm-white shadow-soft",
-        mobile ? "aspect-[3/4] w-full" : "aspect-[14/5] w-full",
+        mobile ? "aspect-[16/10] max-h-[38vh] min-h-[160px] w-full" : "aspect-[14/5] w-full",
         className
       )}
     >

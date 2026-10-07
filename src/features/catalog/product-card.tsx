@@ -104,7 +104,7 @@ export function ProductCard({ product, index = 0, onClick }: ProductCardProps) {
         </h3>
         {localized.description && (
           <p
-            className="text-description mt-1.5 line-clamp-3 text-[13px] leading-relaxed sm:text-sm"
+            className="text-description mt-1.5 line-clamp-2 text-[13px] leading-relaxed sm:line-clamp-3 sm:text-sm"
             dir={localized.dir}
           >
             {localized.description}

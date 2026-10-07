@@ -1,8 +1,16 @@
 import type { Category, Product } from "@/types";
 
+export function isPublicMenuCategory(category: Category): boolean {
+  if (!category.active) return false;
+  const names = [category.name_en, category.name_he, category.name_ar].map((name) =>
+    (name ?? "").trim().toUpperCase()
+  );
+  return !names.includes("TEST") && category.id.trim().toUpperCase() !== "TEST";
+}
+
 export function getRootCategories(categories: Category[]): Category[] {
   return categories
-    .filter((c) => !c.parentId && c.active)
+    .filter((c) => !c.parentId && isPublicMenuCategory(c))
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
@@ -43,6 +51,14 @@ export function getRootCategoriesForAdmin(categories: Category[]): Category[] {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
+export function isPublicMenuProduct(product: Product): boolean {
+  if (!product.active || product.hidden || product.isTestProduct) return false;
+  const names = [product.name_en, product.name_he, product.name_ar].map((name) =>
+    (name ?? "").trim().toUpperCase()
+  );
+  return !names.includes("TEST");
+}
+
 /** Total active products under a root category (direct + via subcategories) */
 export function countProductsInCategory(
   products: Product[],
@@ -53,7 +69,7 @@ export function countProductsInCategory(
     categories.filter((c) => c.parentId === categoryId).map((c) => c.id)
   );
   return products.filter((p) => {
-    if (!p.active) return false;
+    if (!isPublicMenuProduct(p)) return false;
     if (p.categoryId !== categoryId) return false;
     if (p.subcategoryId) return subIds.has(p.subcategoryId);
     return true;
@@ -61,7 +77,7 @@ export function countProductsInCategory(
 }
 
 export function countProductsInSubcategory(products: Product[], subcategoryId: string): number {
-  return products.filter((p) => p.active && p.subcategoryId === subcategoryId).length;
+  return products.filter((p) => isPublicMenuProduct(p) && p.subcategoryId === subcategoryId).length;
 }
 
 export function filterMenuProducts(
@@ -70,7 +86,7 @@ export function filterMenuProducts(
   subcategoryId: string | null,
   categories: Category[]
 ): Product[] {
-  const active = products.filter((p) => p.active);
+  const active = products.filter(isPublicMenuProduct);
 
   if (!categoryId) return active;
 
@@ -91,7 +107,7 @@ export function filterMenuDisplayProducts(
   categoryId: string | null,
   categories: Category[]
 ): Product[] {
-  const active = products.filter((p) => p.active);
+  const active = products.filter(isPublicMenuProduct);
   if (!categoryId) return sortProducts(active);
 
   const childIds = new Set(

@@ -39,6 +39,8 @@ export interface Product {
   available: boolean;
   active: boolean;
   sortOrder: number;
+  /** Hidden from the public menu while keeping historical order references. */
+  hidden?: boolean;
   /** Temporary HYP / QA item. Exclude from real sales stats when supported. */
   isTestProduct?: boolean;
   createdAt: string;
