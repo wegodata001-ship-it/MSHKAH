@@ -52,6 +52,7 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
     costPerBaseUnit: asNumber(data.costPerBaseUnit, costPerBaseUnit(purchasePrice, purchaseQuantity, purchaseUnit)),
     supplier: data.supplier ? String(data.supplier) : undefined,
     notes: data.notes ? String(data.notes) : undefined,
+    barcode: data.barcode ? String(data.barcode) : undefined,
     minStock: data.minStock != null ? asNumber(data.minStock) : undefined,
     recommendedStock: data.recommendedStock != null ? asNumber(data.recommendedStock) : undefined,
     lastSupplierId: data.lastSupplierId ? String(data.lastSupplierId) : undefined,
@@ -191,6 +192,7 @@ export type IngredientWriteInput = {
   purchaseUnit: PurchaseUnit;
   supplier?: string;
   notes?: string;
+  barcode?: string;
   minStock?: number;
   recommendedStock?: number;
   active?: boolean;
@@ -213,6 +215,7 @@ function ingredientPayload(input: IngredientWriteInput) {
     costPerBaseUnit: costPerBaseUnit(input.purchasePrice, input.purchaseQuantity, purchaseUnit),
     supplier: input.supplier?.trim() || null,
     notes: input.notes?.trim() || null,
+    barcode: input.barcode?.trim() || null,
     minStock: input.minStock ?? null,
     recommendedStock: input.recommendedStock ?? null,
     active: input.active !== false,

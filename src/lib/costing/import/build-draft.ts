@@ -237,6 +237,7 @@ export function buildFileDraft(input: {
   };
 }
 
+/** Reserved for a future connected AI/import path. Not exposed in admin UI. */
 export function buildMenuDraft(input: {
   products: Product[];
   ingredients: CostingIngredient[];

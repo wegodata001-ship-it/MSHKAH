@@ -48,5 +48,6 @@ export const STORAGE_PATHS = {
   categories: "categories",
   settings: "settings",
   modifiers: "modifiers",
+  invoices: "purchase-invoices",
   test: "test",
 } as const;

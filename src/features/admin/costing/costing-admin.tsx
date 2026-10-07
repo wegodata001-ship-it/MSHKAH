@@ -99,7 +99,7 @@ import type {
   SupplierOffer,
 } from "@/lib/inventory/types";
 
-type Hub = "inventory" | "purchase" | "costing" | "pos";
+type Hub = "inventory" | "purchase" | "suppliers" | "compare" | "invoices" | "costing" | "pos";
 type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
@@ -139,7 +139,6 @@ export function CostingAdmin() {
   const [linkedOptions, setLinkedOptions] = useState<ModifierOption[]>([]);
   const [settingsDraft, setSettingsDraft] = useState(settings);
   const [importOpen, setImportOpen] = useState(false);
-  const [importMode, setImportMode] = useState<"upload" | "menu">("upload");
   const [productGroups, setProductGroups] = useState<ProductModifierGroup[]>([]);
   const authFetch = useAuthFetch();
 
@@ -252,8 +251,9 @@ export function CostingAdmin() {
       purchasePrice: Number(value.purchasePrice) || 0,
       purchaseQuantity: Number(value.purchaseQuantity) || 1,
       purchaseUnit: value.purchaseUnit,
-      supplier: value.supplier,
       notes: value.notes,
+      minStock: value.minStock ? Number(value.minStock) : undefined,
+      barcode: value.barcode,
     };
     try {
       if (ingredientForm && ingredientForm !== "new") {
@@ -294,6 +294,7 @@ export function CostingAdmin() {
         return false;
       }
       toast(t("admin.costing.addedSuccess"));
+      setIngredientForm(result.data);
       return true;
     } finally {
       setSaving(false);
@@ -382,15 +383,26 @@ export function CostingAdmin() {
     {
       id: "purchase",
       label: t("admin.inventory.purchaseHub"),
-      tabs: [
-        { id: "invoices", label: t("admin.inventory.tab.invoices") },
-        { id: "suppliers", label: t("admin.inventory.tab.suppliers") },
-        { id: "compare", label: t("admin.inventory.tab.compare") },
-      ],
+      tabs: [{ id: "invoices", label: t("admin.inventory.tab.invoices") }],
+    },
+    {
+      id: "suppliers",
+      label: t("admin.inventory.tab.suppliers"),
+      tabs: [{ id: "suppliers", label: t("admin.inventory.tab.suppliers") }],
+    },
+    {
+      id: "compare",
+      label: t("admin.inventory.tab.compare"),
+      tabs: [{ id: "compare", label: t("admin.inventory.tab.compare") }],
+    },
+    {
+      id: "invoices",
+      label: t("admin.inventory.tab.invoices"),
+      tabs: [{ id: "invoices", label: t("admin.inventory.tab.invoices") }],
     },
     {
       id: "costing",
-      label: t("admin.costing"),
+      label: t("admin.costing.dishes"),
       tabs: [
         { id: "dashboard", label: t("admin.costing.tab.dashboard") },
         { id: "recipes", label: t("admin.costing.tab.recipes") },
@@ -457,21 +469,23 @@ export function CostingAdmin() {
           </button>
         ))}
       </div>
-      <div className="flex flex-wrap gap-2">
-        {activeHub.tabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-              tab === item.id ? "bg-turquoise text-white" : "bg-beige/40 text-coffee/70 hover:bg-beige"
-            )}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
+      {activeHub.tabs.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {activeHub.tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
+                tab === item.id ? "bg-turquoise text-white" : "bg-beige/40 text-coffee/70 hover:bg-beige"
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {(tab === "products" || tab === "ledger" || tab === "alerts") && (
         <InventorySection {...hubProps} pane={tab === "products" ? "products" : tab === "ledger" ? "ledger" : "alerts"} />
@@ -530,15 +544,10 @@ export function CostingAdmin() {
             setIngredientForm("new");
           }}
           onImport={() => {
-            setImportMode("upload");
             setImportOpen(true);
           }}
           onDownloadTemplate={() => void downloadWorkbook("blank")}
           onDownloadMenu={() => void downloadWorkbook("menu")}
-          onFromMenu={() => {
-            setImportMode("menu");
-            setImportOpen(true);
-          }}
           onEdit={(item) => {
             setIngredientError(null);
             setIngredientForm(item);
@@ -576,7 +585,6 @@ export function CostingAdmin() {
       {importOpen && (
         <CostingImportWizard
           open
-          initialMode={importMode}
           products={products}
           ingredients={ingredients}
           recipes={recipes}
@@ -1054,7 +1062,6 @@ function IngredientsTab({
   onImport,
   onDownloadTemplate,
   onDownloadMenu,
-  onFromMenu,
   onEdit,
   onDelete,
 }: {
@@ -1063,7 +1070,6 @@ function IngredientsTab({
   onImport: () => void;
   onDownloadTemplate: () => void;
   onDownloadMenu: () => void;
-  onFromMenu: () => void;
   onEdit: (item: CostingIngredient) => void;
   onDelete: (item: CostingIngredient) => void;
 }) {
@@ -1082,9 +1088,6 @@ function IngredientsTab({
         </Button>
         <Button variant="outline" onClick={onDownloadMenu}>
           <Download className="h-4 w-4" /> {t("admin.costing.import.downloadMenu")}
-        </Button>
-        <Button variant="outline" onClick={onFromMenu}>
-          {t("admin.costing.import.fromMenu")}
         </Button>
       </div>
       {ingredients.length === 0 ? (

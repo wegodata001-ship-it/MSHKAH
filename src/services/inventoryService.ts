@@ -6,6 +6,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   updateDoc,
   where,
   type Unsubscribe,
@@ -42,6 +43,8 @@ function mapSupplier(id: string, data: Record<string, unknown>): Supplier {
     id,
     name: String(data.name ?? ""),
     phone: data.phone ? String(data.phone) : undefined,
+    email: data.email ? String(data.email) : undefined,
+    taxId: data.taxId ? String(data.taxId) : undefined,
     notes: data.notes ? String(data.notes) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
@@ -54,12 +57,27 @@ function mapOffer(id: string, data: Record<string, unknown>): SupplierOffer {
     id,
     productId: String(data.productId ?? ""),
     supplierId: String(data.supplierId ?? ""),
+    currentPrice: data.currentPrice != null ? asNumber(data.currentPrice) : undefined,
+    vatType: (data.vatType as VatType) || undefined,
+    vatRate: data.vatRate != null ? asNumber(data.vatRate) : undefined,
+    priceBeforeVat: data.priceBeforeVat != null ? asNumber(data.priceBeforeVat) : undefined,
+    vatAmount: data.vatAmount != null ? asNumber(data.vatAmount) : undefined,
+    priceIncludingVat: data.priceIncludingVat != null ? asNumber(data.priceIncludingVat) : undefined,
+    packageQuantity: data.packageQuantity != null ? asNumber(data.packageQuantity) : undefined,
+    purchaseUnit: (data.purchaseUnit as PurchaseUnit) || undefined,
+    normalizedPrice: data.normalizedPrice != null ? asNumber(data.normalizedPrice) : undefined,
+    supplierSku: data.supplierSku ? String(data.supplierSku) : undefined,
+    notes: data.notes ? String(data.notes) : undefined,
+    lastQuotedAt: data.lastQuotedAt ? String(data.lastQuotedAt) : undefined,
+    lastPurchasedAt: data.lastPurchasedAt ? String(data.lastPurchasedAt) : undefined,
+    lastPurchasePrice: data.lastPurchasePrice != null ? asNumber(data.lastPurchasePrice) : undefined,
     lastPriceIncludingVat: data.lastPriceIncludingVat != null ? asNumber(data.lastPriceIncludingVat) : undefined,
     lastPriceBeforeVat: data.lastPriceBeforeVat != null ? asNumber(data.lastPriceBeforeVat) : undefined,
     lastUnitCost: data.lastUnitCost != null ? asNumber(data.lastUnitCost) : undefined,
     lastPurchaseDate: data.lastPurchaseDate ? String(data.lastPurchaseDate) : undefined,
     lastPackageQuantity: data.lastPackageQuantity != null ? asNumber(data.lastPackageQuantity) : undefined,
     lastUnit: (data.lastUnit as PurchaseUnit) || undefined,
+    active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
   };
@@ -101,6 +119,7 @@ function mapRecord(id: string, data: Record<string, unknown>): PurchasePriceReco
     vatType: (data.vatType as VatType) || "inclusive",
     vatRate: asNumber(data.vatRate, 0.18),
     unitCost: asNumber(data.unitCost),
+    source: data.source === "PURCHASE_INVOICE" || data.source === "PURCHASE_ORDER" || data.source === "MANUAL" ? data.source : undefined,
     createdAt: timestampToIso(data.createdAt as never),
   };
 }
@@ -141,9 +160,12 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           invoiceNumber: String(data.invoiceNumber ?? ""),
           invoiceDate: String(data.invoiceDate ?? ""),
           receivedAt: String(data.receivedAt ?? ""),
+          documentType: data.documentType || "invoice",
           status: (data.status as PurchaseInvoice["status"]) || "draft",
           lines: Array.isArray(data.lines) ? data.lines : [],
           fileName: data.fileName ? String(data.fileName) : undefined,
+          fileUrl: data.fileUrl ? String(data.fileUrl) : undefined,
+          notes: data.notes ? String(data.notes) : undefined,
           createdAt: timestampToIso(data.createdAt as never),
           approvedAt: data.approvedAt ? timestampToIso(data.approvedAt as never) : undefined,
         };
@@ -191,6 +213,8 @@ export async function saveSupplier(input: {
   id?: string;
   name: string;
   phone?: string;
+  email?: string;
+  taxId?: string;
   notes?: string;
 }): Promise<ServiceResult<Supplier>> {
   try {
@@ -198,6 +222,8 @@ export async function saveSupplier(input: {
     const payload = sanitizeFirestoreData({
       name: input.name.trim(),
       phone: input.phone?.trim() || null,
+      email: input.email?.trim() || null,
+      taxId: input.taxId?.trim() || null,
       notes: input.notes?.trim() || null,
       active: true,
       updatedAt: now,
@@ -213,35 +239,141 @@ export async function saveSupplier(input: {
   }
 }
 
-export async function linkSupplierOffer(input: {
+async function findOfferDocs(productId: string, supplierId: string) {
+  return getDocs(
+    query(
+      collection(getDb(), COLLECTIONS.supplierOffers),
+      where("productId", "==", productId),
+      where("supplierId", "==", supplierId)
+    )
+  );
+}
+
+export async function saveSupplierOffer(input: {
   productId: string;
   supplierId: string;
-  lastPriceIncludingVat?: number;
-  lastPackageQuantity?: number;
-  lastUnit?: PurchaseUnit;
+  currentPrice: number;
+  packageQuantity: number;
+  purchaseUnit: PurchaseUnit;
+  vatType: VatType;
+  vatRate?: number;
+  quotedAt?: string;
+  supplierSku?: string;
+  notes?: string;
 }): Promise<ServiceResult<void>> {
   try {
-    const existing = await getDocs(
-      query(
-        collection(getDb(), COLLECTIONS.supplierOffers),
-        where("productId", "==", input.productId),
-        where("supplierId", "==", input.supplierId)
-      )
-    );
     const now = nowTimestamp();
-    const unitCost =
-      input.lastPriceIncludingVat && input.lastPackageQuantity && input.lastUnit
-        ? unitCostFromPackage(input.lastPriceIncludingVat, input.lastPackageQuantity, input.lastUnit)
-        : undefined;
+    const vat = splitVat({
+      amount: input.currentPrice,
+      vatType: input.vatType,
+      vatRate: input.vatRate ?? 0.18,
+    });
+    const normalized = unitCostFromPackage(vat.priceIncludingVat, input.packageQuantity, input.purchaseUnit);
+    const quotedAt = input.quotedAt || new Date().toISOString().slice(0, 10);
+    const existing = await findOfferDocs(input.productId, input.supplierId);
     const payload = sanitizeFirestoreData({
       productId: input.productId,
       supplierId: input.supplierId,
-      lastPriceIncludingVat: input.lastPriceIncludingVat ?? null,
-      lastPackageQuantity: input.lastPackageQuantity ?? null,
-      lastUnit: input.lastUnit ?? null,
-      lastUnitCost: unitCost ?? null,
-      lastPurchaseDate: new Date().toISOString().slice(0, 10),
+      currentPrice: input.currentPrice,
+      vatType: input.vatType,
+      vatRate: input.vatRate ?? 0.18,
+      ...vat,
+      packageQuantity: input.packageQuantity,
+      purchaseUnit: input.purchaseUnit,
+      normalizedPrice: normalized,
+      lastUnitCost: normalized,
+      lastPriceIncludingVat: vat.priceIncludingVat,
+      lastPriceBeforeVat: vat.priceBeforeVat,
+      lastPackageQuantity: input.packageQuantity,
+      lastUnit: input.purchaseUnit,
+      lastQuotedAt: quotedAt,
+      supplierSku: input.supplierSku?.trim() || null,
+      notes: input.notes?.trim() || null,
+      active: true,
       updatedAt: now,
+    });
+    if (existing.docs[0]) {
+      await updateDoc(existing.docs[0].ref, payload);
+    } else {
+      await addDoc(collection(getDb(), COLLECTIONS.supplierOffers), { ...payload, createdAt: now });
+    }
+    await addDoc(
+      collection(getDb(), COLLECTIONS.purchasePriceRecords),
+      sanitizeFirestoreData({
+        productId: input.productId,
+        supplierId: input.supplierId,
+        purchaseDate: quotedAt,
+        quantity: input.packageQuantity,
+        packageQuantity: input.packageQuantity,
+        unit: input.purchaseUnit,
+        ...vat,
+        vatType: input.vatType,
+        vatRate: input.vatRate ?? 0.18,
+        unitCost: normalized,
+        source: "MANUAL",
+        createdAt: now,
+      })
+    );
+    return success(undefined);
+  } catch (error) {
+    return failure(error, "Failed to save supplier offer");
+  }
+}
+
+export async function unlinkSupplierOffer(offerId: string): Promise<ServiceResult<void>> {
+  try {
+    await updateDoc(doc(getDb(), COLLECTIONS.supplierOffers, offerId), {
+      active: false,
+      updatedAt: nowTimestamp(),
+    });
+    return success(undefined);
+  } catch (error) {
+    return failure(error, "Failed to unlink supplier");
+  }
+}
+
+export async function recordSupplierPurchase(input: {
+  productId: string;
+  supplierId: string;
+  priceIncludingVat: number;
+  priceBeforeVat?: number;
+  packageQuantity: number;
+  purchaseUnit: PurchaseUnit;
+  purchasedAt: string;
+  vatType?: VatType;
+  vatRate?: number;
+}): Promise<ServiceResult<void>> {
+  try {
+    const now = nowTimestamp();
+    const existing = await findOfferDocs(input.productId, input.supplierId);
+    const normalized = unitCostFromPackage(input.priceIncludingVat, input.packageQuantity, input.purchaseUnit);
+    const current = existing.docs[0]?.data() as Record<string, unknown> | undefined;
+    const payload = sanitizeFirestoreData({
+      productId: input.productId,
+      supplierId: input.supplierId,
+      lastPurchasedAt: input.purchasedAt,
+      lastPurchasePrice: normalized,
+      lastPurchaseDate: input.purchasedAt,
+      lastPriceIncludingVat: input.priceIncludingVat,
+      lastPriceBeforeVat: input.priceBeforeVat ?? null,
+      lastPackageQuantity: input.packageQuantity,
+      lastUnit: input.purchaseUnit,
+      lastUnitCost: current?.normalizedPrice ?? current?.lastUnitCost ?? normalized,
+      active: true,
+      updatedAt: now,
+      ...(current?.currentPrice == null
+        ? {
+            currentPrice: input.priceIncludingVat,
+            priceIncludingVat: input.priceIncludingVat,
+            priceBeforeVat: input.priceBeforeVat ?? null,
+            packageQuantity: input.packageQuantity,
+            purchaseUnit: input.purchaseUnit,
+            normalizedPrice: normalized,
+            vatType: input.vatType ?? "inclusive",
+            vatRate: input.vatRate ?? 0.18,
+            lastQuotedAt: input.purchasedAt,
+          }
+        : {}),
     });
     if (existing.docs[0]) {
       await updateDoc(existing.docs[0].ref, payload);
@@ -250,8 +382,39 @@ export async function linkSupplierOffer(input: {
     }
     return success(undefined);
   } catch (error) {
-    return failure(error, "Failed to link supplier");
+    return failure(error, "Failed to record supplier purchase");
   }
+}
+
+export async function linkSupplierOffer(input: {
+  productId: string;
+  supplierId: string;
+  lastPriceIncludingVat?: number;
+  lastPriceBeforeVat?: number;
+  lastPackageQuantity?: number;
+  lastUnit?: PurchaseUnit;
+  lastPurchaseDate?: string;
+}): Promise<ServiceResult<void>> {
+  if (input.lastPriceIncludingVat != null && input.lastPackageQuantity && input.lastUnit) {
+    return saveSupplierOffer({
+      productId: input.productId,
+      supplierId: input.supplierId,
+      currentPrice: input.lastPriceIncludingVat,
+      packageQuantity: input.lastPackageQuantity,
+      purchaseUnit: input.lastUnit,
+      vatType: "inclusive",
+      quotedAt: input.lastPurchaseDate,
+    });
+  }
+  return saveSupplierOffer({
+    productId: input.productId,
+    supplierId: input.supplierId,
+    currentPrice: 0,
+    packageQuantity: input.lastPackageQuantity || 1,
+    purchaseUnit: input.lastUnit || "kg",
+    vatType: "inclusive",
+    quotedAt: input.lastPurchaseDate,
+  });
 }
 
 export async function savePurchaseInvoiceDraft(invoice: Omit<PurchaseInvoice, "id" | "createdAt" | "status"> & { id?: string }): Promise<ServiceResult<string>> {
@@ -275,10 +438,43 @@ export async function savePurchaseInvoiceDraft(invoice: Omit<PurchaseInvoice, "i
 
 export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<ServiceResult<void>> {
   try {
+    if (!invoice.id) return failure(new Error("Invoice required"), "Invoice required");
     if (invoice.status === "approved") return success(undefined);
+    const db = getDb();
+    const invoiceRef = doc(db, COLLECTIONS.purchaseInvoices, invoice.id);
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(invoiceRef);
+        const status = snap.exists() ? String(snap.data()?.status ?? "draft") : "draft";
+        if (status === "approved" || status === "approving") {
+          throw new Error("ALREADY_APPROVED");
+        }
+        tx.set(
+          invoiceRef,
+          sanitizeFirestoreData({
+            ...invoice,
+            status: "approving",
+            updatedAt: nowTimestamp(),
+          }),
+          { merge: true }
+        );
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "ALREADY_APPROVED") return success(undefined);
+      throw error;
+    }
+
+    const existingMoves = await getDocs(
+      query(collection(db, COLLECTIONS.inventoryMovements), where("invoiceId", "==", invoice.id))
+    );
+    if (!existingMoves.empty) {
+      await updateDoc(invoiceRef, { status: "approved", approvedAt: nowTimestamp() });
+      return success(undefined);
+    }
+
     const now = nowTimestamp();
     for (const line of invoice.lines) {
-      if (line.ignored || !line.productId || !line.quantity || !line.unit) continue;
+      if (!line.productId || !line.quantity || !line.unit) continue;
       const vat = splitVat({
         amount: line.lineTotal ?? line.priceIncludingVat ?? 0,
         vatType: line.vatType,
@@ -299,6 +495,7 @@ export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<
           vatType: line.vatType,
           vatRate: line.vatRate,
           unitCost,
+          source: "PURCHASE_INVOICE",
           createdAt: now,
         })
       );
@@ -319,12 +516,16 @@ export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<
         })
       );
       if (invoice.supplierId) {
-        await linkSupplierOffer({
+        await recordSupplierPurchase({
           productId: line.productId,
           supplierId: invoice.supplierId,
-          lastPriceIncludingVat: vat.priceIncludingVat,
-          lastPackageQuantity: line.quantity,
-          lastUnit: line.unit,
+          priceIncludingVat: vat.priceIncludingVat,
+          priceBeforeVat: vat.priceBeforeVat,
+          packageQuantity: line.quantity,
+          purchaseUnit: line.unit,
+          purchasedAt: invoice.receivedAt || invoice.invoiceDate,
+          vatType: line.vatType,
+          vatRate: line.vatRate,
         });
       }
       await updateDoc(doc(getDb(), COLLECTIONS.ingredients, line.productId), {

@@ -19,7 +19,7 @@ import { liveCostPreview } from "@/lib/costing/units";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import type { PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
-import { SupplierOffersEditor } from "@/features/admin/inventory/inventory-hub";
+import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-panel";
 import { cn } from "@/lib/utils";
 
 const UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
@@ -37,8 +37,9 @@ export type IngredientFormValue = {
   purchasePrice: string;
   purchaseQuantity: string;
   purchaseUnit: PurchaseUnit;
-  supplier: string;
   notes: string;
+  minStock: string;
+  barcode: string;
 };
 
 export function emptyIngredientForm(): IngredientFormValue {
@@ -48,8 +49,9 @@ export function emptyIngredientForm(): IngredientFormValue {
     purchasePrice: "",
     purchaseQuantity: "",
     purchaseUnit: readLastUnit(),
-    supplier: "",
     notes: "",
+    minStock: "",
+    barcode: "",
   };
 }
 
@@ -60,8 +62,9 @@ export function formFromIngredient(item: CostingIngredient): IngredientFormValue
     purchasePrice: String(item.purchasePrice),
     purchaseQuantity: String(item.purchaseQuantity),
     purchaseUnit: item.purchaseUnit,
-    supplier: item.supplier ?? "",
     notes: item.notes ?? "",
+    minStock: item.minStock != null ? String(item.minStock) : "",
+    barcode: item.barcode ?? "",
   };
 }
 
@@ -98,7 +101,7 @@ export function IngredientFormModal({
 }) {
   const t = useT();
   const [form, setForm] = useState(initial);
-  const [showExtra, setShowExtra] = useState(Boolean(initial.category || initial.supplier || initial.notes));
+  const [showExtra, setShowExtra] = useState(Boolean(initial.category || initial.notes || initial.minStock || initial.barcode));
   const [saved, setSaved] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -135,9 +138,9 @@ export function IngredientFormModal({
     <AdminModal
       open={open}
       onOpenChange={(next) => !next && !saving && onClose()}
-      size="sm"
+      size="lg"
       preventOverlayClose={saving}
-      className="h-[calc(100dvh-8px)] w-[calc(100vw-8px)] sm:h-auto sm:w-[min(440px,calc(100vw-48px))] sm:max-h-[calc(100dvh-48px)]"
+      className="h-[calc(100dvh-8px)] w-[calc(100vw-8px)] sm:h-auto sm:max-h-[calc(100dvh-48px)]"
     >
       <AdminModalHeader onClose={saving ? undefined : onClose}>
         <AdminModalTitle>{title}</AdminModalTitle>
@@ -259,11 +262,21 @@ export function IngredientFormModal({
                   />
                 </div>
                 <div>
-                  <Label>{t("admin.costing.supplier")}</Label>
+                  <Label>{t("admin.inventory.minStock")}</Label>
                   <Input
                     className="mt-1"
-                    value={form.supplier}
-                    onChange={(e) => setForm({ ...form, supplier: e.target.value })}
+                    type="number"
+                    min="0"
+                    value={form.minStock}
+                    onChange={(e) => setForm({ ...form, minStock: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>{t("admin.inventory.barcode")}</Label>
+                  <Input
+                    className="mt-1"
+                    value={form.barcode}
+                    onChange={(e) => setForm({ ...form, barcode: e.target.value })}
                   />
                 </div>
                 <div>
@@ -277,17 +290,16 @@ export function IngredientFormModal({
               </div>
             )}
 
-            {!form.supplier.trim() && (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{t("admin.inventory.missingSupplierWarning")}</p>
-            )}
-            {mode === "edit" && product && onToast && (
-              <SupplierOffersEditor
+            {product && onToast ? (
+              <SupplierOffersPanel
                 product={product}
                 suppliers={suppliers}
                 offers={offers}
                 records={records}
                 onToast={onToast}
               />
+            ) : (
+              <p className="rounded-xl bg-beige/40 px-3 py-2 text-sm text-coffee/65">{t("admin.inventory.addSupplierAfterSave")}</p>
             )}
             {impactNote && <p className="text-sm text-coffee/65">{impactNote}</p>}
             {(localError || formError) && (

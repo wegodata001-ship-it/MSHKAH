@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import { splitVat, foodCostAmount, normalizeVatRate } from "@/lib/inventory/vat";
 import {
   cheapestOffer,
+  comparableOffers,
   currentStockBase,
   latestPurchase,
+  offerNormalizedCost,
   unitCostFromPackage,
 } from "@/lib/inventory/stock";
 import { posDelta, posPeriod, theoreticalConsumption } from "@/lib/inventory/pos";
 import { hashPosFile } from "@/lib/inventory/pos-parse";
-import { draftInvoiceLines } from "@/lib/inventory/invoice-match";
+import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import type { InventoryMovement, PosSaleLine, PurchasePriceRecord, SupplierOffer } from "@/lib/inventory/types";
 
@@ -54,6 +56,43 @@ describe("multi-supplier unit cost", () => {
       { id: "b", productId: "coffee", supplierId: "B", lastUnitCost: b, createdAt: "", updatedAt: "" },
     ] as SupplierOffer[]);
     expect(cheap?.supplierId).toBe("A");
+  });
+
+  it("normalizes different packages and ignores incompatible units", () => {
+    const pastaA = {
+      id: "a",
+      productId: "pasta",
+      supplierId: "A",
+      priceIncludingVat: 25,
+      packageQuantity: 5,
+      purchaseUnit: "kg" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const pastaB = {
+      id: "b",
+      productId: "pasta",
+      supplierId: "B",
+      priceIncludingVat: 47,
+      packageQuantity: 10,
+      purchaseUnit: "kg" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const oil = {
+      id: "c",
+      productId: "pasta",
+      supplierId: "C",
+      priceIncludingVat: 20,
+      packageQuantity: 1,
+      purchaseUnit: "liter" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    expect(offerNormalizedCost(pastaA)).toBeCloseTo(0.005, 6);
+    expect(offerNormalizedCost(pastaB)).toBeCloseTo(0.0047, 6);
+    expect(cheapestOffer([pastaA, pastaB, oil], "g")?.supplierId).toBe("B");
+    expect(comparableOffers([pastaA, pastaB, oil], "g").map((item) => item.supplierId)).toEqual(["A", "B"]);
   });
 
   it("keeps purchase price history instead of overwrite-only", () => {
@@ -113,10 +152,28 @@ describe("POS import", () => {
   });
 });
 
-describe("invoice review matching", () => {
-  it("matches extracted names to the single inventory product id", () => {
-    const lines = draftInvoiceLines([{ name: "קפה עלית", quantity: 5, unit: "kg", lineTotal: 350 }], [coffee]);
-    expect(lines[0]?.productId).toBe("coffee");
-    expect(lines[0]?.matchKind).toBe("exact");
+describe("manual supplier invoice", () => {
+  it("computes line totals and invoice summary without OCR", () => {
+    const line = finalizeInvoiceLine({
+      ...emptyInvoiceLine(0.18),
+      productId: coffee.id,
+      rawName: coffee.name,
+      quantity: 5,
+      unit: "kg",
+      unitPrice: 70,
+      discount: 0,
+      vatType: "inclusive",
+    }, 0.18);
+    expect(line.lineTotal).toBe(350);
+    expect(line.priceBeforeVat).toBeCloseTo(296.61, 1);
+    const summary = invoiceSummary([line], 0.18);
+    expect(summary.itemCount).toBe(1);
+    expect(summary.includingVat).toBe(350);
+  });
+
+  it("ignores incomplete lines so attachment-only drafts do not post stock", () => {
+    const summary = invoiceSummary([emptyInvoiceLine(0.18)], 0.18);
+    expect(summary.itemCount).toBe(0);
+    expect(summary.includingVat).toBe(0);
   });
 });

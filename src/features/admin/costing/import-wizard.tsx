@@ -18,7 +18,6 @@ import { formatIls } from "@/lib/costing/money";
 import { normalizeIngredientName } from "@/lib/costing/names";
 import {
   buildFileDraft,
-  buildMenuDraft,
   isRecipeBulkReady,
   knownRecipeCost,
   missingQuantityCount,
@@ -70,16 +69,13 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 export function CostingImportWizard({
   open,
-  initialMode = "upload",
   products,
   ingredients,
   recipes,
-  extrasByProduct,
   onClose,
   onToast,
 }: {
   open: boolean;
-  initialMode?: "upload" | "menu";
   products: Product[];
   ingredients: CostingIngredient[];
   recipes: DishRecipe[];
@@ -165,29 +161,9 @@ export function CostingImportWizard({
     }
   };
 
-  const generateMenu = () => {
-    setDraft(
-      refreshSummary(
-        buildMenuDraft({
-          products,
-          ingredients,
-          recipes,
-          extrasByProduct,
-          locale,
-        })
-      )
-    );
-    setStep(2);
-  };
-
   useEffect(() => {
-    if (!open) {
-      reset();
-      return;
-    }
-    if (initialMode === "menu") generateMenu();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/initialMode only
-  }, [open, initialMode]);
+    if (!open) reset();
+  }, [open]);
 
   const patchDraft = (next: ImportDraft) => setDraft(refreshSummary(next));
 
@@ -396,9 +372,6 @@ export function CostingImportWizard({
               </Button>
               <Button type="button" variant="outline" onClick={() => void downloadTemplate("menu")} disabled={busy}>
                 <Download className="h-4 w-4" /> {t("admin.costing.import.downloadMenu")}
-              </Button>
-              <Button type="button" variant="turquoise" onClick={generateMenu} disabled={busy}>
-                {t("admin.costing.import.fromMenu")}
               </Button>
             </div>
           </div>

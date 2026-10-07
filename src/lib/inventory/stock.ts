@@ -1,5 +1,5 @@
-import { purchaseQuantityInBase } from "@/lib/costing/units";
-import type { PurchaseUnit } from "@/lib/costing/types";
+import { baseUnitFor, purchaseQuantityInBase } from "@/lib/costing/units";
+import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
 import type { InventoryMovement, PurchasePriceRecord, SupplierOffer } from "@/lib/inventory/types";
 
 export function movementSignedBase(movement: Pick<InventoryMovement, "type" | "quantityBase">): number {
@@ -36,11 +36,49 @@ export function unitCostFromPackage(
   return priceIncludingVat / base;
 }
 
-export function cheapestOffer(offers: SupplierOffer[]): SupplierOffer | undefined {
-  return offers
-    .filter((offer) => offer.lastUnitCost != null && offer.lastUnitCost > 0)
+export function offerPurchaseUnit(offer: SupplierOffer): PurchaseUnit | undefined {
+  return offer.purchaseUnit ?? offer.lastUnit;
+}
+
+export function offerQuoteIncludingVat(offer: SupplierOffer): number | undefined {
+  return offer.priceIncludingVat ?? offer.currentPrice ?? offer.lastPriceIncludingVat;
+}
+
+export function offerNormalizedCost(offer: SupplierOffer): number | undefined {
+  if (offer.normalizedPrice != null && offer.normalizedPrice > 0) return offer.normalizedPrice;
+  const price = offerQuoteIncludingVat(offer);
+  const qty = offer.packageQuantity ?? offer.lastPackageQuantity;
+  const unit = offerPurchaseUnit(offer);
+  if (price != null && qty && unit) return unitCostFromPackage(price, qty, unit);
+  return offer.lastUnitCost != null && offer.lastUnitCost > 0 ? offer.lastUnitCost : undefined;
+}
+
+export function offerLastPurchaseCost(offer: SupplierOffer): number | undefined {
+  if (offer.lastPurchasePrice != null && offer.lastPurchasePrice > 0) return offer.lastPurchasePrice;
+  return undefined;
+}
+
+export function offersComparable(a: SupplierOffer, b: SupplierOffer): boolean {
+  const unitA = offerPurchaseUnit(a);
+  const unitB = offerPurchaseUnit(b);
+  if (!unitA || !unitB) return false;
+  return baseUnitFor(unitA) === baseUnitFor(unitB);
+}
+
+export function comparableOffers(offers: SupplierOffer[], productBase?: BaseUnit): SupplierOffer[] {
+  return offers.filter((offer) => {
+    if (offer.active === false) return false;
+    if (offerNormalizedCost(offer) == null) return false;
+    const unit = offerPurchaseUnit(offer);
+    if (productBase && unit && baseUnitFor(unit) !== productBase) return false;
+    return true;
+  });
+}
+
+export function cheapestOffer(offers: SupplierOffer[], productBase?: BaseUnit): SupplierOffer | undefined {
+  return comparableOffers(offers, productBase)
     .slice()
-    .sort((a, b) => (a.lastUnitCost ?? Infinity) - (b.lastUnitCost ?? Infinity))[0];
+    .sort((a, b) => (offerNormalizedCost(a) ?? Infinity) - (offerNormalizedCost(b) ?? Infinity))[0];
 }
 
 export function latestPurchase(records: PurchasePriceRecord[], productId: string): PurchasePriceRecord | undefined {

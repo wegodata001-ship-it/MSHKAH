@@ -40,7 +40,6 @@ export function QuickCreateIngredientPanel({
   const [purchasePrice, setPurchasePrice] = useState("");
   const [purchaseQuantity, setPurchaseQuantity] = useState("");
   const [purchaseUnit, setPurchaseUnit] = useState<PurchaseUnit>(emptyIngredientForm().purchaseUnit);
-  const [supplier, setSupplier] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [duplicate, setDuplicate] = useState<CostingIngredient | null>(null);
@@ -54,7 +53,6 @@ export function QuickCreateIngredientPanel({
     setPurchasePrice("");
     setPurchaseQuantity("");
     setPurchaseUnit(emptyIngredientForm().purchaseUnit);
-    setSupplier("");
     setError(null);
     setDuplicate(null);
   }, [open, initialName]);
@@ -99,7 +97,6 @@ export function QuickCreateIngredientPanel({
         purchasePrice: Number(purchasePrice) || 0,
         purchaseQuantity: Number(purchaseQuantity) || 1,
         purchaseUnit,
-        supplier,
       });
       if (!result.success) {
         setError(
@@ -218,10 +215,6 @@ export function QuickCreateIngredientPanel({
                 ))}
               </div>
             </div>
-            <div>
-              <Label>{t("admin.costing.supplier")}</Label>
-              <Input className="mt-1 h-11" value={supplier} onChange={(e) => setSupplier(e.target.value)} />
-            </div>
             <div className="rounded-2xl bg-turquoise/8 px-4 py-3">
               <p className="text-xs font-semibold text-turquoise">{t("admin.costing.computedCost")}</p>
               {preview ? (
@@ -239,11 +232,9 @@ export function QuickCreateIngredientPanel({
                 <p className="mt-1 text-sm text-coffee/45">—</p>
               )}
             </div>
-            {!supplier.trim() && (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                {t("admin.inventory.missingSupplierWarning")}
-              </p>
-            )}
+            <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {t("admin.inventory.addSupplierAfterSave")}
+            </p>
             {error && <p className="text-sm text-red-600">{error}</p>}
             {duplicate && (
               <Button

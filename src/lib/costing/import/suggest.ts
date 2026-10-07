@@ -39,6 +39,7 @@ const MARKETING = new Set(
   ].map((word) => normalizeIngredientName(word))
 );
 
+/** Reserved for a future connected AI/import path. Not exposed in admin UI. */
 export function suggestIngredientsFromMenuText(text: string): string[] {
   if (!text.trim()) return [];
   const parts = text.split(/[,،;|/]| - |\n| و | مع | with | and | עם /i);

@@ -1,44 +1,38 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, Plus, ScanLine, Upload } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { AdminCard } from "@/features/admin/components/admin-card";
 import { formatIls } from "@/lib/costing/money";
-import { unitLabelKey } from "@/features/admin/costing/costing-shared";
-import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
-import { cheapestOffer, currentStockBase, latestPurchase, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
+import { cheapestOffer, currentStockBase, latestPurchase, offerNormalizedCost, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
-import { DEFAULT_VAT_RATE, splitVat } from "@/lib/inventory/vat";
 import type {
   InventoryMovement,
   PosImport,
   PosProductMap,
   PosSaleLine,
   PurchaseInvoice,
-  PurchaseInvoiceLine,
   PurchasePriceRecord,
   Supplier,
   SupplierOffer,
-  VatType,
 } from "@/lib/inventory/types";
 import type { Product } from "@/types";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
 import {
   approvePosImport,
-  approvePurchaseInvoice,
-  linkSupplierOffer,
   savePosDraft,
   savePosProductMap,
-  savePurchaseInvoiceDraft,
   saveSupplier,
 } from "@/services/inventoryService";
-import { createIngredient } from "@/services/costingService";
 import { cn } from "@/lib/utils";
 import { useAuthFetch } from "@/lib/auth/auth-fetch";
+import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
+import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
 
 type InventoryPane = "products" | "ledger" | "alerts";
 type PurchasePane = "invoices" | "suppliers" | "compare";
@@ -49,6 +43,7 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   const [search, setSearch] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
   const [ledgerId, setLedgerId] = useState<string | null>(null);
+  const [detailsId, setDetailsId] = useState<string | null>(null);
   const q = search.trim().toLowerCase();
 
   const rows = props.ingredients
@@ -56,24 +51,26 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
     .filter((item) => !q || item.name.toLowerCase().includes(q))
     .filter((item) => {
       if (!missingOnly) return true;
-      return !props.offers.some((offer) => offer.productId === item.id);
+      return !props.offers.some((offer) => offer.productId === item.id && offer.active !== false);
     })
     .map((item) => {
       const current = currentStockBase(props.movements, item.id);
       const incoming = stockInBase(props.movements, item.id);
       const outgoing = stockOutBase(props.movements, item.id);
       const last = latestPurchase(props.records, item.id);
-      const lastOffer = props.offers
-        .filter((offer) => offer.productId === item.id)
+      const itemOffers = props.offers.filter((offer) => offer.productId === item.id && offer.active !== false);
+      const lastOffer = itemOffers
         .slice()
-        .sort((a, b) => (b.lastPurchaseDate ?? "").localeCompare(a.lastPurchaseDate ?? ""))[0];
-      const supplierName = props.suppliers.find((s) => s.id === (item.lastSupplierId || lastOffer?.supplierId))?.name;
+        .sort((a, b) => (b.lastPurchasedAt ?? b.lastPurchaseDate ?? "").localeCompare(a.lastPurchasedAt ?? a.lastPurchaseDate ?? ""))[0];
+      const cheap = cheapestOffer(itemOffers, item.baseUnit);
+      const supplierName = props.suppliers.find((s) => s.id === (item.lastSupplierId || last?.supplierId || lastOffer?.supplierId))?.name;
+      const cheapName = props.suppliers.find((s) => s.id === cheap?.supplierId)?.name;
       const belowMin = item.minStock != null && current < item.minStock;
       const opening = props.movements
         .filter((row) => row.productId === item.id && row.type === "OPENING")
         .reduce((sum, row) => sum + row.quantityBase, 0);
       const toOrder = reorderQty(current, item.recommendedStock ?? item.minStock ?? 0);
-      return { item, current, incoming, outgoing, last, supplierName, belowMin, missingSupplier: !lastOffer, opening, toOrder };
+      return { item, current, incoming, outgoing, last, cheap, cheapName, supplierName, belowMin, missingSupplier: !itemOffers.length, opening, toOrder };
     });
 
   const alerts = rows.filter((row) => row.belowMin || row.missingSupplier);
@@ -132,14 +129,16 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                 <th className="px-3 py-2 text-end">{t("admin.inventory.current")}</th>
                 <th className="px-3 py-2 text-start">{t("admin.inventory.lastSupplier")}</th>
                 <th className="px-3 py-2 text-end">{t("admin.inventory.lastPrice")}</th>
+                <th className="px-3 py-2 text-end">{t("admin.inventory.bestPrice")}</th>
                 <th className="px-3 py-2 text-start">{t("admin.inventory.status")}</th>
+                <th className="px-3 py-2 text-start">{t("admin.inventory.actions")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.item.id} className="border-t border-beige-dark/10">
                   <td className="px-3 py-2">
-                    <button type="button" className="font-medium text-start" onClick={() => props.onEditProduct(row.item)}>
+                    <button type="button" className="font-medium text-start" onClick={() => setDetailsId(row.item.id)}>
                       {row.item.name}
                     </button>
                   </td>
@@ -150,6 +149,9 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                   <td className="px-3 py-2 text-end font-semibold">{row.current.toFixed(1)}</td>
                   <td className="px-3 py-2">{row.supplierName || "—"}</td>
                   <td className="px-3 py-2 text-end">{row.last ? formatIls(row.last.unitCost, 4) : "—"}</td>
+                  <td className="px-3 py-2 text-end">
+                    {row.cheap ? `${formatIls(offerNormalizedCost(row.cheap) ?? 0, 4)} — ${row.cheapName ?? ""}` : "—"}
+                  </td>
                   <td className="px-3 py-2">
                     {row.missingSupplier ? (
                       <span className="text-amber-700">{t("admin.inventory.missingSupplier")}</span>
@@ -159,12 +161,36 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                       <span className="text-emerald-700">{t("admin.inventory.ok")}</span>
                     )}
                   </td>
+                  <td className="px-3 py-2">
+                    <button type="button" className="text-turquoise" onClick={() => props.onEditProduct(row.item)}>
+                      {t("common.edit")}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      {detailsId && (() => {
+        const product = props.ingredients.find((item) => item.id === detailsId);
+        if (!product) return null;
+        return (
+          <InventoryProductDetails
+            product={product}
+            suppliers={props.suppliers}
+            offers={props.offers}
+            records={props.records}
+            movements={props.movements}
+            onEdit={() => {
+              setDetailsId(null);
+              props.onEditProduct(product);
+            }}
+            onClose={() => setDetailsId(null)}
+            onToast={props.onToast}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -275,98 +301,97 @@ function SuppliersPane({ suppliers, onToast }: InventoryHubProps) {
   );
 }
 
-function ComparePane({ ingredients, offers, records, suppliers }: InventoryHubProps) {
+function ComparePane({ ingredients, offers, records, movements, suppliers }: InventoryHubProps) {
   const t = useT();
+  const [productId, setProductId] = useState(ingredients[0]?.id ?? "");
+  const item = ingredients.find((row) => row.id === productId);
+  const itemOffers = offers.filter((offer) => offer.productId === productId && offer.active !== false);
+  const cheap = item ? cheapestOffer(itemOffers, item.baseUnit) : cheapestOffer(itemOffers);
+  const last = latestPurchase(records, productId);
+  const monthly = item ? stockOutBase(movements, item.id) : 0;
   return (
     <div className="space-y-4">
-      {ingredients.map((item) => {
-        const itemOffers = offers.filter((offer) => offer.productId === item.id && offer.lastUnitCost != null);
-        if (!itemOffers.length) return null;
-        const cheap = cheapestOffer(itemOffers);
-        const last = latestPurchase(records, item.id);
-        return (
-          <AdminCard key={item.id} title={item.name}>
-            <div className="space-y-2 text-sm">
-              {itemOffers.map((offer) => {
-                const supplier = suppliers.find((s) => s.id === offer.supplierId);
-                return (
-                  <div key={offer.id} className="flex items-center justify-between">
-                    <span>
-                      {supplier?.name ?? offer.supplierId}{" "}
-                      {cheap?.id === offer.id && <span className="text-emerald-700">← {t("admin.inventory.cheapest")}</span>}
-                    </span>
-                    <span>{formatIls(offer.lastUnitCost ?? 0, 4)}</span>
-                  </div>
-                );
-              })}
-              {last && (
-                <p className="text-coffee/55">
-                  {t("admin.inventory.lastPaid")}: {formatIls(last.unitCost, 4)} · {last.purchaseDate}
+      <select className="h-10 rounded-xl border px-3 text-sm" value={productId} onChange={(e) => setProductId(e.target.value)}>
+        {ingredients.map((row) => (
+          <option key={row.id} value={row.id}>{row.name}</option>
+        ))}
+      </select>
+      {item && (
+        <AdminCard title={item.name}>
+          <p className="mb-3 text-xs text-coffee/55">{t("admin.inventory.cheapestHint")}</p>
+          <div className="space-y-2 text-sm">
+            {itemOffers.map((offer) => {
+              const supplier = suppliers.find((s) => s.id === offer.supplierId);
+              const cost = offerNormalizedCost(offer);
+              const cheapCost = cheap ? offerNormalizedCost(cheap) : undefined;
+              const gap = cost != null && cheapCost != null ? cost - cheapCost : 0;
+              return (
+                <div key={offer.id} className="flex items-center justify-between">
+                  <span>
+                    {supplier?.name ?? offer.supplierId}{" "}
+                    {cheap?.id === offer.id && <span className="text-emerald-700">🏆 {t("admin.inventory.cheapest")}</span>}
+                  </span>
+                  <span>
+                    {cost != null ? formatIls(cost, 4) : "—"}
+                    {cheap?.id !== offer.id && gap > 0 ? ` · +${formatIls(gap, 4)}` : ""}
+                  </span>
+                </div>
+              );
+            })}
+            {cheap && last && (
+              <p className="text-coffee/55">
+                {t("admin.inventory.lastPaid")}: {formatIls(last.unitCost, 4)} · {last.purchaseDate}
+              </p>
+            )}
+            {cheap && monthly > 0 && itemOffers.filter((offer) => offer.id !== cheap.id).map((offer) => {
+              const cost = offerNormalizedCost(offer);
+              const cheapCost = offerNormalizedCost(cheap) ?? 0;
+              if (cost == null) return null;
+              const supplier = suppliers.find((s) => s.id === offer.supplierId);
+              return (
+                <p key={offer.id} className="text-emerald-800">
+                  {t("admin.inventory.potentialSaving")}: {formatIls((cost - cheapCost) * monthly)} / {t("admin.inventory.consumption")}
+                  {supplier ? ` · ${supplier.name}` : ""}
                 </p>
-              )}
-            </div>
-          </AdminCard>
-        );
-      })}
+              );
+            })}
+          </div>
+        </AdminCard>
+      )}
     </div>
   );
 }
 
 function InvoicesPane(props: InventoryHubProps) {
   const t = useT();
-  const authFetch = useAuthFetch();
-  const [scanning, setScanning] = useState(false);
-  const [draft, setDraft] = useState<PurchaseInvoice | null>(null);
+  const [draft, setDraft] = useState<PurchaseInvoice | "new" | null>(null);
 
-  const scan = async (file: File) => {
-    setScanning(true);
-    try {
-      const form = new FormData();
-      form.set("file", file);
-      const response = await authFetch("/api/admin/inventory/invoice/parse", { method: "POST", body: form });
-      const json = (await response.json()) as { draft?: Omit<PurchaseInvoice, "id" | "createdAt" | "status">; error?: string };
-      if (!response.ok || !json.draft) {
-        props.onToast(t("admin.inventory.scanFailed"), "error");
-        return;
-      }
-      const saved = await savePurchaseInvoiceDraft(json.draft);
-      if (!saved.success) {
-        props.onToast(saved.error, "error");
-        return;
-      }
-      setDraft({
-        id: saved.data,
-        status: "draft",
-        createdAt: new Date().toISOString(),
-        ...json.draft,
-      });
-    } finally {
-      setScanning(false);
-    }
-  };
+  if (draft) {
+    return (
+      <SupplierInvoiceForm
+        invoice={draft}
+        ingredients={props.ingredients}
+        suppliers={props.suppliers}
+        vatRate={props.settingsVatRate}
+        onToast={props.onToast}
+        onClose={() => setDraft(null)}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">
-      <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-turquoise/40 bg-turquoise/5 px-6 py-10">
-        <ScanLine className="h-8 w-8 text-turquoise" />
-        <p className="mt-3 text-lg font-semibold">{t("admin.inventory.scanInvoice")}</p>
-        <p className="text-sm text-coffee/55">{t("admin.inventory.scanHint")}</p>
-        <input
-          type="file"
-          accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void scan(file);
-            e.target.value = "";
-          }}
-        />
-      </label>
-      {scanning && <p className="text-sm text-coffee/55">{t("admin.inventory.scanning")}</p>}
-      {draft && <InvoiceReview draft={draft} {...props} onClose={() => setDraft(null)} />}
-      <div className="space-y-2">
-        {props.invoices.map((invoice) => (
+      <div className="flex justify-end">
+        <Button type="button" variant="turquoise" onClick={() => setDraft("new")}>
+          <Plus className="h-4 w-4" /> {t("admin.inventory.receiveInvoice")}
+        </Button>
+      </div>
+      {props.invoices.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-beige-dark/25 p-8 text-center text-sm text-coffee/55">
+          {t("admin.inventory.noInvoices")}
+        </p>
+      ) : (
+        props.invoices.map((invoice) => (
           <button
             key={invoice.id}
             type="button"
@@ -376,163 +401,13 @@ function InvoicesPane(props: InventoryHubProps) {
             <span>
               #{invoice.invoiceNumber || invoice.id.slice(0, 6)} · {invoice.supplierName}
             </span>
-            <span className="text-sm text-coffee/55">{invoice.status}</span>
+            <span className="text-sm text-coffee/55">
+              {invoice.status === "approved" ? t("admin.inventory.approved") : t("admin.inventory.draft")}
+            </span>
           </button>
-        ))}
-      </div>
+        ))
+      )}
     </div>
-  );
-}
-
-function InvoiceReview({
-  draft,
-  ingredients,
-  suppliers,
-  settingsVatRate,
-  onToast,
-  onClose,
-}: InventoryHubProps & { draft: PurchaseInvoice; onClose: () => void }) {
-  const t = useT();
-  const [invoice, setInvoice] = useState(draft);
-  const [saving, setSaving] = useState(false);
-
-  const updateLine = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
-    setInvoice((current) => ({
-      ...current,
-      lines: current.lines.map((line) => (line.key === key ? { ...line, ...patch } : line)),
-    }));
-  };
-
-  return (
-    <AdminCard title={`${t("admin.inventory.invoice")} #${invoice.invoiceNumber || ""}`}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Input value={invoice.supplierName} onChange={(e) => setInvoice({ ...invoice, supplierName: e.target.value })} />
-        <select
-          className="h-10 rounded-xl border border-beige-dark/40 px-3 text-sm"
-          value={invoice.supplierId ?? ""}
-          onChange={(e) => setInvoice({ ...invoice, supplierId: e.target.value || undefined })}
-        >
-          <option value="">{t("admin.inventory.noSupplier")}</option>
-          {suppliers.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-        <label className="text-sm">
-          {t("admin.inventory.invoiceDate")}
-          <Input type="date" value={invoice.invoiceDate} onChange={(e) => setInvoice({ ...invoice, invoiceDate: e.target.value })} />
-        </label>
-        <label className="text-sm">
-          {t("admin.inventory.receivedAt")}
-          <Input type="date" value={invoice.receivedAt} onChange={(e) => setInvoice({ ...invoice, receivedAt: e.target.value })} />
-        </label>
-      </div>
-      <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[720px] w-full text-sm">
-          <thead>
-            <tr className="text-coffee/60">
-              <th className="py-2 text-start">{t("admin.inventory.product")}</th>
-              <th className="py-2 text-end">{t("admin.costing.purchaseQty")}</th>
-              <th className="py-2 text-end">{t("admin.costing.purchasePrice")}</th>
-              <th className="py-2 text-start">{t("admin.inventory.vat")}</th>
-              <th className="py-2 text-start">{t("admin.inventory.match")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoice.lines.map((line) => (
-              <tr key={line.key} className="border-t border-beige-dark/10">
-                <td className="py-2">{line.rawName}</td>
-                <td className="py-2 text-end">{line.quantity ?? "—"}</td>
-                <td className="py-2 text-end">{line.lineTotal != null ? formatIls(line.lineTotal) : "—"}</td>
-                <td className="py-2">
-                  <select
-                    className="h-9 rounded-lg border px-2"
-                    value={line.vatType}
-                    onChange={(e) => updateLine(line.key, { vatType: e.target.value as VatType })}
-                  >
-                    <option value="inclusive">{t("admin.inventory.vatInclusive")}</option>
-                    <option value="exclusive">{t("admin.inventory.vatExclusive")}</option>
-                    <option value="exempt">{t("admin.inventory.vatExempt")}</option>
-                  </select>
-                </td>
-                <td className="py-2">
-                  <div className="flex flex-wrap gap-1">
-                    <select
-                      className="h-9 max-w-[160px] rounded-lg border px-2"
-                      value={line.productId ?? ""}
-                      onChange={(e) => updateLine(line.key, { productId: e.target.value || undefined, matchKind: e.target.value ? "exact" : "none", ignored: false })}
-                    >
-                      <option value="">{t("admin.inventory.matchExisting")}</option>
-                      {ingredients.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        const created = await createIngredient({
-                          name: line.rawName,
-                          purchasePrice: line.lineTotal ?? 0,
-                          purchaseQuantity: line.quantity ?? 1,
-                          purchaseUnit: (line.unit as PurchaseUnit) || "kg",
-                        });
-                        if (created.success) updateLine(line.key, { productId: created.data.id, matchKind: "exact", createNew: true });
-                      }}
-                    >
-                      {t("admin.inventory.createProduct")}
-                    </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => updateLine(line.key, { ignored: true, productId: undefined })}>
-                      {t("admin.inventory.ignoreLine")}
-                    </Button>
-                    <span className={line.productId ? "text-emerald-700" : "text-amber-700"}>
-                      {line.ignored ? t("admin.inventory.ignored") : line.productId ? "✓" : t("admin.inventory.notFound")}
-                    </span>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-4 flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onClose}>
-          {t("common.cancel")}
-        </Button>
-        <Button
-          type="button"
-          variant="turquoise"
-          disabled={saving || invoice.status === "approved"}
-          onClick={async () => {
-            setSaving(true);
-            const result = await approvePurchaseInvoice({
-              ...invoice,
-              lines: invoice.lines.map((line) => {
-                const vat = splitVat({
-                  amount: line.lineTotal ?? 0,
-                  vatType: line.vatType,
-                  vatRate: line.vatRate || settingsVatRate || DEFAULT_VAT_RATE,
-                });
-                return { ...line, ...vat };
-              }),
-            });
-            setSaving(false);
-            if (!result.success) {
-              onToast(result.error, "error");
-              return;
-            }
-            onToast(t("admin.inventory.invoiceApproved"));
-            onClose();
-          }}
-        >
-          {t("admin.inventory.approveReceipt")}
-        </Button>
-      </div>
-    </AdminCard>
   );
 }
 
@@ -763,102 +638,4 @@ export type InventoryHubProps = {
   onEditProduct: (item: CostingIngredient) => void;
 };
 
-export function SupplierOffersEditor({
-  product,
-  suppliers,
-  offers,
-  records,
-  onToast,
-}: {
-  product: CostingIngredient;
-  suppliers: Supplier[];
-  offers: SupplierOffer[];
-  records: PurchasePriceRecord[];
-  onToast: (message: string, variant?: "success" | "error") => void;
-}) {
-  const t = useT();
-  const [supplierId, setSupplierId] = useState("");
-  const [price, setPrice] = useState("");
-  const [qty, setQty] = useState("1");
-  const [unit, setUnit] = useState<PurchaseUnit>(product.purchaseUnit);
-  const productOffers = offers.filter((offer) => offer.productId === product.id);
-  const cheap = cheapestOffer(productOffers);
-  const last = latestPurchase(records, product.id);
-
-  return (
-    <div className="space-y-3 rounded-2xl border border-beige-dark/20 p-3">
-      <p className="text-sm font-semibold">{t("admin.inventory.supplierPrices")}</p>
-      {!productOffers.length && (
-        <p className="flex items-center gap-2 text-sm text-amber-700">
-          <AlertTriangle className="h-4 w-4" /> {t("admin.inventory.missingSupplierWarning")}
-        </p>
-      )}
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-coffee/55">
-              <th className="py-1 text-start">{t("admin.costing.supplier")}</th>
-              <th className="py-1 text-end">{t("admin.inventory.lastPrice")}</th>
-              <th className="py-1 text-end">{t("admin.inventory.unitCost")}</th>
-              <th className="py-1 text-start">{t("admin.inventory.date")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {productOffers.map((offer) => {
-              const supplier = suppliers.find((item) => item.id === offer.supplierId);
-              return (
-                <tr key={offer.id}>
-                  <td className="py-1">
-                    {supplier?.name ?? offer.supplierId}
-                    {cheap?.id === offer.id ? ` · ${t("admin.inventory.cheapest")}` : ""}
-                    {last?.supplierId === offer.supplierId ? ` · ${t("admin.inventory.lastPaid")}` : ""}
-                  </td>
-                  <td className="py-1 text-end">{offer.lastPriceIncludingVat != null ? formatIls(offer.lastPriceIncludingVat) : "—"}</td>
-                  <td className="py-1 text-end">{offer.lastUnitCost != null ? formatIls(offer.lastUnitCost, 4) : "—"}</td>
-                  <td className="py-1">{offer.lastPurchaseDate ?? "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <select className="h-10 rounded-xl border px-2 text-sm" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-          <option value="">{t("admin.inventory.linkSupplier")}</option>
-          {suppliers.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-        <Input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="₪" />
-        <Input value={qty} onChange={(e) => setQty(e.target.value)} />
-        <select className="h-10 rounded-xl border px-2 text-sm" value={unit} onChange={(e) => setUnit(e.target.value as PurchaseUnit)}>
-          {(["kg", "g", "liter", "ml", "unit"] as const).map((item) => (
-            <option key={item} value={item}>
-              {t(unitLabelKey(item))}
-            </option>
-          ))}
-        </select>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        onClick={async () => {
-          if (!supplierId) return;
-          const result = await linkSupplierOffer({
-            productId: product.id,
-            supplierId,
-            lastPriceIncludingVat: price ? Number(price) : undefined,
-            lastPackageQuantity: qty ? Number(qty) : undefined,
-            lastUnit: unit,
-          });
-          if (result.success) onToast(t("admin.inventory.supplierLinked"));
-          else onToast(result.error, "error");
-        }}
-      >
-        + {t("admin.inventory.linkSupplier")}
-      </Button>
-    </div>
-  );
-}
+export { SupplierOffersPanel as SupplierOffersEditor } from "@/features/admin/inventory/supplier-offers-panel";

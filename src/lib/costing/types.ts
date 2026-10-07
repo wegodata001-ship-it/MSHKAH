@@ -15,6 +15,7 @@ export type CostingIngredient = {
   costPerBaseUnit: number;
   supplier?: string;
   notes?: string;
+  barcode?: string;
   minStock?: number;
   recommendedStock?: number;
   lastSupplierId?: string;
