@@ -153,7 +153,9 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                   <td className="px-3 py-2">{row.supplierName || "—"}</td>
                   <td className="px-3 py-2 text-end">{row.last ? formatIls(row.last.unitCost, 4) : "—"}</td>
                   <td className="px-3 py-2 text-end">
-                    {row.cheap ? `${formatIls(offerNormalizedCost(row.cheap) ?? 0, 4)} — ${row.cheapName ?? ""}` : "—"}
+                    {row.cheap
+                      ? `${formatIls(offerNormalizedNet(row.cheap) ?? 0, 4)} — ${row.cheapName ?? ""}`
+                      : "—"}
                   </td>
                   <td className="px-3 py-2">
                     {row.missingSupplier ? (
