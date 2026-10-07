@@ -11,6 +11,9 @@ import {
 import { posDelta, posPeriod, theoreticalConsumption } from "@/lib/inventory/pos";
 import { hashPosFile } from "@/lib/inventory/pos-parse";
 import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
+import { findDuplicateInvoice, matchInventoryProduct, matchSupplier } from "@/lib/inventory/invoice-smart-match";
+import { buildRecipeSuggestions, matchRecipeSuggestion } from "@/lib/ai/gemini-recipe";
+import { parseInvoiceExtraction } from "@/lib/ai/gemini-invoice";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import type { InventoryMovement, PosSaleLine, PurchasePriceRecord, SupplierOffer } from "@/lib/inventory/types";
 
@@ -149,6 +152,76 @@ describe("POS import", () => {
     ];
     expect(posPeriod(next)).toBe("2026-10-06");
     expect(posDelta(prev, next)).toEqual({ added: 1, changed: 1, removed: 0, unchanged: 0 });
+  });
+});
+
+describe("smart invoice matching", () => {
+  it("matches pasta names and previous supplier mappings without merging", () => {
+    const pasta = { ...coffee, id: "pasta", name: "פסטה" };
+    const suppliers = [
+      { id: "a", name: "شركة ABC", phone: "", active: true, createdAt: "", updatedAt: "" },
+    ];
+    expect(matchSupplier("شركة ABC", null, suppliers).kind).toBe("exact");
+    expect(matchInventoryProduct({ name: "פסטה" }, [pasta], [], undefined).kind).toBe("exact");
+    expect(matchInventoryProduct({ name: "Pasta Barilla 5KG" }, [pasta], [], undefined).kind).toBe("suggest");
+    expect(matchInventoryProduct({ name: "Pasta Barilla 5KG" }, [pasta], [], undefined).item?.id).toBe("pasta");
+    expect(matchInventoryProduct({ name: "كريمة" }, [{ ...coffee, id: "cream", name: "שמנת" }], [], undefined).item?.name).toBe("שמנת");
+    expect(matchInventoryProduct({ name: "Cream" }, [{ ...coffee, id: "cream", name: "שמנת" }], [], undefined).kind).toBe("suggest");
+    expect(
+      matchInventoryProduct(
+        { name: "PASTA BARILLA 5KG" },
+        [pasta],
+        [{ id: "m", supplierId: "a", supplierProductName: "PASTA BARILLA 5KG", inventoryProductId: "pasta", createdAt: "", updatedAt: "" }],
+        "a"
+      ).item?.id
+    ).toBe("pasta");
+    expect(
+      findDuplicateInvoice(
+        [{ id: "old", supplierId: "a", invoiceNumber: "100", invoiceDate: "2026-10-07", status: "approved" }],
+        { supplierId: "a", invoiceNumber: "100", invoiceDate: "2026-10-07" }
+      )
+    ).toBe("old");
+  });
+});
+
+describe("dish ingredient matching", () => {
+  const stock: CostingIngredient[] = [
+    { ...coffee, id: "pasta", name: "פסטה" },
+    { ...coffee, id: "cream", name: "שמנת" },
+    { ...coffee, id: "mush", name: "פטריות" },
+    { ...coffee, id: "parm", name: "פרמזן" },
+    { ...coffee, id: "milk", name: "חלב" },
+    { ...coffee, id: "sugar", name: "סוכר" },
+    { ...coffee, id: "coffee2", name: "קפה" },
+  ];
+
+  it("matches Arabic Hebrew and English names to the same inventory product", () => {
+    expect(matchRecipeSuggestion("باستا", stock).productId).toBe("pasta");
+    expect(matchRecipeSuggestion("Pasta", stock).productId).toBe("pasta");
+    expect(matchRecipeSuggestion("פסטה", stock).matchKind).toBe("exact");
+    expect(matchRecipeSuggestion("كريمة", stock).productId).toBe("cream");
+    expect(matchRecipeSuggestion("Cream", stock).productId).toBe("cream");
+  });
+
+  it("does not invent quantities and flags missing products", () => {
+    const rows = buildRecipeSuggestions(
+      [
+        { name: "Pasta", confidence: 0.96 },
+        { name: "Mozzarella", confidence: 0.7, needsReview: true },
+      ],
+      stock
+    );
+    expect(rows[0]).not.toHaveProperty("quantity");
+    expect(rows[0].productId).toBe("pasta");
+    expect(rows[1].matchKind).toBe("missing");
+    expect(rows[1].needsReview).toBe(true);
+  });
+
+  it("leaves unknown invoice fields null instead of inventing them", () => {
+    const extracted = parseInvoiceExtraction(JSON.stringify({ supplierName: { value: "ABC", confidence: 0.9 }, lines: [] }));
+    expect(extracted.currency.value).toBeNull();
+    expect(extracted.invoiceDate.value).toBeNull();
+    expect(extracted.grandTotal.value).toBeNull();
   });
 });
 

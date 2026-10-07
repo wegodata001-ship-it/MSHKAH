@@ -65,7 +65,7 @@ import {
   subscribeToAllProductModifierGroups,
   subscribeToModifierOptions,
 } from "@/services/modifierService";
-import { getLocalizedName, getProductDisplayName } from "@/lib/i18n/localized-content";
+import { getLocalizedDescription, getLocalizedName, getProductDisplayName } from "@/lib/i18n/localized-content";
 import { formatPrice } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { ModifierOption, ProductModifierGroup } from "@/types/modifiers";
@@ -601,6 +601,18 @@ export function CostingAdmin() {
           productName={
             products.find((p) => p.id === recipeProductId)
               ? getProductDisplayName(products.find((p) => p.id === recipeProductId)!, locale)
+              : ""
+          }
+          productDescription={
+            products.find((p) => p.id === recipeProductId)
+              ? [
+                  getLocalizedDescription(products.find((p) => p.id === recipeProductId)!, "ar"),
+                  getLocalizedDescription(products.find((p) => p.id === recipeProductId)!, "he"),
+                  getLocalizedDescription(products.find((p) => p.id === recipeProductId)!, "en"),
+                ]
+                  .filter(Boolean)
+                  .filter((value, index, all) => all.indexOf(value) === index)
+                  .join("\n")
               : ""
           }
           recipe={recipes.find((recipe) => recipe.productId === recipeProductId && !recipe.variantId)}

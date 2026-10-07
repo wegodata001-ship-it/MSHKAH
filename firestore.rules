@@ -194,6 +194,11 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /supplierItemMaps/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     match /purchasePriceRecords/{id} {
       allow read, create: if isAdmin();
       allow update, delete: if false;

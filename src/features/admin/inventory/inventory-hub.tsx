@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { useAuthFetch } from "@/lib/auth/auth-fetch";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
+import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
 
 type InventoryPane = "products" | "ledger" | "alerts";
 type PurchasePane = "invoices" | "suppliers" | "compare";
@@ -364,7 +365,25 @@ function ComparePane({ ingredients, offers, records, movements, suppliers }: Inv
 
 function InvoicesPane(props: InventoryHubProps) {
   const t = useT();
+  const ai = useSmartInvoiceEnabled();
   const [draft, setDraft] = useState<PurchaseInvoice | "new" | null>(null);
+  const [smart, setSmart] = useState(false);
+
+  if (smart) {
+    return (
+      <SmartInvoiceFlow
+        ingredients={props.ingredients}
+        suppliers={props.suppliers}
+        vatRate={props.settingsVatRate}
+        onToast={props.onToast}
+        onClose={() => setSmart(false)}
+        onManual={() => {
+          setSmart(false);
+          setDraft("new");
+        }}
+      />
+    );
+  }
 
   if (draft) {
     return (
@@ -381,8 +400,22 @@ function InvoicesPane(props: InventoryHubProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button type="button" variant="turquoise" onClick={() => setDraft("new")}>
+      <div className="flex flex-wrap justify-end gap-2">
+        {ai?.configured && ai.reachable ? (
+          <Button type="button" variant="turquoise" onClick={() => setSmart(true)}>
+            {t("admin.inventory.smart.title")}
+          </Button>
+        ) : ai?.configured ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="self-center text-xs text-coffee/50">{t("admin.inventory.smart.unavailable")}</p>
+            <Button type="button" variant="outline" onClick={() => setSmart(true)}>
+              {t("admin.inventory.smart.retry")}
+            </Button>
+          </div>
+        ) : ai && !ai.configured ? (
+          <p className="self-center text-xs text-coffee/50">{t("admin.inventory.smart.notConfigured")}</p>
+        ) : null}
+        <Button type="button" variant="outline" onClick={() => setDraft("new")}>
           <Plus className="h-4 w-4" /> {t("admin.inventory.receiveInvoice")}
         </Button>
       </div>

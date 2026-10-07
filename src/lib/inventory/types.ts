@@ -91,8 +91,29 @@ export type InventoryMovement = {
   createdAt: string;
 };
 
-export type PurchaseInvoiceStatus = "draft" | "approving" | "approved";
-export type PurchaseDocumentType = "invoice" | "credit" | "receipt" | "other";
+export type PurchaseInvoiceStatus = "draft" | "needs_review" | "approving" | "approved" | "rejected";
+export type PurchaseDocumentType = "invoice" | "tax_invoice" | "receipt" | "tax_receipt" | "delivery" | "credit" | "other";
+export type InvoiceLineMatchKind = "exact" | "suggest" | "mapped" | "new" | "none";
+export type InvoiceRowStatus = "matched" | "review" | "new" | "unknown-unit" | "price-anomaly" | "unmapped";
+export type InvoiceVatStatus = "detected" | "needs_review";
+
+export type InvoiceAuditEvent = {
+  at: string;
+  actor?: string;
+  action: string;
+  detail?: string;
+};
+
+export type SupplierItemMap = {
+  id: string;
+  supplierId: string;
+  supplierProductName: string;
+  supplierSku?: string;
+  inventoryProductId: string;
+  conversion?: number;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type PurchaseInvoiceLine = {
   key: string;
@@ -108,23 +129,49 @@ export type PurchaseInvoiceLine = {
   priceBeforeVat: number | null;
   vatAmount: number | null;
   priceIncludingVat: number | null;
+  confidence?: number | null;
+  matchConfidence?: number | null;
+  matchKind?: InvoiceLineMatchKind;
+  sku?: string;
+  barcode?: string;
+  conversionNote?: string;
+  conversionFactor?: number | null;
+  needsReview?: boolean;
+  rowStatus?: InvoiceRowStatus;
+  previousNormalized?: number | null;
+  newNormalized?: number | null;
+  priceChangePercent?: number | null;
+  cheaperSupplierName?: string;
+  cheaperSupplierPrice?: number | null;
 };
 
 export type PurchaseInvoice = {
   id: string;
   supplierId?: string;
   supplierName: string;
+  supplierTaxId?: string;
   invoiceNumber: string;
   invoiceDate: string;
   receivedAt: string;
   documentType?: PurchaseDocumentType;
+  currency?: string;
+  subtotal?: number | null;
+  vatTotal?: number | null;
+  grandTotal?: number | null;
+  vatStatus?: InvoiceVatStatus;
   status: PurchaseInvoiceStatus;
   lines: PurchaseInvoiceLine[];
   fileName?: string;
   fileUrl?: string;
+  fileHash?: string;
   notes?: string;
+  aiProvider?: string;
+  aiModel?: string;
+  audit?: InvoiceAuditEvent[];
+  duplicateOf?: string;
   createdAt: string;
   approvedAt?: string;
+  approvedBy?: string;
 };
 
 export type PosImportStatus = "draft" | "approved" | "blocked-duplicate";

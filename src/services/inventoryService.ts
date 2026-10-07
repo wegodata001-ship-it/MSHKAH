@@ -27,8 +27,10 @@ import type {
   PosImport,
   PosProductMap,
   PurchaseInvoice,
+  PurchaseInvoiceStatus,
   PurchasePriceRecord,
   Supplier,
+  SupplierItemMap,
   SupplierOffer,
   VatType,
 } from "@/lib/inventory/types";
@@ -157,14 +159,25 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           id: d.id,
           supplierId: data.supplierId ? String(data.supplierId) : undefined,
           supplierName: String(data.supplierName ?? ""),
+          supplierTaxId: data.supplierTaxId ? String(data.supplierTaxId) : undefined,
           invoiceNumber: String(data.invoiceNumber ?? ""),
           invoiceDate: String(data.invoiceDate ?? ""),
           receivedAt: String(data.receivedAt ?? ""),
           documentType: data.documentType || "invoice",
+          currency: data.currency ? String(data.currency) : undefined,
+          subtotal: data.subtotal != null ? asNumber(data.subtotal) : undefined,
+          vatTotal: data.vatTotal != null ? asNumber(data.vatTotal) : undefined,
+          grandTotal: data.grandTotal != null ? asNumber(data.grandTotal) : undefined,
+          vatStatus: data.vatStatus === "detected" || data.vatStatus === "needs_review" ? data.vatStatus : undefined,
           status: (data.status as PurchaseInvoice["status"]) || "draft",
           lines: Array.isArray(data.lines) ? data.lines : [],
           fileName: data.fileName ? String(data.fileName) : undefined,
           fileUrl: data.fileUrl ? String(data.fileUrl) : undefined,
+          fileHash: data.fileHash ? String(data.fileHash) : undefined,
+          aiProvider: data.aiProvider ? String(data.aiProvider) : undefined,
+          aiModel: data.aiModel ? String(data.aiModel) : undefined,
+          audit: Array.isArray(data.audit) ? data.audit : undefined,
+          duplicateOf: data.duplicateOf ? String(data.duplicateOf) : undefined,
           notes: data.notes ? String(data.notes) : undefined,
           createdAt: timestampToIso(data.createdAt as never),
           approvedAt: data.approvedAt ? timestampToIso(data.approvedAt as never) : undefined,
@@ -417,12 +430,59 @@ export async function linkSupplierOffer(input: {
   });
 }
 
-export async function savePurchaseInvoiceDraft(invoice: Omit<PurchaseInvoice, "id" | "createdAt" | "status"> & { id?: string }): Promise<ServiceResult<string>> {
+export function subscribeToSupplierItemMaps(onData: (items: SupplierItemMap[]) => void): Unsubscribe {
+  return onSnapshot(collection(getDb(), COLLECTIONS.supplierItemMaps), (snap) =>
+    onData(
+      snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          supplierId: String(data.supplierId ?? ""),
+          supplierProductName: String(data.supplierProductName ?? ""),
+          supplierSku: data.supplierSku ? String(data.supplierSku) : undefined,
+          inventoryProductId: String(data.inventoryProductId ?? ""),
+          conversion: data.conversion != null ? asNumber(data.conversion) : undefined,
+          createdAt: timestampToIso(data.createdAt as never),
+          updatedAt: timestampToIso(data.updatedAt as never),
+        };
+      })
+    )
+  );
+}
+
+export async function saveSupplierItemMap(input: {
+  supplierId: string;
+  supplierProductName: string;
+  supplierSku?: string;
+  inventoryProductId: string;
+  conversion?: number;
+}): Promise<ServiceResult<void>> {
+  try {
+    const existing = await getDocs(
+      query(
+        collection(getDb(), COLLECTIONS.supplierItemMaps),
+        where("supplierId", "==", input.supplierId),
+        where("supplierProductName", "==", input.supplierProductName)
+      )
+    );
+    const now = nowTimestamp();
+    const payload = sanitizeFirestoreData({ ...input, updatedAt: now });
+    if (existing.docs[0]) await updateDoc(existing.docs[0].ref, payload);
+    else await addDoc(collection(getDb(), COLLECTIONS.supplierItemMaps), { ...payload, createdAt: now });
+    return success(undefined);
+  } catch (error) {
+    return failure(error, "Failed to save item mapping");
+  }
+}
+
+export async function savePurchaseInvoiceDraft(
+  invoice: Omit<PurchaseInvoice, "id" | "createdAt"> & { id?: string; status?: PurchaseInvoiceStatus }
+): Promise<ServiceResult<string>> {
   try {
     const now = nowTimestamp();
     const payload = sanitizeFirestoreData({
       ...invoice,
-      status: "draft",
+      status: invoice.status && invoice.status !== "approved" ? invoice.status : "draft",
       updatedAt: now,
     });
     if (invoice.id) {
@@ -538,12 +598,29 @@ export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<
         updatedAt: now,
       });
     }
+    if (invoice.supplierId) {
+      for (const line of invoice.lines) {
+        if (!line.productId || !line.rawName) continue;
+        await saveSupplierItemMap({
+          supplierId: invoice.supplierId,
+          supplierProductName: line.rawName,
+          supplierSku: line.sku,
+          inventoryProductId: line.productId,
+          conversion: line.conversionFactor ?? undefined,
+        });
+      }
+    }
     await updateDoc(doc(getDb(), COLLECTIONS.purchaseInvoices, invoice.id), {
       status: "approved",
       approvedAt: now,
+      approvedBy: invoice.approvedBy || null,
       lines: invoice.lines,
       supplierId: invoice.supplierId || null,
       supplierName: invoice.supplierName,
+      audit: [
+        ...(invoice.audit ?? []),
+        { at: new Date().toISOString(), actor: invoice.approvedBy, action: "approve", detail: "posted-to-stock" },
+      ],
     });
     return success(undefined);
   } catch (error) {

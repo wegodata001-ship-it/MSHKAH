@@ -24,6 +24,9 @@ import {
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { IngredientPicker } from "@/features/admin/costing/ingredient-picker";
 import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-create-ingredient";
+import { useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
+import { useAuthFetch } from "@/lib/auth/auth-fetch";
+import type { RecipeIngredientSuggestion } from "@/lib/ai/gemini-recipe";
 import type {
   CostingIngredient,
   CustomCost,
@@ -53,6 +56,7 @@ function emptyLine(ingredient?: CostingIngredient): DraftLine {
 export function RecipeEditorModal({
   open,
   productName,
+  productDescription,
   recipe,
   ingredients,
   variants,
@@ -63,6 +67,7 @@ export function RecipeEditorModal({
 }: {
   open: boolean;
   productName: string;
+  productDescription?: string;
   recipe?: DishRecipe;
   ingredients: CostingIngredient[];
   variants: ModifierOption[];
@@ -77,6 +82,11 @@ export function RecipeEditorModal({
   }) => void;
 }) {
   const t = useT();
+  const ai = useSmartInvoiceEnabled();
+  const authFetch = useAuthFetch();
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<RecipeIngredientSuggestion[]>([]);
   const [extraIngredients, setExtraIngredients] = useState<CostingIngredient[]>([]);
   const [variantId, setVariantId] = useState(recipe?.variantId ?? "");
   const [lines, setLines] = useState<DraftLine[]>(
@@ -319,6 +329,39 @@ export function RecipeEditorModal({
             <Button type="button" variant="outline" onClick={addLine}>
               <Plus className="h-4 w-4" /> {t("admin.costing.addLine")}
             </Button>
+            {ai?.configured && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={suggesting || ai.reachable === false}
+                onClick={async () => {
+                  setSuggesting(true);
+                  setSuggestError(null);
+                  try {
+                    const response = await authFetch("/api/admin/costing/recipe-suggest", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ name: productName, description: productDescription }),
+                    });
+                    const data = (await response.json()) as { suggestions?: RecipeIngredientSuggestion[]; error?: string };
+                    if (!response.ok) {
+                      setSuggestError(data.error === "ai-not-configured" ? t("admin.inventory.smart.notConfigured") : t("admin.inventory.smart.unavailable"));
+                      return;
+                    }
+                    setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+                  } catch {
+                    setSuggestError(t("admin.inventory.smart.unavailable"));
+                  } finally {
+                    setSuggesting(false);
+                  }
+                }}
+              >
+                {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.recipeSuggest")}
+              </Button>
+            )}
+            {ai && !ai.configured && (
+              <p className="self-center text-xs text-coffee/50">{t("admin.inventory.smart.notConfigured")}</p>
+            )}
             <Button
               type="button"
               variant="ghost"
@@ -332,6 +375,64 @@ export function RecipeEditorModal({
               {t("admin.costing.createNewIngredient")}
             </Button>
           </div>
+          {suggestError && <p className="text-sm text-red-600">{suggestError}</p>}
+          {suggestions.length > 0 && (
+            <div className="rounded-2xl bg-beige/40 p-3 text-sm">
+              <p className="mb-2 text-xs font-semibold">{t("admin.inventory.smart.recipeReview")}</p>
+              <p className="mb-3 text-xs text-coffee/55">{t("admin.inventory.smart.recipeHint")}</p>
+              <div className="space-y-2">
+                {suggestions.map((item, index) => (
+                  <div key={`${item.name}-${index}`} className="rounded-xl bg-warm-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-medium">✓ {item.name}</p>
+                      <span className={item.needsReview || item.matchKind === "missing" ? "text-xs text-amber-700" : "text-xs text-emerald-700"}>
+                        {item.matchKind === "missing"
+                          ? t("admin.inventory.smart.missingInventory")
+                          : `${t("admin.inventory.smart.suggestedMatch")}: ${item.productName ?? "—"}`}
+                        {item.matchConfidence != null ? ` · ${Math.round(item.matchConfidence * 100)}%` : ""}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-coffee/55">
+                      {t("admin.costing.quantity")}: — · {t("admin.costing.recipeUnit")}: {item.purchaseUnit ?? "—"}
+                      {item.costPerBaseUnit != null ? ` · ${t("admin.costing.ingredientCost")}: ${formatIls(item.costPerBaseUnit, 4)}` : ""}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {item.productId && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            const ingredient = activeIngredients.find((row) => row.id === item.productId);
+                            const line = emptyLine(ingredient);
+                            setLines((current) => [...current, line]);
+                            setFocusKey(line.key);
+                            setSuggestions((current) => current.filter((_, i) => i !== index));
+                          }}
+                        >
+                          {t("admin.inventory.smart.confirmMatch")}
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          const line = emptyLine();
+                          setLines((current) => [...current, line]);
+                          openCreate(line.key, item.name);
+                          setSuggestions((current) => current.filter((_, i) => i !== index));
+                        }}
+                      >
+                        {item.matchKind === "missing" ? t("admin.inventory.createProduct") : t("admin.inventory.smart.chooseOther")}
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={() => setSuggestions((current) => current.filter((_, i) => i !== index))}>
+                        {t("admin.costing.deleteLine")}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="rounded-2xl bg-beige/30 px-4 py-3 text-sm font-semibold">
             {t("admin.costing.rawTotal")}: {formatIls(total)}

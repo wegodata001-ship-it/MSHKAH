@@ -32,6 +32,7 @@ export const COLLECTIONS = {
   suppliers: "suppliers",
   supplierOffers: "supplierOffers",
   purchaseInvoices: "purchaseInvoices",
+  supplierItemMaps: "supplierItemMaps",
   purchasePriceRecords: "purchasePriceRecords",
   inventoryMovements: "inventoryMovements",
   posImports: "posImports",
