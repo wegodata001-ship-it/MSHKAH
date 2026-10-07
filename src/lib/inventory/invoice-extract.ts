@@ -35,6 +35,9 @@ export type ExtractedInvoice = {
   invoiceDate: ExtractedField<string | null>;
   currency: ExtractedField<string | null>;
   documentType: ExtractedField<PurchaseDocumentType | null>;
+  paymentMethod: ExtractedField<string | null>;
+  headerDiscount: ExtractedField<number | null>;
+  vatRate: ExtractedField<number | null>;
   subtotal: ExtractedField<number | null>;
   vatTotal: ExtractedField<number | null>;
   grandTotal: ExtractedField<number | null>;

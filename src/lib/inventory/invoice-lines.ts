@@ -35,26 +35,48 @@ export function lineNetAmount(line: Pick<PurchaseInvoiceLine, "quantity" | "unit
 
 export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
   const amount = lineNetAmount(line);
+  const rate = line.vatRate ?? vatRate;
+  const vatType = (line.vatType || line.vatMode || "inclusive") as VatType;
   const vat = splitVat({
     amount,
-    vatType: (line.vatType || "inclusive") as VatType,
-    vatRate: line.vatRate || vatRate,
+    vatType,
+    vatRate: rate,
   });
+  const qty = Number(line.quantity);
+  const hasQty = Number.isFinite(qty) && qty > 0;
   return {
     ...line,
+    vatType,
+    vatMode: vatType,
+    vatRate: rate,
     lineTotal: amount,
     ...vat,
+    netAmount: vat.priceBeforeVat,
+    grossAmount: vat.priceIncludingVat,
+    unitPriceNet: hasQty ? vat.priceBeforeVat / qty : null,
+    unitPriceGross: hasQty ? vat.priceIncludingVat / qty : null,
+  };
+}
+
+export function invoiceFinanceTotals(lines: PurchaseInvoiceLine[], vatRate = DEFAULT_VAT_RATE) {
+  const finalized = lines.map((line) => finalizeInvoiceLine(line, vatRate));
+  const usable = finalized.filter((line) => lineNetAmount(line) > 0);
+  return {
+    lines: finalized,
+    net: usable.reduce((sum, line) => sum + (line.netAmount ?? line.priceBeforeVat ?? 0), 0),
+    vat: usable.reduce((sum, line) => sum + (line.vatAmount ?? 0), 0),
+    gross: usable.reduce((sum, line) => sum + (line.grossAmount ?? line.priceIncludingVat ?? 0), 0),
+    itemCount: usable.length,
   };
 }
 
 export function invoiceSummary(lines: PurchaseInvoiceLine[], vatRate = DEFAULT_VAT_RATE) {
-  const finalized = lines.map((line) => finalizeInvoiceLine(line, vatRate));
-  const usable = finalized.filter((line) => line.productId && lineNetAmount(line) > 0);
+  const totals = invoiceFinanceTotals(lines, vatRate);
   return {
-    lines: finalized,
-    beforeVat: usable.reduce((sum, line) => sum + (line.priceBeforeVat ?? 0), 0),
-    vat: usable.reduce((sum, line) => sum + (line.vatAmount ?? 0), 0),
-    includingVat: usable.reduce((sum, line) => sum + (line.priceIncludingVat ?? 0), 0),
-    itemCount: usable.length,
+    lines: totals.lines,
+    beforeVat: totals.net,
+    vat: totals.vat,
+    includingVat: totals.gross,
+    itemCount: totals.itemCount,
   };
 }

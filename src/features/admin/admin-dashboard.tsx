@@ -37,6 +37,7 @@ import { AdminCard } from "./components/admin-card";
 import { AdminEmptyState } from "./components/admin-empty-state";
 import { QrLinksGrid } from "./qr-links-admin";
 import { DashboardReportsWidget } from "@/features/admin/reports/dashboard-reports-widget";
+import { FinanceDashboardWidget } from "@/features/admin/finance-dashboard-widget";
 import { isActiveOrder } from "@/lib/orders/status";
 import { isJerusalemToday } from "@/lib/orders/time";
 import type { OrderStatus } from "@/types";
@@ -173,6 +174,8 @@ export function AdminDashboard() {
           <AdminKpiCard key={card.label} {...card} loading={loading} index={i} />
         ))}
       </div>
+
+      <FinanceDashboardWidget />
 
       <DashboardReportsWidget />
 

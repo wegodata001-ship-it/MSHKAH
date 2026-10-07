@@ -99,7 +99,7 @@ import type {
   SupplierOffer,
 } from "@/lib/inventory/types";
 
-type Hub = "inventory" | "purchase" | "suppliers" | "compare" | "invoices" | "costing" | "pos";
+type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
 type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
@@ -110,8 +110,8 @@ export function CostingAdmin() {
   const { products, loading: productsLoading } = useProducts(undefined, { admin: true });
   const { categories } = useAllCategories();
 
-  const [hub, setHub] = useState<Hub>("inventory");
-  const [tab, setTab] = useState<Tab>("products");
+  const [hub, setHub] = useState<Hub>("finance");
+  const [tab, setTab] = useState<Tab>("invoices");
   const [ingredients, setIngredients] = useState<CostingIngredient[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [offers, setOffers] = useState<SupplierOffer[]>([]);
@@ -141,6 +141,14 @@ export function CostingAdmin() {
   const [importOpen, setImportOpen] = useState(false);
   const [productGroups, setProductGroups] = useState<ProductModifierGroup[]>([]);
   const authFetch = useAuthFetch();
+
+  useEffect(() => {
+    const hubParam = new URLSearchParams(window.location.search).get("hub");
+    if (hubParam === "finance") {
+      setHub("finance");
+      setTab("invoices");
+    }
+  }, []);
 
   const toast = (message: string, variant: AdminToast["variant"] = "success") =>
     setToasts((current) => [...current, createToast(message, variant)]);
@@ -372,6 +380,11 @@ export function CostingAdmin() {
 
   const hubs: { id: Hub; label: string; tabs: { id: Tab; label: string }[] }[] = [
     {
+      id: "finance",
+      label: t("admin.finance.hub"),
+      tabs: [{ id: "invoices", label: t("admin.finance.purchases") }],
+    },
+    {
       id: "inventory",
       label: t("admin.inventory.hub"),
       tabs: [
@@ -379,11 +392,6 @@ export function CostingAdmin() {
         { id: "ledger", label: t("admin.inventory.tab.ledger") },
         { id: "alerts", label: t("admin.inventory.tab.alerts") },
       ],
-    },
-    {
-      id: "purchase",
-      label: t("admin.inventory.purchaseHub"),
-      tabs: [{ id: "invoices", label: t("admin.inventory.tab.invoices") }],
     },
     {
       id: "suppliers",
@@ -394,11 +402,6 @@ export function CostingAdmin() {
       id: "compare",
       label: t("admin.inventory.tab.compare"),
       tabs: [{ id: "compare", label: t("admin.inventory.tab.compare") }],
-    },
-    {
-      id: "invoices",
-      label: t("admin.inventory.tab.invoices"),
-      tabs: [{ id: "invoices", label: t("admin.inventory.tab.invoices") }],
     },
     {
       id: "costing",

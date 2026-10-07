@@ -12,6 +12,10 @@ import { posDelta, posPeriod, theoreticalConsumption } from "@/lib/inventory/pos
 import { hashPosFile } from "@/lib/inventory/pos-parse";
 import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
 import { findDuplicateInvoice, matchInventoryProduct, matchSupplier } from "@/lib/inventory/invoice-smart-match";
+import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
+import { cheapestLastPurchase, offerNormalizedNet } from "@/lib/inventory/stock";
+import { canTransferStock, invoiceMismatch, invoiceStockStatus, transferableLines } from "@/lib/inventory/invoice-finance";
+import type { PurchaseInvoice } from "@/lib/inventory/types";
 import { buildRecipeSuggestions, matchRecipeSuggestion } from "@/lib/ai/gemini-recipe";
 import { parseInvoiceExtraction } from "@/lib/ai/gemini-invoice";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
@@ -248,5 +252,85 @@ describe("manual supplier invoice", () => {
     const summary = invoiceSummary([emptyInvoiceLine(0.18)], 0.18);
     expect(summary.itemCount).toBe(0);
     expect(summary.includingVat).toBe(0);
+  });
+});
+
+describe("finance-first invoices", () => {
+  it("sums every priced line including non-inventory services", () => {
+    const pasta = finalizeInvoiceLine({
+      ...emptyInvoiceLine(0.18),
+      rawName: "Pasta",
+      productId: "pasta",
+      quantity: 10,
+      unit: "kg",
+      unitPrice: 5,
+      vatType: "exclusive",
+    }, 0.18);
+    const shipping = finalizeInvoiceLine({
+      ...emptyInvoiceLine(0.18),
+      rawName: "Delivery",
+      quantity: 1,
+      unit: "unit",
+      unitPrice: 10,
+      vatType: "exclusive",
+    }, 0.18);
+    const totals = invoiceFinanceTotals([pasta, shipping], 0.18);
+    expect(totals.net).toBeCloseTo(60);
+    expect(totals.vat).toBeCloseTo(10.8);
+    expect(totals.gross).toBeCloseTo(70.8);
+    expect(totals.itemCount).toBe(2);
+  });
+
+  it("flags header vs line mismatches and keeps finance save off stock", () => {
+    const line = finalizeInvoiceLine({
+      ...emptyInvoiceLine(0.18),
+      rawName: "Pasta",
+      quantity: 10,
+      unit: "kg",
+      unitPrice: 5,
+      vatType: "exclusive",
+    }, 0.18);
+    const invoice: PurchaseInvoice = {
+      id: "inv-1",
+      supplierName: "A",
+      invoiceNumber: "100",
+      invoiceDate: "2026-10-07",
+      receivedAt: "2026-10-07",
+      status: "saved",
+      stockStatus: "none",
+      netAmount: 100,
+      vatAmount: 18,
+      grossAmount: 118,
+      lines: [line],
+      createdAt: "",
+    };
+    const mismatch = invoiceMismatch(invoice);
+    expect(mismatch.hasMismatch).toBe(true);
+    expect(invoiceStockStatus(invoice)).toBe("none");
+    expect(canTransferStock(invoice)).toBe(true);
+    expect(transferableLines([{ ...line, productId: "pasta", skipInventory: true }])).toHaveLength(0);
+    expect(transferableLines([{ ...line, productId: "pasta", transferToInventory: true }])).toHaveLength(1);
+  });
+
+  it("compares last purchase net prices across suppliers", () => {
+    const cheap = cheapestLastPurchase(
+      [
+        { id: "a", productId: "pasta", supplierId: "A", lastPriceBeforeVat: 25, lastPackageQuantity: 5, lastUnit: "kg", lastPurchaseDate: "2026-10-07", createdAt: "", updatedAt: "" },
+        { id: "b", productId: "pasta", supplierId: "B", lastPriceBeforeVat: 16.5, lastPackageQuantity: 3, lastUnit: "kg", lastPurchaseDate: "2026-10-02", createdAt: "", updatedAt: "" },
+      ],
+      "net",
+      "g"
+    );
+    expect(cheap?.supplierId).toBe("A");
+    expect(offerNormalizedNet({
+      id: "a",
+      productId: "pasta",
+      supplierId: "A",
+      lastPriceBeforeVat: 25,
+      lastPackageQuantity: 5,
+      lastUnit: "kg",
+      createdAt: "",
+      updatedAt: "",
+    })).toBeCloseTo(0.005);
   });
 });

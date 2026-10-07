@@ -81,6 +81,43 @@ export function cheapestOffer(offers: SupplierOffer[], productBase?: BaseUnit): 
     .sort((a, b) => (offerNormalizedCost(a) ?? Infinity) - (offerNormalizedCost(b) ?? Infinity))[0];
 }
 
+export function offerNormalizedNet(offer: SupplierOffer): number | undefined {
+  const qty = offer.lastPackageQuantity ?? offer.packageQuantity;
+  const unit = offer.lastUnit ?? offer.purchaseUnit;
+  if (offer.lastPriceBeforeVat != null && qty && unit) return unitCostFromPackage(offer.lastPriceBeforeVat, qty, unit);
+  const gross = offerNormalizedLastPurchase(offer);
+  if (gross == null) return undefined;
+  const rate = offer.vatRate ?? 0.18;
+  if (offer.vatType === "exempt" || rate <= 0) return gross;
+  return gross / (1 + (rate > 1 ? rate / 100 : rate));
+}
+
+export function offerNormalizedLastPurchase(offer: SupplierOffer): number | undefined {
+  const qty = offer.lastPackageQuantity ?? offer.packageQuantity;
+  const unit = offer.lastUnit ?? offer.purchaseUnit;
+  if (offer.lastPriceIncludingVat != null && qty && unit) return unitCostFromPackage(offer.lastPriceIncludingVat, qty, unit);
+  return offer.lastPurchasePrice ?? offer.lastUnitCost ?? undefined;
+}
+
+export function cheapestLastPurchase(
+  offers: SupplierOffer[],
+  mode: "net" | "gross" = "net",
+  productBase?: BaseUnit
+): SupplierOffer | undefined {
+  const rows = offers.filter((offer) => {
+    if (offer.active === false) return false;
+    if ((mode === "net" ? offerNormalizedNet(offer) : offerNormalizedLastPurchase(offer)) == null) return false;
+    const unit = offerPurchaseUnit(offer);
+    if (productBase && unit && baseUnitFor(unit) !== productBase) return false;
+    return true;
+  });
+  return rows.slice().sort((a, b) => {
+    const left = (mode === "net" ? offerNormalizedNet(a) : offerNormalizedLastPurchase(a)) ?? Infinity;
+    const right = (mode === "net" ? offerNormalizedNet(b) : offerNormalizedLastPurchase(b)) ?? Infinity;
+    return left - right;
+  })[0];
+}
+
 export function latestPurchase(records: PurchasePriceRecord[], productId: string): PurchasePriceRecord | undefined {
   return records
     .filter((row) => row.productId === productId)

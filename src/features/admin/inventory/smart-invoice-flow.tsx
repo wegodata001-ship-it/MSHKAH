@@ -16,7 +16,9 @@ import { INVOICE_UNITS, finalizeInvoiceLine, invoiceSummary } from "@/lib/invent
 import { needsReview } from "@/lib/inventory/invoice-extract";
 import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
-import { approvePurchaseInvoice, savePurchaseInvoiceDraft, saveSupplier } from "@/services/inventoryService";
+import { saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplier } from "@/services/inventoryService";
+import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
+import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { uploadImageWithProgress } from "@/services/storageService";
 import { STORAGE_PATHS } from "@/lib/firebase/collections";
 import { cn } from "@/lib/utils";
@@ -78,6 +80,8 @@ export function SmartInvoiceFlow({
   const [saving, setSaving] = useState(false);
   const [createKey, setCreateKey] = useState<string | null>(null);
   const [createSupplier, setCreateSupplier] = useState(false);
+  const [askStock, setAskStock] = useState(false);
+  const [transfer, setTransfer] = useState(false);
 
   const summary = useMemo(() => (invoice ? invoiceSummary(invoice.lines, vatRate) : null), [invoice, vatRate]);
 
@@ -202,8 +206,21 @@ export function SmartInvoiceFlow({
     );
   }
 
-  const locked = invoice.status === "approved";
-  const canApprove = Boolean(invoice.supplierId) && Boolean(invoice.invoiceDate) && (summary?.itemCount ?? 0) > 0 && !invoice.duplicateOf && !locked;
+  if (transfer && invoice) {
+    return (
+      <InvoiceStockTransfer
+        invoice={invoice}
+        ingredients={ingredients}
+        suppliers={suppliers}
+        onToast={onToast}
+        onClose={onClose}
+      />
+    );
+  }
+
+  const locked = invoice.status === "saved" || invoice.status === "approved";
+  const mismatch = invoiceMismatch(invoice);
+  const canSave = Boolean(invoice.invoiceDate) && !invoice.duplicateOf && !locked;
 
   return (
     <div className="space-y-4">
@@ -249,10 +266,24 @@ export function SmartInvoiceFlow({
             <Field label={`${t("admin.inventory.invoiceDate")} *`}>
               <Input type="date" value={invoice.invoiceDate} disabled={locked} onChange={(e) => update({ invoiceDate: e.target.value })} />
             </Field>
-            <p className="text-sm">
-              {t("admin.inventory.vat")}: {invoice.vatStatus === "detected" ? t("admin.inventory.smart.vatDetected") : t("admin.inventory.smart.vatReview")}
-              {invoice.grandTotal != null ? ` · ${t("admin.inventory.invoiceTotal")}: ${formatIls(invoice.grandTotal)}` : ""}
-            </p>
+            <Field label={t("admin.finance.receivedAt")}>
+              <Input type="date" value={invoice.receivedAt} disabled={locked} onChange={(e) => update({ receivedAt: e.target.value })} />
+            </Field>
+            <Field label={t("admin.finance.currency")}>
+              <Input value={invoice.currency ?? ""} disabled={locked} onChange={(e) => update({ currency: e.target.value || undefined })} />
+            </Field>
+            <Field label={t("admin.finance.paymentMethod")}>
+              <Input value={invoice.paymentMethod ?? ""} disabled={locked} onChange={(e) => update({ paymentMethod: e.target.value || null })} />
+            </Field>
+            <Field label={t("admin.finance.netTotal")}>
+              <Input type="number" value={invoice.netAmount ?? invoice.subtotal ?? ""} disabled={locked} onChange={(e) => update({ netAmount: e.target.value ? Number(e.target.value) : null, subtotal: e.target.value ? Number(e.target.value) : null })} />
+            </Field>
+            <Field label={t("admin.finance.vatTotal")}>
+              <Input type="number" value={invoice.vatAmount ?? invoice.vatTotal ?? ""} disabled={locked} onChange={(e) => update({ vatAmount: e.target.value ? Number(e.target.value) : null, vatTotal: e.target.value ? Number(e.target.value) : null })} />
+            </Field>
+            <Field label={t("admin.finance.grossTotal")}>
+              <Input type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value ? Number(e.target.value) : null, grandTotal: e.target.value ? Number(e.target.value) : null })} />
+            </Field>
           </div>
         </div>
       </AdminCard>
@@ -312,7 +343,23 @@ export function SmartInvoiceFlow({
                   ))}
                 </select>
                 <Input type="number" min="0" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => updateLine(line.key, { unitPrice: e.target.value ? Number(e.target.value) : null })} />
+                <select className="h-10 rounded-xl border px-2 text-sm" value={line.vatType} disabled={locked} onChange={(e) => updateLine(line.key, { vatType: e.target.value as PurchaseInvoiceLine["vatType"] })}>
+                  <option value="inclusive">{t("admin.inventory.vatInclusive")}</option>
+                  <option value="exclusive">{t("admin.inventory.vatExclusive")}</option>
+                  <option value="exempt">{t("admin.inventory.vatExempt")}</option>
+                </select>
               </div>
+              <p className="mt-2 text-xs text-coffee/65">
+                {t("admin.finance.unitNet")}: {line.unitPriceNet != null ? formatIls(line.unitPriceNet, 4) : "—"}
+                {" · "}
+                {t("admin.finance.unitGross")}: {line.unitPriceGross != null ? formatIls(line.unitPriceGross, 4) : "—"}
+                {" · "}
+                {t("admin.finance.lineNet")}: {formatIls(line.netAmount ?? 0)}
+                {" · "}
+                {t("admin.inventory.vat")}: {formatIls(line.vatAmount ?? 0)}
+                {" · "}
+                {t("admin.finance.lineGross")}: {formatIls(line.grossAmount ?? 0)}
+              </p>
               <div className="mt-2 flex flex-wrap gap-3 text-xs text-coffee/65">
                 {line.newNormalized != null && <span>{t("admin.inventory.normalizedPrice")}: {formatIls(line.newNormalized, 4)}</span>}
                 {line.previousNormalized != null && line.newNormalized != null && (
@@ -334,11 +381,17 @@ export function SmartInvoiceFlow({
         </div>
         {summary && (
           <div className="mt-4 grid gap-1 rounded-2xl bg-beige/40 p-3 text-sm sm:grid-cols-2">
-            <p>{t("admin.inventory.costBeforeVat")}: {formatIls(summary.beforeVat)}</p>
-            <p>{t("admin.inventory.vat")}: {formatIls(summary.vat)}</p>
-            <p className="font-semibold">{t("admin.inventory.invoiceTotal")}: {formatIls(summary.includingVat)}</p>
+            <p>{t("admin.finance.linesNet")}: {formatIls(summary.beforeVat)}</p>
+            <p>{t("admin.finance.linesVat")}: {formatIls(summary.vat)}</p>
+            <p className="font-semibold">{t("admin.finance.linesGross")}: {formatIls(summary.includingVat)}</p>
             <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
           </div>
+        )}
+        {mismatch.hasMismatch && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {t("admin.finance.mismatch")}
+            {mismatch.netDiff != null ? ` · ${t("admin.finance.netTotal")}: ${formatIls(mismatch.lineNet)} / ${formatIls(mismatch.headerNet ?? 0)} (${formatIls(mismatch.netDiff)})` : ""}
+          </p>
         )}
       </AdminCard>
 
@@ -348,9 +401,9 @@ export function SmartInvoiceFlow({
         <Button
           type="button"
           variant="turquoise"
-          disabled={saving || !canApprove}
+          disabled={saving || !canSave}
           onClick={async () => {
-            if (!invoice || saving || !canApprove) return;
+            if (!invoice || saving || !canSave) return;
             setSaving(true);
             let fileUrl = invoice.fileUrl;
             if (file && !fileUrl) {
@@ -368,7 +421,7 @@ export function SmartInvoiceFlow({
               onToast(t("admin.costing.saveFailed"), "error");
               return;
             }
-            const result = await approvePurchaseInvoice({
+            const result = await saveFinanceInvoice({
               ...invoice,
               id: draft.data,
               fileUrl,
@@ -377,16 +430,35 @@ export function SmartInvoiceFlow({
             });
             setSaving(false);
             if (!result.success) {
-              onToast(result.error, "error");
+              onToast(result.error === "DUPLICATE_INVOICE" ? t("admin.inventory.smart.duplicate") : result.error, "error");
               return;
             }
-            onToast(t("admin.inventory.invoiceApproved"));
-            onClose();
+            setInvoice({ ...invoice, id: result.data, fileUrl, status: "saved", stockStatus: "none" });
+            setAskStock(true);
+            onToast(t("admin.finance.saved"));
           }}
         >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.approveReceipt")}
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.finance.saveFinance")}
         </Button>
       </div>
+      {askStock && invoice && (
+        <AdminCard title={t("admin.finance.savedTitle")}>
+          <p className="text-sm">
+            {t("admin.finance.grossTotal")}: {formatIls(headerGross(invoice) ?? summary?.includingVat ?? 0)}
+            {" · "}
+            {t("admin.costing.supplier")}: {invoice.supplierName || "—"}
+            {" · "}
+            {t("admin.inventory.summaryItems")}: {invoice.lines.length}
+          </p>
+          <p className="mt-2 font-medium">{t("admin.finance.askStock")}</p>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>{t("admin.finance.notNow")}</Button>
+            <Button type="button" variant="turquoise" onClick={() => { setAskStock(false); setTransfer(true); }}>
+              {t("admin.finance.transferNow")}
+            </Button>
+          </div>
+        </AdminCard>
+      )}
 
       <QuickCreateIngredientPanel
         open={createKey != null}

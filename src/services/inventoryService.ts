@@ -6,7 +6,6 @@ import {
   getDocs,
   onSnapshot,
   query,
-  runTransaction,
   updateDoc,
   where,
   type Unsubscribe,
@@ -20,8 +19,10 @@ import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { costPerBaseUnit } from "@/lib/costing/units";
 import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
 import { splitVat } from "@/lib/inventory/vat";
-import { unitCostFromPackage } from "@/lib/inventory/stock";
+import { currentStockBase, unitCostFromPackage } from "@/lib/inventory/stock";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
+import { findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
+import { invoiceStockStatus, syncInvoiceTotals, transferableLines } from "@/lib/inventory/invoice-finance";
 import type {
   InventoryMovement,
   PosImport,
@@ -165,11 +166,19 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           receivedAt: String(data.receivedAt ?? ""),
           documentType: data.documentType || "invoice",
           currency: data.currency ? String(data.currency) : undefined,
+          paymentMethod: data.paymentMethod ? String(data.paymentMethod) : undefined,
+          headerDiscount: data.headerDiscount != null ? asNumber(data.headerDiscount) : undefined,
+          vatRate: data.vatRate != null ? asNumber(data.vatRate) : undefined,
+          vatMode: data.vatMode === "inclusive" || data.vatMode === "exclusive" || data.vatMode === "exempt" ? data.vatMode : undefined,
+          netAmount: data.netAmount != null ? asNumber(data.netAmount) : data.subtotal != null ? asNumber(data.subtotal) : undefined,
+          vatAmount: data.vatAmount != null ? asNumber(data.vatAmount) : data.vatTotal != null ? asNumber(data.vatTotal) : undefined,
+          grossAmount: data.grossAmount != null ? asNumber(data.grossAmount) : data.grandTotal != null ? asNumber(data.grandTotal) : undefined,
           subtotal: data.subtotal != null ? asNumber(data.subtotal) : undefined,
           vatTotal: data.vatTotal != null ? asNumber(data.vatTotal) : undefined,
           grandTotal: data.grandTotal != null ? asNumber(data.grandTotal) : undefined,
           vatStatus: data.vatStatus === "detected" || data.vatStatus === "needs_review" ? data.vatStatus : undefined,
           status: (data.status as PurchaseInvoice["status"]) || "draft",
+          stockStatus: data.stockStatus === "partial" || data.stockStatus === "posted" || data.stockStatus === "none" ? data.stockStatus : undefined,
           lines: Array.isArray(data.lines) ? data.lines : [],
           fileName: data.fileName ? String(data.fileName) : undefined,
           fileUrl: data.fileUrl ? String(data.fileUrl) : undefined,
@@ -482,7 +491,9 @@ export async function savePurchaseInvoiceDraft(
     const now = nowTimestamp();
     const payload = sanitizeFirestoreData({
       ...invoice,
-      status: invoice.status && invoice.status !== "approved" ? invoice.status : "draft",
+      status: invoice.status === "saved" || invoice.status === "needs_review" || invoice.status === "rejected" || invoice.status === "draft"
+        ? invoice.status
+        : "draft",
       updatedAt: now,
     });
     if (invoice.id) {
@@ -496,136 +507,205 @@ export async function savePurchaseInvoiceDraft(
   }
 }
 
-export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<ServiceResult<void>> {
+export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<ServiceResult<string>> {
   try {
-    if (!invoice.id) return failure(new Error("Invoice required"), "Invoice required");
-    if (invoice.status === "approved") return success(undefined);
-    const db = getDb();
-    const invoiceRef = doc(db, COLLECTIONS.purchaseInvoices, invoice.id);
-    try {
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(invoiceRef);
-        const status = snap.exists() ? String(snap.data()?.status ?? "draft") : "draft";
-        if (status === "approved" || status === "approving") {
-          throw new Error("ALREADY_APPROVED");
-        }
-        tx.set(
-          invoiceRef,
-          sanitizeFirestoreData({
-            ...invoice,
-            status: "approving",
-            updatedAt: nowTimestamp(),
-          }),
-          { merge: true }
-        );
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "ALREADY_APPROVED") return success(undefined);
-      throw error;
-    }
-
-    const existingMoves = await getDocs(
-      query(collection(db, COLLECTIONS.inventoryMovements), where("invoiceId", "==", invoice.id))
+    const synced = syncInvoiceTotals(invoice);
+    const existingSnap = await getDocs(collection(getDb(), COLLECTIONS.purchaseInvoices));
+    const existing = existingSnap.docs.map((item) => ({ id: item.id, ...item.data() }) as PurchaseInvoice);
+    const duplicateOf = findDuplicateInvoice(
+      existing.filter((item) => item.id !== synced.id),
+      synced
     );
-    if (!existingMoves.empty) {
-      await updateDoc(invoiceRef, { status: "approved", approvedAt: nowTimestamp() });
-      return success(undefined);
-    }
+    if (duplicateOf) return failure(new Error("DUPLICATE_INVOICE"), "DUPLICATE_INVOICE");
 
     const now = nowTimestamp();
-    for (const line of invoice.lines) {
+    const payload = sanitizeFirestoreData({
+      ...synced,
+      status: "saved",
+      stockStatus: invoiceStockStatus(synced) === "none" ? "none" : invoiceStockStatus(synced),
+      approvedAt: now,
+      approvedBy: synced.approvedBy || null,
+      audit: [...(synced.audit ?? []), { at: new Date().toISOString(), actor: synced.approvedBy, action: "finance-save" }],
+      updatedAt: now,
+    });
+    let id = synced.id;
+    if (id) await updateDoc(doc(getDb(), COLLECTIONS.purchaseInvoices, id), payload);
+    else {
+      const ref = await addDoc(collection(getDb(), COLLECTIONS.purchaseInvoices), { ...payload, createdAt: now });
+      id = ref.id;
+    }
+
+    const existingRecords = await getDocs(
+      query(collection(getDb(), COLLECTIONS.purchasePriceRecords), where("invoiceId", "==", id))
+    );
+    const recordedKeys = new Set(existingRecords.docs.map((item) => String(item.data().invoiceLineKey || "")));
+    for (const line of synced.lines) {
       if (!line.productId || !line.quantity || !line.unit) continue;
-      const vat = splitVat({
-        amount: line.lineTotal ?? line.priceIncludingVat ?? 0,
-        vatType: line.vatType,
-        vatRate: line.vatRate,
-      });
-      const unitCost = unitCostFromPackage(vat.priceIncludingVat, line.quantity, line.unit);
+      if (recordedKeys.has(line.key)) continue;
+      const net = line.netAmount ?? line.priceBeforeVat ?? 0;
+      const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
       await addDoc(
         collection(getDb(), COLLECTIONS.purchasePriceRecords),
         sanitizeFirestoreData({
           productId: line.productId,
-          supplierId: invoice.supplierId || null,
-          invoiceId: invoice.id,
-          purchaseDate: invoice.invoiceDate,
+          supplierId: synced.supplierId || null,
+          invoiceId: id,
+          invoiceLineKey: line.key,
+          purchaseDate: synced.invoiceDate,
           quantity: line.quantity,
           packageQuantity: line.quantity,
           unit: line.unit,
-          ...vat,
+          priceBeforeVat: net,
+          vatAmount: line.vatAmount ?? 0,
+          priceIncludingVat: gross,
           vatType: line.vatType,
           vatRate: line.vatRate,
-          unitCost,
+          unitCost: unitCostFromPackage(net || gross, line.quantity, line.unit),
           source: "PURCHASE_INVOICE",
           createdAt: now,
         })
       );
+      if (synced.supplierId) {
+        await recordSupplierPurchase({
+          productId: line.productId,
+          supplierId: synced.supplierId,
+          priceIncludingVat: gross,
+          priceBeforeVat: net,
+          packageQuantity: line.quantity,
+          purchaseUnit: line.unit,
+          purchasedAt: synced.receivedAt || synced.invoiceDate,
+          vatType: line.vatType,
+          vatRate: line.vatRate,
+        });
+        if (line.rawName) {
+          await saveSupplierItemMap({
+            supplierId: synced.supplierId,
+            supplierProductName: line.rawName,
+            supplierSku: line.sku,
+            inventoryProductId: line.productId,
+            conversion: line.conversionFactor ?? undefined,
+          });
+        }
+      }
+    }
+    return success(id);
+  } catch (error) {
+    return failure(error, "Failed to save finance invoice");
+  }
+}
+
+export async function transferInvoiceLinesToStock(
+  invoice: PurchaseInvoice,
+  lineKeys?: string[]
+): Promise<ServiceResult<void>> {
+  try {
+    if (!invoice.id) return failure(new Error("Invoice required"), "Invoice required");
+    let current = invoice;
+    if (current.status !== "saved" && current.status !== "approved") {
+      const saved = await saveFinanceInvoice(current);
+      if (!saved.success) return failure(new Error(saved.error), saved.error);
+      current = { ...current, id: saved.data, status: "saved" };
+    }
+    const selected = (lineKeys?.length ? current.lines.filter((line) => lineKeys.includes(line.key)) : transferableLines(current.lines)).filter(
+      (line) => !line.postedToStock && !line.skipInventory && line.productId && line.quantity && line.unit
+    );
+    if (!selected.length) return failure(new Error("NO_STOCK_LINES"), "NO_STOCK_LINES");
+
+    const db = getDb();
+    const existingMoves = await getDocs(
+      query(collection(db, COLLECTIONS.inventoryMovements), where("invoiceId", "==", current.id))
+    );
+    const postedKeys = new Set(
+      existingMoves.docs.map((item) => String(item.data().invoiceLineKey || "")).filter(Boolean)
+    );
+    const now = nowTimestamp();
+    const nextLines = current.lines.map((line) => ({ ...line }));
+
+    for (const line of selected) {
+      if (postedKeys.has(line.key) || existingMoves.docs.some((item) => item.data().invoiceLineKey === line.key)) {
+        const idx = nextLines.findIndex((item) => item.key === line.key);
+        if (idx >= 0) nextLines[idx] = { ...nextLines[idx], postedToStock: true };
+        continue;
+      }
+      const productMoves = await getDocs(
+        query(collection(db, COLLECTIONS.inventoryMovements), where("productId", "==", line.productId))
+      );
+      const before = currentStockBase(
+        productMoves.docs.map((item) => ({ id: item.id, ...item.data() }) as InventoryMovement),
+        line.productId!
+      );
+      const qtyBase = purchaseQuantityInBase(line.quantity!, line.unit!);
+      const net = line.netAmount ?? line.priceBeforeVat ?? 0;
+      const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
       await addDoc(
-        collection(getDb(), COLLECTIONS.inventoryMovements),
+        collection(db, COLLECTIONS.inventoryMovements),
         sanitizeFirestoreData({
           productId: line.productId,
           type: "PURCHASE_IN",
           quantity: line.quantity,
           unit: line.unit,
-          quantityBase: purchaseQuantityInBase(line.quantity, line.unit),
-          supplierId: invoice.supplierId || null,
-          invoiceId: invoice.id,
-          unitCost,
-          invoiceDate: invoice.invoiceDate,
-          receivedAt: invoice.receivedAt,
+          quantityBase: qtyBase,
+          supplierId: current.supplierId || null,
+          invoiceId: current.id,
+          invoiceLineKey: line.key,
+          unitCost: unitCostFromPackage(net || gross, line.quantity!, line.unit!),
+          unitCostNet: unitCostFromPackage(net || 0, line.quantity!, line.unit!),
+          unitCostGross: unitCostFromPackage(gross || 0, line.quantity!, line.unit!),
+          vatRate: line.vatRate,
+          quantityBefore: before,
+          quantityIn: qtyBase,
+          quantityAfter: before + qtyBase,
+          invoiceDate: current.invoiceDate,
+          receivedAt: current.receivedAt,
           createdAt: now,
         })
       );
-      if (invoice.supplierId) {
-        await recordSupplierPurchase({
-          productId: line.productId,
-          supplierId: invoice.supplierId,
-          priceIncludingVat: vat.priceIncludingVat,
-          priceBeforeVat: vat.priceBeforeVat,
-          packageQuantity: line.quantity,
-          purchaseUnit: line.unit,
-          purchasedAt: invoice.receivedAt || invoice.invoiceDate,
-          vatType: line.vatType,
-          vatRate: line.vatRate,
-        });
-      }
-      await updateDoc(doc(getDb(), COLLECTIONS.ingredients, line.productId), {
-        purchasePrice: vat.priceIncludingVat,
+      await updateDoc(doc(db, COLLECTIONS.ingredients, line.productId!), {
+        purchasePrice: gross || net,
         purchaseQuantity: line.quantity,
         purchaseUnit: line.unit,
-        costPerBaseUnit: costPerBaseUnit(vat.priceIncludingVat, line.quantity, line.unit),
-        lastSupplierId: invoice.supplierId || null,
-        lastReceivedAt: invoice.receivedAt,
+        costPerBaseUnit: costPerBaseUnit(net || gross, line.quantity!, line.unit!),
+        lastSupplierId: current.supplierId || null,
+        lastReceivedAt: current.receivedAt,
         updatedAt: now,
       });
-    }
-    if (invoice.supplierId) {
-      for (const line of invoice.lines) {
-        if (!line.productId || !line.rawName) continue;
-        await saveSupplierItemMap({
-          supplierId: invoice.supplierId,
-          supplierProductName: line.rawName,
-          supplierSku: line.sku,
-          inventoryProductId: line.productId,
-          conversion: line.conversionFactor ?? undefined,
-        });
+      const idx = nextLines.findIndex((item) => item.key === line.key);
+      if (idx >= 0) {
+        nextLines[idx] = {
+          ...nextLines[idx],
+          postedToStock: true,
+          quantityBefore: before,
+          quantityIn: qtyBase,
+          quantityAfter: before + qtyBase,
+        };
       }
     }
-    await updateDoc(doc(getDb(), COLLECTIONS.purchaseInvoices, invoice.id), {
-      status: "approved",
-      approvedAt: now,
-      approvedBy: invoice.approvedBy || null,
-      lines: invoice.lines,
-      supplierId: invoice.supplierId || null,
-      supplierName: invoice.supplierName,
+
+    const stockStatus = nextLines.some((line) => line.postedToStock)
+      ? nextLines.some((line) => !line.postedToStock && !line.skipInventory && line.productId)
+        ? "partial"
+        : "posted"
+      : "none";
+    await updateDoc(doc(db, COLLECTIONS.purchaseInvoices, current.id), {
+      status: "saved",
+      stockStatus,
+      lines: nextLines,
       audit: [
-        ...(invoice.audit ?? []),
-        { at: new Date().toISOString(), actor: invoice.approvedBy, action: "approve", detail: "posted-to-stock" },
+        ...(current.audit ?? []),
+        { at: new Date().toISOString(), actor: current.approvedBy, action: "stock-transfer", detail: stockStatus },
       ],
+      updatedAt: now,
     });
     return success(undefined);
   } catch (error) {
-    return failure(error, "Failed to approve invoice");
+    return failure(error, "Failed to transfer invoice to stock");
   }
+}
+
+export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<ServiceResult<void>> {
+  const saved = await saveFinanceInvoice(invoice);
+  if (!saved.success) return failure(new Error(saved.error), saved.error);
+  return success(undefined);
 }
 
 export async function savePosDraft(input: Omit<PosImport, "id" | "createdAt"> & { id?: string }): Promise<ServiceResult<string>> {

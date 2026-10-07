@@ -85,13 +85,21 @@ export type InventoryMovement = {
   posImportId?: string;
   orderId?: string;
   unitCost?: number;
+  unitCostNet?: number;
+  unitCostGross?: number;
+  vatRate?: number;
+  invoiceLineKey?: string;
+  quantityBefore?: number;
+  quantityIn?: number;
+  quantityAfter?: number;
   note?: string;
   invoiceDate?: string;
   receivedAt: string;
   createdAt: string;
 };
 
-export type PurchaseInvoiceStatus = "draft" | "needs_review" | "approving" | "approved" | "rejected";
+export type PurchaseInvoiceStatus = "draft" | "needs_review" | "saved" | "approving" | "approved" | "rejected";
+export type InvoiceStockStatus = "none" | "partial" | "posted";
 export type PurchaseDocumentType = "invoice" | "tax_invoice" | "receipt" | "tax_receipt" | "delivery" | "credit" | "other";
 export type InvoiceLineMatchKind = "exact" | "suggest" | "mapped" | "new" | "none";
 export type InvoiceRowStatus = "matched" | "review" | "new" | "unknown-unit" | "price-anomaly" | "unmapped";
@@ -143,6 +151,17 @@ export type PurchaseInvoiceLine = {
   priceChangePercent?: number | null;
   cheaperSupplierName?: string;
   cheaperSupplierPrice?: number | null;
+  unitPriceNet?: number | null;
+  unitPriceGross?: number | null;
+  netAmount?: number | null;
+  grossAmount?: number | null;
+  vatMode?: VatType;
+  transferToInventory?: boolean;
+  skipInventory?: boolean;
+  postedToStock?: boolean;
+  quantityBefore?: number | null;
+  quantityIn?: number | null;
+  quantityAfter?: number | null;
 };
 
 export type PurchaseInvoice = {
@@ -155,11 +174,19 @@ export type PurchaseInvoice = {
   receivedAt: string;
   documentType?: PurchaseDocumentType;
   currency?: string;
+  paymentMethod?: string | null;
+  headerDiscount?: number | null;
+  vatRate?: number | null;
+  vatMode?: VatType | null;
+  netAmount?: number | null;
+  vatAmount?: number | null;
+  grossAmount?: number | null;
   subtotal?: number | null;
   vatTotal?: number | null;
   grandTotal?: number | null;
   vatStatus?: InvoiceVatStatus;
   status: PurchaseInvoiceStatus;
+  stockStatus?: InvoiceStockStatus;
   lines: PurchaseInvoiceLine[];
   fileName?: string;
   fileUrl?: string;

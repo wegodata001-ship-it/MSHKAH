@@ -15,7 +15,9 @@ import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE } from "@/lib/inventory/vat";
 import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
 import type { PurchaseDocumentType, PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
-import { approvePurchaseInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
+import { saveFinanceInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
+import { invoiceMismatch } from "@/lib/inventory/invoice-finance";
+import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { uploadImageWithProgress } from "@/services/storageService";
 import { STORAGE_PATHS } from "@/lib/firebase/collections";
 
@@ -60,15 +62,14 @@ export function SupplierInvoiceForm({
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [createForKey, setCreateForKey] = useState<string | null>(null);
-  const locked = form.status === "approved";
+  const [askStock, setAskStock] = useState(false);
+  const [transfer, setTransfer] = useState(false);
+  const locked = form.status === "saved" || form.status === "approved";
 
   const summary = useMemo(() => invoiceSummary(form.lines, vatRate), [form.lines, vatRate]);
   const supplierName = suppliers.find((item) => item.id === form.supplierId)?.name ?? form.supplierName;
-  const canApprove =
-    Boolean(form.supplierId) &&
-    Boolean(form.invoiceDate) &&
-    summary.itemCount > 0 &&
-    !locked;
+  const canSave = Boolean(form.invoiceDate) && !locked;
+  const mismatch = invoiceMismatch(form);
 
   const updateLine = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
     setForm((current) => ({
@@ -76,6 +77,18 @@ export function SupplierInvoiceForm({
       lines: current.lines.map((line) => (line.key === key ? finalizeInvoiceLine({ ...line, ...patch }, vatRate) : line)),
     }));
   };
+
+  if (transfer) {
+    return (
+      <InvoiceStockTransfer
+        invoice={form}
+        ingredients={ingredients}
+        suppliers={suppliers}
+        onToast={onToast}
+        onClose={onClose}
+      />
+    );
+  }
 
   const persistDraft = async (next = form) => {
     const result = await savePurchaseInvoiceDraft({
@@ -255,15 +268,21 @@ export function SupplierInvoiceForm({
         <p>{t("admin.inventory.vat")}: {formatIls(summary.vat)}</p>
         <p className="font-semibold sm:col-span-2">{t("admin.inventory.invoiceTotal")}: {formatIls(summary.includingVat)}</p>
       </div>
+      {mismatch.hasMismatch && (
+        <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{t("admin.finance.mismatch")}</p>
+      )}
 
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} disabled={saving}>{t("common.cancel")}</Button>
+        {locked && form.stockStatus !== "posted" && (
+          <Button type="button" variant="outline" onClick={() => setTransfer(true)}>{t("admin.finance.transferLater")}</Button>
+        )}
         <Button
           type="button"
           variant="turquoise"
-          disabled={saving || !canApprove}
+          disabled={saving || !canSave}
           onClick={async () => {
-            if (saving || !canApprove) return;
+            if (saving || !canSave) return;
             setSaving(true);
             const lines = summary.lines;
             const id = form.id || (await persistDraft({ ...form, lines, supplierName }));
@@ -272,7 +291,7 @@ export function SupplierInvoiceForm({
               onToast(t("admin.costing.saveFailed"), "error");
               return;
             }
-            const result = await approvePurchaseInvoice({
+            const result = await saveFinanceInvoice({
               ...form,
               id,
               supplierName,
@@ -281,16 +300,26 @@ export function SupplierInvoiceForm({
             });
             setSaving(false);
             if (!result.success) {
-              onToast(result.error, "error");
+              onToast(result.error === "DUPLICATE_INVOICE" ? t("admin.inventory.smart.duplicate") : result.error, "error");
               return;
             }
-            onToast(t("admin.inventory.invoiceApproved"));
-            onClose();
+            setForm((current) => ({ ...current, id: result.data, status: "saved", stockStatus: "none" }));
+            setAskStock(true);
+            onToast(t("admin.finance.saved"));
           }}
         >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.approveReceipt")}
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.finance.saveFinance")}
         </Button>
       </div>
+      {askStock && (
+        <div className="mt-4 rounded-2xl bg-turquoise/5 p-4">
+          <p className="font-medium">{t("admin.finance.askStock")}</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>{t("admin.finance.notNow")}</Button>
+            <Button type="button" variant="turquoise" onClick={() => { setAskStock(false); setTransfer(true); }}>{t("admin.finance.transferNow")}</Button>
+          </div>
+        </div>
+      )}
 
       <QuickCreateIngredientPanel
         open={createForKey != null}
