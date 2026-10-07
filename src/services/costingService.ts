@@ -51,6 +51,7 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
     baseUnit: (data.baseUnit as CostingIngredient["baseUnit"]) || baseUnitFor(purchaseUnit),
     costPerBaseUnit: asNumber(data.costPerBaseUnit, costPerBaseUnit(purchasePrice, purchaseQuantity, purchaseUnit)),
     supplier: data.supplier ? String(data.supplier) : undefined,
+    notes: data.notes ? String(data.notes) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
@@ -182,8 +183,14 @@ export type IngredientWriteInput = {
   purchaseQuantity: number;
   purchaseUnit: PurchaseUnit;
   supplier?: string;
+  notes?: string;
   active?: boolean;
 };
+
+export function isCostingPermissionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /insufficient permissions|permission-denied|PERMISSION_DENIED/i.test(message);
+}
 
 function ingredientPayload(input: IngredientWriteInput) {
   const purchaseUnit = input.purchaseUnit;
@@ -196,8 +203,18 @@ function ingredientPayload(input: IngredientWriteInput) {
     baseUnit: baseUnitFor(purchaseUnit),
     costPerBaseUnit: costPerBaseUnit(input.purchasePrice, input.purchaseQuantity, purchaseUnit),
     supplier: input.supplier?.trim() || null,
+    notes: input.notes?.trim() || null,
     active: input.active !== false,
   });
+}
+
+function writeFailure(error: unknown, fallback: string): ServiceResult<never> {
+  if (isCostingPermissionError(error)) {
+    console.error("[costing] permission denied", error);
+    return failure(new ServiceError("PERMISSION_DENIED", "PERMISSION_DENIED"));
+  }
+  console.error("[costing] write failed", error);
+  return failure(error, fallback);
 }
 
 export async function createIngredient(input: IngredientWriteInput): Promise<ServiceResult<CostingIngredient>> {
@@ -208,7 +225,7 @@ export async function createIngredient(input: IngredientWriteInput): Promise<Ser
     const ref = await addDoc(collection(getDb(), COLLECTIONS.ingredients), payload);
     return success(mapIngredient(ref.id, payload as Record<string, unknown>));
   } catch (error) {
-    return failure(error, "Failed to save ingredient");
+    return writeFailure(error, "Failed to save ingredient");
   }
 }
 
@@ -251,7 +268,7 @@ export async function updateIngredient(
       affectedRecipeCount: affected.length,
     });
   } catch (error) {
-    return failure(error, "Failed to update ingredient");
+    return writeFailure(error, "Failed to update ingredient");
   }
 }
 

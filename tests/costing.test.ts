@@ -14,7 +14,17 @@ import {
   recipeIngredientCost,
 } from "@/lib/costing/calc";
 import { formatIls, roundRecommendedPrice } from "@/lib/costing/money";
-import { costPerBaseUnit, lineIngredientCost } from "@/lib/costing/units";
+import { findDuplicateIngredient, normalizeIngredientName } from "@/lib/costing/names";
+import {
+  compatibleRecipeUnits,
+  convertRecipeQuantity,
+  costPerBaseUnit,
+  defaultRecipeUnit,
+  lineIngredientCost,
+  lineRecipeCost,
+  liveCostPreview,
+  unitsCompatible,
+} from "@/lib/costing/units";
 
 describe("purchase unit conversion", () => {
   it("TEST 1: 2kg schnitzel at ₪60 is ₪0.03/g", () => {
@@ -27,6 +37,21 @@ describe("purchase unit conversion", () => {
     expect(costPerBaseUnit(50, 100, "unit")).toBeCloseTo(0.5, 10);
     expect(costPerBaseUnit(20, 1, "liter")).toBeCloseTo(0.02, 10);
   });
+
+  it("shows live purchase-unit and base-unit costs", () => {
+    const schnitzel = liveCostPreview(60, 2, "kg");
+    expect(schnitzel?.purchaseUnitCost).toBeCloseTo(30, 10);
+    expect(schnitzel?.baseUnitCost).toBeCloseTo(0.03, 10);
+    expect(schnitzel?.showBase).toBe(true);
+
+    const boxes = liveCostPreview(50, 100, "unit");
+    expect(boxes?.purchaseUnitCost).toBeCloseTo(0.5, 10);
+    expect(boxes?.showBase).toBe(false);
+
+    const sauce = liveCostPreview(24, 2, "liter");
+    expect(sauce?.purchaseUnitCost).toBeCloseTo(12, 10);
+    expect(sauce?.baseUnitCost).toBeCloseTo(0.012, 10);
+  });
 });
 
 describe("recipe line cost", () => {
@@ -34,6 +59,55 @@ describe("recipe line cost", () => {
     const unit = costPerBaseUnit(60, 2, "kg");
     expect(lineIngredientCost(180, unit)).toBeCloseTo(5.4, 10);
     expect(displayMoney(lineIngredientCost(180, unit))).toBe(5.4);
+  });
+
+  it("converts recipe kg to the same gram cost", () => {
+    const unit = costPerBaseUnit(60, 2, "kg");
+    expect(lineRecipeCost(180, "g", unit)).toBeCloseTo(5.4, 10);
+    expect(lineRecipeCost(0.18, "kg", unit)).toBeCloseTo(5.4, 10);
+    expect(defaultRecipeUnit("kg")).toBe("g");
+    expect(defaultRecipeUnit("liter")).toBe("ml");
+    expect(defaultRecipeUnit("unit")).toBe("unit");
+    expect(compatibleRecipeUnits("kg")).toEqual(["g", "kg"]);
+    expect(unitsCompatible("unit", "g")).toBe(false);
+    expect(convertRecipeQuantity(180, "g", "kg")).toBeCloseTo(0.18, 10);
+  });
+
+  it("calculates mozzarella 150g from a 2kg / ₪45 purchase", () => {
+    const perGram = costPerBaseUnit(45, 2, "kg");
+    expect(perGram).toBeCloseTo(0.0225, 10);
+    expect(lineRecipeCost(150, "g", perGram)).toBeCloseTo(3.375, 10);
+    expect(formatIls(lineRecipeCost(150, "g", perGram))).toBe("₪3.38");
+  });
+
+  it("calculates potato 180g from 10kg / ₪85", () => {
+    const perGram = costPerBaseUnit(85, 10, "kg");
+    expect(liveCostPreview(85, 10, "kg")?.purchaseUnitCost).toBeCloseTo(8.5, 10);
+    expect(perGram).toBeCloseTo(0.0085, 10);
+    expect(lineRecipeCost(180, "g", perGram)).toBeCloseTo(1.53, 10);
+    expect(formatIls(lineRecipeCost(180, "g", perGram))).toBe("₪1.53");
+  });
+});
+
+describe("ingredient name duplicates", () => {
+  it("normalizes spacing and case before matching", () => {
+    expect(normalizeIngredientName("  بطاطا  ")).toBe("بطاطا");
+    const existing = [
+      {
+        id: "1",
+        name: "بطاطا",
+        purchasePrice: 85,
+        purchaseQuantity: 10,
+        purchaseUnit: "kg" as const,
+        baseUnit: "g" as const,
+        costPerBaseUnit: 0.0085,
+        active: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+    ];
+    expect(findDuplicateIngredient("بطاطا", existing)?.id).toBe("1");
+    expect(findDuplicateIngredient("موزاريلا", existing)).toBeUndefined();
   });
 });
 
@@ -99,8 +173,12 @@ describe("permissions and delete guard", () => {
     expect(canViewCosting("Employee")).toBe(false);
     const rules = readFileSync(resolve(process.cwd(), "firestore.rules"), "utf8");
     expect(rules).toContain("match /ingredients/{id}");
-    expect(rules).toMatch(/match \/ingredients\/\{id\}[\s\S]*allow read, write: if isAdmin\(\)/);
+    expect(rules).toMatch(/match \/ingredients\/\{id\}[\s\S]*allow read, create, update: if isAdmin\(\)/);
+    expect(rules).toMatch(/match \/dishRecipes\/\{id\}[\s\S]*allow read, create, update: if isAdmin\(\)/);
+    expect(rules).toMatch(/match \/ingredientPriceHistory\/\{id\}[\s\S]*allow read, create: if isAdmin\(\)/);
+    expect(rules).toMatch(/match \/costingSettings\/\{id\}[\s\S]*allow read, create, update: if isAdmin\(\)/);
     expect(rules).not.toMatch(/match \/ingredients\/\{id\}[\s\S]*allow read: if true/);
+    expect(rules).not.toMatch(/match \/ingredients\/\{id\}[\s\S]*allow read, write: if true/);
   });
 });
 

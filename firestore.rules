@@ -6,12 +6,20 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
     function userDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return get(userPath());
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(userPath());
     }
 
     function isActiveUser() {
-      return isSignedIn() && userDoc().data.active == true;
+      return userExists() && userDoc().data.active == true;
     }
 
     function isStaff() {
@@ -141,23 +149,28 @@ service cloud.firestore {
     }
 
     match /ingredients/{id} {
-      allow read, write: if isAdmin();
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /dishRecipes/{id} {
-      allow read, write: if isAdmin();
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /ingredientPriceHistory/{id} {
-      allow read, write: if isAdmin();
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
     }
 
     match /costingSettings/{id} {
-      allow read, write: if isAdmin();
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
     }
 
     match /costingSnapshots/{id} {
-      allow read, write: if isAdmin();
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
     }
   }
 }

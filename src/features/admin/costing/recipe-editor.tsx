@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,8 +14,16 @@ import {
 } from "@/features/admin/components/admin-modal";
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
-import { lineIngredientCost } from "@/lib/costing/units";
-import { perUnitKey, unitLabelKey } from "@/features/admin/costing/costing-shared";
+import {
+  asPurchaseUnit,
+  compatibleRecipeUnits,
+  convertRecipeQuantity,
+  defaultRecipeUnit,
+  lineRecipeCost,
+} from "@/lib/costing/units";
+import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { IngredientPicker } from "@/features/admin/costing/ingredient-picker";
+import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-create-ingredient";
 import type {
   CostingIngredient,
   CustomCost,
@@ -31,6 +39,15 @@ type DraftLine = RecipeLine & { key: string };
 
 function newKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function emptyLine(ingredient?: CostingIngredient): DraftLine {
+  return {
+    key: newKey(),
+    ingredientId: ingredient?.id ?? "",
+    quantity: 0,
+    unit: ingredient ? defaultRecipeUnit(ingredient.purchaseUnit) : "g",
+  };
 }
 
 export function RecipeEditorModal({
@@ -60,7 +77,7 @@ export function RecipeEditorModal({
   }) => void;
 }) {
   const t = useT();
-  const activeIngredients = ingredients.filter((item) => item.active);
+  const [extraIngredients, setExtraIngredients] = useState<CostingIngredient[]>([]);
   const [variantId, setVariantId] = useState(recipe?.variantId ?? "");
   const [lines, setLines] = useState<DraftLine[]>(
     (recipe?.ingredients ?? []).map((line) => ({ ...line, key: newKey() }))
@@ -72,29 +89,197 @@ export function RecipeEditorModal({
   const [overhead, setOverhead] = useState(String(recipe?.overheadSettings?.overheadPercent ?? ""));
   const [custom, setCustom] = useState<CustomCost[]>(recipe?.overheadSettings?.customCosts ?? []);
   const [target, setTarget] = useState(String(recipe?.targetFoodCostPercent ?? ""));
+  const [createRowKey, setCreateRowKey] = useState<string | null>(null);
+  const [createName, setCreateName] = useState("");
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  const allIngredients = useMemo(() => {
+    const map = new Map(ingredients.map((item) => [item.id, item]));
+    for (const item of extraIngredients) map.set(item.id, item);
+    return [...map.values()];
+  }, [ingredients, extraIngredients]);
+
+  const activeIngredients = allIngredients.filter((item) => item.active);
   const lookup = useMemo(
-    () => new Map(ingredients.map((item) => [item.id, item])),
-    [ingredients]
+    () => new Map(allIngredients.map((item) => [item.id, item])),
+    [allIngredients]
   );
 
   const total = lines.reduce((sum, line) => {
     const ingredient = lookup.get(line.ingredientId);
-    return sum + (ingredient ? lineIngredientCost(line.quantity, ingredient.costPerBaseUnit) : 0);
+    return sum + (ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0);
   }, 0);
 
+  useEffect(() => {
+    if (!focusKey) return;
+    const node = qtyRefs.current[focusKey];
+    if (!node) return;
+    node.focus();
+    node.select();
+    setFocusKey(null);
+  }, [focusKey, lines]);
+
+  const updateLine = (index: number, patch: Partial<DraftLine>) => {
+    setLines((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  };
+
+  const applyIngredient = (index: number, ingredient: CostingIngredient) => {
+    updateLine(index, {
+      ingredientId: ingredient.id,
+      unit: defaultRecipeUnit(ingredient.purchaseUnit),
+      quantity: 0,
+    });
+    setFocusKey(lines[index]?.key ?? null);
+  };
+
+  const openCreate = (rowKey: string, draftName?: string) => {
+    setCreateRowKey(rowKey);
+    setCreateName(draftName ?? "");
+  };
+
   const addLine = () => {
-    const first = activeIngredients[0];
-    if (!first) return;
-    setLines((current) => [
-      ...current,
-      { key: newKey(), ingredientId: first.id, quantity: 1, unit: first.baseUnit },
-    ]);
+    const line = emptyLine();
+    setLines((current) => [...current, line]);
+  };
+
+  const handleCreated = (item: CostingIngredient) => {
+    setExtraIngredients((current) => [...current.filter((row) => row.id !== item.id), item]);
+    const rowKey = createRowKey;
+    setCreateRowKey(null);
+    setCreateName("");
+    if (!rowKey) {
+      const line = emptyLine(item);
+      setLines((current) => [...current, line]);
+      setFocusKey(line.key);
+      return;
+    }
+    setLines((current) =>
+      current.map((line) =>
+        line.key === rowKey
+          ? { ...line, ingredientId: item.id, unit: defaultRecipeUnit(item.purchaseUnit), quantity: 0 }
+          : line
+      )
+    );
+    setFocusKey(rowKey);
+  };
+
+  const handleUseExisting = (item: CostingIngredient) => {
+    const rowKey = createRowKey;
+    setCreateRowKey(null);
+    setCreateName("");
+    if (!rowKey) return;
+    setLines((current) =>
+      current.map((line) =>
+        line.key === rowKey
+          ? { ...line, ingredientId: item.id, unit: defaultRecipeUnit(item.purchaseUnit), quantity: 0 }
+          : line
+      )
+    );
+    setFocusKey(rowKey);
+  };
+
+  const renderRow = (line: DraftLine, index: number) => {
+    const ingredient = lookup.get(line.ingredientId);
+    const cost = ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0;
+    const units = compatibleRecipeUnits(ingredient?.purchaseUnit ?? asPurchaseUnit(line.unit));
+    return (
+      <div key={line.key} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_6.5rem_7rem_5.5rem_auto] md:items-start">
+          <div>
+            <Label className="mb-1 text-xs text-coffee/55 md:hidden">{t("admin.costing.selectIngredient")}</Label>
+            <IngredientPicker
+              ingredients={activeIngredients}
+              value={line.ingredientId}
+              onSelect={(id) => {
+                const next = activeIngredients.find((item) => item.id === id);
+                if (next) applyIngredient(index, next);
+              }}
+              onCreate={(draftName) => openCreate(line.key, draftName)}
+            />
+            <button
+              type="button"
+              className="mt-1 text-xs font-medium text-turquoise"
+              onClick={() => openCreate(line.key)}
+            >
+              {t("admin.costing.createNewIngredient")}
+            </button>
+          </div>
+          <div>
+            <Label className="mb-1 text-xs text-coffee/55">{t("admin.costing.quantity")}</Label>
+            <Input
+              ref={(node) => {
+                qtyRefs.current[line.key] = node;
+              }}
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              className="h-10"
+              value={line.quantity || ""}
+              onChange={(e) => updateLine(index, { quantity: Number(e.target.value) || 0 })}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          </div>
+          <div>
+            <Label className="mb-1 text-xs text-coffee/55">{t("admin.costing.recipeUnit")}</Label>
+            <select
+              className="h-10 w-full rounded-xl border border-beige-dark/30 bg-warm-white px-2 text-sm"
+              value={asPurchaseUnit(line.unit)}
+              onChange={(e) => {
+                const next = asPurchaseUnit(e.target.value);
+                const from = asPurchaseUnit(line.unit);
+                updateLine(index, {
+                  unit: next,
+                  quantity: convertRecipeQuantity(line.quantity, from, next),
+                });
+              }}
+            >
+              {units.map((unit) => (
+                <option key={unit} value={unit}>
+                  {t(unitLabelKey(unit))}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="pt-6 text-end text-sm font-semibold md:pt-8">{formatIls(cost)}</p>
+          <div className="flex justify-end gap-1 md:pt-6">
+            <button
+              type="button"
+              className="rounded-lg p-2 hover:bg-beige/50"
+              onClick={() => setLines((current) => [...current, { ...line, key: newKey() }])}
+              aria-label={t("admin.costing.duplicateLine")}
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              className="rounded-lg p-2 hover:bg-red-50"
+              onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
+              aria-label={t("admin.costing.deleteLine")}
+            >
+              <Trash2 className="h-4 w-4 text-red-500" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
-    <AdminModal open={open} onOpenChange={(next) => !next && onClose()} size="xl">
-      <AdminModalHeader onClose={onClose}>
+    <AdminModal
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && createRowKey) {
+          setCreateRowKey(null);
+          return;
+        }
+        if (!next) onClose();
+      }}
+      size="xl"
+      preventOverlayClose={Boolean(createRowKey) || saving}
+    >
+      <AdminModalHeader onClose={createRowKey ? undefined : onClose}>
         <AdminModalTitle>
           {t("admin.costing.recipeLines")} — {productName}
         </AdminModalTitle>
@@ -119,181 +304,34 @@ export function RecipeEditorModal({
             </div>
           )}
 
-          <div className="hidden overflow-hidden rounded-2xl border border-beige-dark/15 md:block">
-            <table className="w-full text-sm">
-              <thead className="bg-beige/40 text-xs text-coffee/65">
-                <tr>
-                  <th className="px-3 py-2 text-start">{t("admin.costing.selectIngredient")}</th>
-                  <th className="px-3 py-2 text-start">{t("admin.costing.quantity")}</th>
-                  <th className="px-3 py-2 text-start">{t("admin.costing.purchaseUnit")}</th>
-                  <th className="px-3 py-2 text-end">{t("admin.costing.ingredientCost")}</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line, index) => {
-                  const ingredient = lookup.get(line.ingredientId);
-                  const cost = ingredient
-                    ? lineIngredientCost(line.quantity, ingredient.costPerBaseUnit)
-                    : 0;
-                  return (
-                    <tr key={line.key} className="border-t border-beige-dark/10">
-                      <td className="px-3 py-2">
-                        <select
-                          className="h-10 w-full rounded-xl border border-beige-dark/30 px-2"
-                          value={line.ingredientId}
-                          onChange={(e) => {
-                            const next = activeIngredients.find((item) => item.id === e.target.value);
-                            setLines((current) =>
-                              current.map((item, i) =>
-                                i === index
-                                  ? {
-                                      ...item,
-                                      ingredientId: e.target.value,
-                                      unit: next?.baseUnit ?? item.unit,
-                                    }
-                                  : item
-                              )
-                            );
-                          }}
-                        >
-                          {activeIngredients.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={line.quantity}
-                          onChange={(e) =>
-                            setLines((current) =>
-                              current.map((item, i) =>
-                                i === index ? { ...item, quantity: Number(e.target.value) || 0 } : item
-                              )
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-coffee/60">
-                        {t(unitLabelKey(ingredient?.baseUnit ?? line.unit))}
-                      </td>
-                      <td className="px-3 py-2 text-end font-medium">{formatIls(cost)}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
-                            className="rounded-lg p-2 hover:bg-beige/50"
-                            onClick={() =>
-                              setLines((current) => [
-                                ...current,
-                                { ...line, key: newKey() },
-                              ])
-                            }
-                            aria-label={t("admin.costing.duplicateLine")}
-                          >
-                            <Copy className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg p-2 hover:bg-red-50"
-                            onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
-                            aria-label={t("admin.costing.deleteLine")}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="hidden rounded-2xl bg-beige/40 px-4 py-2 text-xs text-coffee/65 md:grid md:grid-cols-[minmax(0,1.4fr)_6.5rem_7rem_5.5rem_auto]">
+            <span>{t("admin.costing.selectIngredient")}</span>
+            <span>{t("admin.costing.quantity")}</span>
+            <span>{t("admin.costing.recipeUnit")}</span>
+            <span className="text-end">{t("admin.costing.ingredientCost")}</span>
+            <span />
+          </div>
+          <div className="space-y-3">
+            {lines.map((line, index) => renderRow(line, index))}
           </div>
 
-          <div className="space-y-3 md:hidden">
-            {lines.map((line, index) => {
-              const ingredient = lookup.get(line.ingredientId);
-              const cost = ingredient
-                ? lineIngredientCost(line.quantity, ingredient.costPerBaseUnit)
-                : 0;
-              return (
-                <div key={line.key} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4">
-                  <p className="font-medium">{ingredient?.name ?? t("admin.costing.selectIngredient")}</p>
-                  <select
-                    className="mt-2 h-10 w-full rounded-xl border border-beige-dark/30 px-2 text-sm"
-                    value={line.ingredientId}
-                    onChange={(e) => {
-                      const next = activeIngredients.find((item) => item.id === e.target.value);
-                      setLines((current) =>
-                        current.map((item, i) =>
-                          i === index
-                            ? { ...item, ingredientId: e.target.value, unit: next?.baseUnit ?? item.unit }
-                            : item
-                        )
-                      );
-                    }}
-                  >
-                    {activeIngredients.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="mt-3 flex items-center justify-between text-sm">
-                    <Input
-                      type="number"
-                      min="0"
-                      className="w-28"
-                      value={line.quantity}
-                      onChange={(e) =>
-                        setLines((current) =>
-                          current.map((item, i) =>
-                            i === index ? { ...item, quantity: Number(e.target.value) || 0 } : item
-                          )
-                        )
-                      }
-                    />
-                    <span className="text-coffee/55">
-                      {line.quantity} {t(unitLabelKey(ingredient?.baseUnit ?? "g"))}
-                    </span>
-                  </div>
-                  {ingredient && (
-                    <p className="mt-1 text-xs text-coffee/45">
-                      {formatIls(ingredient.costPerBaseUnit, 4)} {t(perUnitKey(ingredient.baseUnit))}
-                    </p>
-                  )}
-                  <div className="mt-3 flex items-center justify-between">
-                    <span className="font-semibold">{formatIls(cost)}</span>
-                    <div className="flex gap-1">
-                      <button
-                        type="button"
-                        className="rounded-lg p-2 hover:bg-beige/50"
-                        onClick={() => setLines((current) => [...current, { ...line, key: newKey() }])}
-                      >
-                        <Copy className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg p-2 hover:bg-red-50"
-                        onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
-                      >
-                        <Trash2 className="h-4 w-4 text-red-500" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={addLine}>
+              <Plus className="h-4 w-4" /> {t("admin.costing.addLine")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-turquoise"
+              onClick={() => {
+                const line = emptyLine();
+                setLines((current) => [...current, line]);
+                openCreate(line.key);
+              }}
+            >
+              {t("admin.costing.createNewIngredient")}
+            </Button>
           </div>
-
-          <Button type="button" variant="outline" onClick={addLine} disabled={activeIngredients.length === 0}>
-            <Plus className="h-4 w-4" /> {t("admin.costing.addLine")}
-          </Button>
 
           <div className="rounded-2xl bg-beige/30 px-4 py-3 text-sm font-semibold">
             {t("admin.costing.rawTotal")}: {formatIls(total)}
@@ -367,11 +405,13 @@ export function RecipeEditorModal({
           onClick={() =>
             onSave({
               variantId: variantId || undefined,
-              ingredients: lines.map(({ ingredientId, quantity, unit }) => ({
-                ingredientId,
-                quantity,
-                unit,
-              })),
+              ingredients: lines
+                .filter((line) => line.ingredientId && line.quantity > 0)
+                .map(({ ingredientId, quantity, unit }) => ({
+                  ingredientId,
+                  quantity,
+                  unit,
+                })),
               overheadSettings: {
                 packaging: Number(packaging) || undefined,
                 labor: Number(labor) || undefined,
@@ -387,6 +427,17 @@ export function RecipeEditorModal({
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("common.save")}
         </Button>
       </AdminModalFooter>
+      <QuickCreateIngredientPanel
+        open={createRowKey != null}
+        initialName={createName}
+        existing={activeIngredients}
+        onClose={() => {
+          setCreateRowKey(null);
+          setCreateName("");
+        }}
+        onCreated={handleCreated}
+        onUseExisting={handleUseExisting}
+      />
     </AdminModal>
   );
 }

@@ -24,6 +24,7 @@ import { adminCard } from "@/features/admin/components/admin-styles";
 import { useProducts, useAllCategories } from "@/hooks/useProducts";
 import { canViewCosting } from "@/lib/auth/roles";
 import { formatIls } from "@/lib/costing/money";
+import { lineRecipeCost, liveCostPreview } from "@/lib/costing/units";
 import {
   attentionRows,
   buildDishRows,
@@ -93,6 +94,7 @@ export function CostingAdmin() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<AdminToast[]>([]);
   const [ingredientForm, setIngredientForm] = useState<CostingIngredient | "new" | null>(null);
+  const [ingredientError, setIngredientError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CostingIngredient | null>(null);
   const [inUseCount, setInUseCount] = useState(0);
@@ -160,9 +162,10 @@ export function CostingAdmin() {
     };
   }, [recipeProductId, selectedId, options]);
 
-  const saveIngredient = async (value: IngredientFormValue) => {
-    if (saving) return;
+  const saveIngredient = async (value: IngredientFormValue): Promise<boolean> => {
+    if (saving) return false;
     setSaving(true);
+    setIngredientError(null);
     const payload = {
       name: value.name,
       category: value.category,
@@ -170,13 +173,20 @@ export function CostingAdmin() {
       purchaseQuantity: Number(value.purchaseQuantity),
       purchaseUnit: value.purchaseUnit,
       supplier: value.supplier,
+      notes: value.notes,
     };
     try {
       if (ingredientForm && ingredientForm !== "new") {
         const result = await updateIngredient(ingredientForm.id, payload, user?.email);
         if (!result.success) {
-          toast(result.error, "error");
-          return;
+          const message =
+            result.code === "PERMISSION_DENIED"
+              ? t("admin.costing.permissionError")
+              : t("admin.costing.saveFailed");
+          console.error("[costing] update ingredient failed", result.error, result.code);
+          setIngredientError(message);
+          toast(message, "error");
+          return false;
         }
         await writeIngredientImpactSnapshots({
           ingredientId: ingredientForm.id,
@@ -186,19 +196,25 @@ export function CostingAdmin() {
           ),
           sellingPriceByProduct: new Map(products.map((product) => [product.id, product.price])),
         });
-        toast(
-          `${t("admin.costing.updatedPurchase")} · ${t("admin.costing.affectsDishes").replace("{count}", String(result.data.affectedRecipeCount))}`
-        );
-        toast(t("admin.costing.recalculated"));
-      } else {
-        const result = await createIngredient(payload);
-        if (!result.success) {
-          toast(result.error, "error");
-          return;
+        toast(t("admin.costing.updatedPurchase"));
+        if (result.data.affectedRecipeCount > 0) {
+          toast(t("admin.costing.recalculated"));
         }
-        toast(t("admin.costing.savedIngredient"));
+        return true;
       }
-      setIngredientForm(null);
+      const result = await createIngredient(payload);
+      if (!result.success) {
+        const message =
+          result.code === "PERMISSION_DENIED"
+            ? t("admin.costing.permissionError")
+            : t("admin.costing.saveFailed");
+        console.error("[costing] create ingredient failed", result.error, result.code);
+        setIngredientError(message);
+        toast(message, "error");
+        return false;
+      }
+      toast(t("admin.costing.addedSuccess"));
+      return true;
     } finally {
       setSaving(false);
     }
@@ -342,8 +358,14 @@ export function CostingAdmin() {
       {tab === "ingredients" && (
         <IngredientsTab
           ingredients={ingredients}
-          onAdd={() => setIngredientForm("new")}
-          onEdit={(item) => setIngredientForm(item)}
+          onAdd={() => {
+            setIngredientError(null);
+            setIngredientForm("new");
+          }}
+          onEdit={(item) => {
+            setIngredientError(null);
+            setIngredientForm(item);
+          }}
           onDelete={(item) => void tryDeleteIngredient(item)}
         />
       )}
@@ -356,11 +378,16 @@ export function CostingAdmin() {
         <IngredientFormModal
           key={ingredientForm === "new" ? "new" : ingredientForm.id}
           open
+          mode={ingredientForm === "new" ? "create" : "edit"}
           title={ingredientForm === "new" ? t("admin.costing.addIngredient") : t("admin.costing.editIngredient")}
           initial={ingredientForm === "new" ? emptyIngredientForm() : formFromIngredient(ingredientForm)}
           saving={saving}
-          onClose={() => setIngredientForm(null)}
-          onSave={(value) => void saveIngredient(value)}
+          formError={ingredientError}
+          onClose={() => {
+            setIngredientForm(null);
+            setIngredientError(null);
+          }}
+          onSave={saveIngredient}
         />
       )}
 
@@ -699,7 +726,7 @@ function RecipeLines({
           <tbody>
             {row.recipe.ingredients.map((line) => {
               const ingredient = lookup.get(line.ingredientId);
-              const cost = ingredient ? line.quantity * ingredient.costPerBaseUnit : 0;
+              const cost = ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0;
               return (
                 <tr key={`${line.ingredientId}-${line.quantity}`} className="border-b border-beige-dark/10">
                   <td className="py-2">{ingredient?.name ?? line.ingredientId}</td>
@@ -716,7 +743,7 @@ function RecipeLines({
       <div className="space-y-2 md:hidden">
         {row.recipe.ingredients.map((line) => {
           const ingredient = lookup.get(line.ingredientId);
-          const cost = ingredient ? line.quantity * ingredient.costPerBaseUnit : 0;
+          const cost = ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0;
           return (
             <div key={`${line.ingredientId}-${line.quantity}`} className="rounded-xl bg-beige/30 p-3 text-sm">
               <p className="font-medium">{ingredient?.name ?? line.ingredientId}</p>
@@ -821,18 +848,38 @@ function IngredientsTab({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="font-semibold">{item.name}</p>
-                  <p className="text-xs text-coffee/50">
-                    {item.category || "—"} {item.active ? "" : `· ${t("admin.costing.inactive")}`}
-                  </p>
+                  {!item.active && <p className="text-xs text-coffee/50">{t("admin.costing.inactive")}</p>}
                 </div>
                 <StatusDot status={item.active ? "good" : "none"} />
               </div>
-              <p className="mt-3 text-sm">
-                {formatIls(item.purchasePrice)} / {item.purchaseQuantity} {t(unitLabelKey(item.purchaseUnit))}
-              </p>
-              <p className="text-sm font-medium text-turquoise">
-                {formatIls(item.costPerBaseUnit, item.costPerBaseUnit < 0.1 ? 4 : 2)} {t(perUnitKey(item.baseUnit))}
-              </p>
+              <dl className="mt-3 space-y-1 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-coffee/55">{t("admin.costing.paidPrice")}</dt>
+                  <dd>{formatIls(item.purchasePrice)}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-coffee/55">{t("admin.costing.howMuchBought")}</dt>
+                  <dd>
+                    {item.purchaseQuantity} {t(unitLabelKey(item.purchaseUnit))}
+                  </dd>
+                </div>
+              </dl>
+              {(() => {
+                const preview = liveCostPreview(item.purchasePrice, item.purchaseQuantity, item.purchaseUnit);
+                if (!preview) return null;
+                return (
+                  <div className="mt-3 rounded-xl bg-turquoise/8 px-3 py-2 text-sm font-medium text-turquoise">
+                    <p>
+                      {formatIls(preview.purchaseUnitCost)} / {t(unitLabelKey(preview.purchaseUnit))}
+                    </p>
+                    {preview.showBase && (
+                      <p>
+                        {formatIls(preview.baseUnitCost, 4)} / {t(unitLabelKey(preview.baseUnit))}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="mt-3 flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => onEdit(item)}>
                   <Pencil className="h-3.5 w-3.5" /> {t("admin.costing.editLine")}

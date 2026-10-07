@@ -14,6 +14,7 @@ export type CostingIngredient = {
   baseUnit: BaseUnit;
   costPerBaseUnit: number;
   supplier?: string;
+  notes?: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -22,7 +23,8 @@ export type CostingIngredient = {
 export type RecipeLine = {
   ingredientId: string;
   quantity: number;
-  unit: BaseUnit;
+  /** Recipe quantity unit. Existing rows use base units (g / ml / unit). */
+  unit: PurchaseUnit | BaseUnit;
 };
 
 export type CustomCost = {

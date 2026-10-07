@@ -1,4 +1,4 @@
-import { lineIngredientCost } from "@/lib/costing/units";
+import { lineRecipeCost } from "@/lib/costing/units";
 import { roundMoney } from "@/lib/costing/money";
 import type {
   CostingIngredient,
@@ -16,7 +16,7 @@ export function recipeIngredientCost(
   for (const line of lines) {
     const ingredient = ingredients.get(line.ingredientId);
     if (!ingredient) continue;
-    total += lineIngredientCost(line.quantity, ingredient.costPerBaseUnit);
+    total += lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit);
   }
   return total;
 }
