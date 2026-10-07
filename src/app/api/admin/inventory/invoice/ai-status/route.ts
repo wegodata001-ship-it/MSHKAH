@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const auth = await requireAdminOnly(request);
   if (auth instanceof Response) return auth;
-  const health = await pingGemini();
+  const health = await pingGemini(true);
   return Response.json({
     configured: health.configured,
     provider: health.provider,

@@ -25,7 +25,7 @@ export function AssistantFab() {
         "fixed z-[60] flex h-14 w-14 items-center justify-center rounded-full",
         "bg-gradient-to-br from-turquoise to-turquoise-light text-warm-white",
         "shadow-premium border border-white/25",
-        "bottom-24 end-4 md:bottom-6 md:end-6",
+        "bottom-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+0.75rem)] start-4 md:bottom-6 md:start-auto md:end-6",
         "transition-transform hover:scale-105 active:scale-95",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-turquoise focus-visible:ring-offset-2",
         isOpen && "scale-90 opacity-80"

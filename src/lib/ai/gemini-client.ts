@@ -1,4 +1,10 @@
-import { geminiApiKey, geminiModel, isGeminiConfigured } from "@/lib/ai/gemini-config";
+import {
+  GeminiRequestError,
+  geminiApiKey,
+  geminiModel,
+  geminiModelsToTry,
+  isGeminiConfigured,
+} from "@/lib/ai/gemini-config";
 
 type GeminiGateway = "generativelanguage" | "aiplatform";
 
@@ -17,6 +23,7 @@ export type GeminiGenerateResult = {
   model: string;
   httpStatus: number;
   gateway: GeminiGateway;
+  requestId: string;
 };
 
 type CachedHealth = { at: number; value: GeminiHealth };
@@ -30,6 +37,10 @@ function gateways(model: string): { gateway: GeminiGateway; url: string }[] {
     {
       gateway: "generativelanguage",
       url: `https://generativelanguage.googleapis.com/v1beta/models/${encoded}:generateContent`,
+    },
+    {
+      gateway: "generativelanguage",
+      url: `https://generativelanguage.googleapis.com/v1/models/${encoded}:generateContent`,
     },
     {
       gateway: "aiplatform",
@@ -48,10 +59,23 @@ function readReason(payload: unknown): string | null {
   if (typeof error.message === "string") {
     if (/denied access/i.test(error.message)) return "PROJECT_DENIED";
     if (/not been used|disabled/i.test(error.message)) return "SERVICE_DISABLED";
-    return "GEMINI_ERROR";
+    return error.message.slice(0, 180);
   }
   return null;
 }
+
+function newRequestId(): string {
+  return crypto.randomUUID();
+}
+
+type ProviderAttempt = {
+  ok: boolean;
+  status: number;
+  gateway: GeminiGateway;
+  text: string;
+  reason: string | null;
+  model: string;
+};
 
 async function postGemini(input: {
   key: string;
@@ -59,9 +83,16 @@ async function postGemini(input: {
   parts: unknown[];
   temperature: number;
   schema?: Record<string, unknown>;
-}): Promise<{ ok: boolean; status: number; gateway: GeminiGateway; text: string; reason: string | null }> {
-  let last = { ok: false, status: 0, gateway: "generativelanguage" as GeminiGateway, text: "", reason: "UNREACHABLE" as string | null };
-  let preferredFailure: typeof last | null = null;
+}): Promise<ProviderAttempt> {
+  let last: ProviderAttempt = {
+    ok: false,
+    status: 0,
+    gateway: "generativelanguage",
+    text: "",
+    reason: "UNREACHABLE",
+    model: input.model,
+  };
+  let preferredFailure: ProviderAttempt | null = null;
   for (const target of gateways(input.model)) {
     const response = await fetch(target.url, {
       method: "POST",
@@ -88,6 +119,7 @@ async function postGemini(input: {
       gateway: target.gateway,
       text,
       reason: response.ok ? null : readReason(payload),
+      model: input.model,
     };
     if (last.ok) return last;
     if (target.gateway === "generativelanguage") preferredFailure = last;
@@ -96,27 +128,74 @@ async function postGemini(input: {
   return preferredFailure ?? last;
 }
 
+function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
+  const auth = attempt.status === 401 || attempt.status === 403;
+  throw new GeminiRequestError({
+    code: !attempt.status
+      ? "EXTRACTION_FAILED"
+      : attempt.status === 429
+        ? "PROVIDER_RATE_LIMIT"
+        : auth
+          ? "PROVIDER_AUTH_ERROR"
+          : "EXTRACTION_FAILED",
+    message: auth
+      ? "Invoice scanning could not authenticate with the AI provider"
+      : attempt.status === 429
+        ? "Invoice scanning is rate limited"
+        : "Invoice scanning failed",
+    providerStatus: attempt.status || null,
+    providerError: attempt.reason,
+    model: attempt.model,
+    requestId,
+  });
+}
+
 export async function geminiGenerateJson(input: {
   parts: unknown[];
   temperature?: number;
   schema?: Record<string, unknown>;
+  requestId?: string;
 }): Promise<GeminiGenerateResult> {
+  const requestId = input.requestId ?? newRequestId();
   const key = geminiApiKey();
-  if (!key) throw new Error("ai-not-configured");
-  const model = geminiModel();
-  const result = await postGemini({
-    key,
-    model,
-    parts: input.parts,
-    temperature: input.temperature ?? 0.1,
-    schema: input.schema,
-  });
-  if (!result.ok) {
-    if (result.status === 429) throw new Error("ai-rate-limited");
-    if (result.status === 403 || result.status === 401) throw new Error("ai-unavailable");
-    throw new Error(result.status ? `ai-failed-${result.status}` : "ai-unavailable");
+  if (!key) {
+    throw new GeminiRequestError({
+      code: "AI_NOT_CONFIGURED",
+      message: "Invoice scanning is not configured",
+      requestId,
+    });
   }
-  return { text: result.text, model, httpStatus: result.status, gateway: result.gateway };
+  const models = geminiModelsToTry();
+  let last: ProviderAttempt | null = null;
+  for (const model of models) {
+    last = await postGemini({
+      key,
+      model,
+      parts: input.parts,
+      temperature: input.temperature ?? 0.1,
+      schema: input.schema,
+    });
+    if (last.ok) {
+      return {
+        text: last.text,
+        model,
+        httpStatus: last.status,
+        gateway: last.gateway,
+        requestId,
+      };
+    }
+    if (last.status && last.status !== 403 && last.status !== 404) {
+      throwFromAttempt(last, requestId);
+    }
+  }
+  throwFromAttempt(last ?? {
+    ok: false,
+    status: 0,
+    gateway: "generativelanguage",
+    text: "",
+    reason: "UNREACHABLE",
+    model: geminiModel(),
+  }, requestId);
 }
 
 export async function pingGemini(force = false): Promise<GeminiHealth> {
@@ -134,23 +213,30 @@ export async function pingGemini(force = false): Promise<GeminiHealth> {
   if (!configured) return base;
   if (!force && healthCache && Date.now() - healthCache.at < HEALTH_TTL_MS) return healthCache.value;
   try {
-    const result = await postGemini({
-      key: geminiApiKey(),
-      model: model!,
+    const result = await geminiGenerateJson({
       parts: [{ text: 'Reply with JSON {"ok":true} only.' }],
       temperature: 0,
     });
     const value: GeminiHealth = {
       ...base,
-      reachable: result.ok,
-      httpStatus: result.status || null,
-      reason: result.ok ? null : result.reason,
+      model: result.model,
+      reachable: true,
+      httpStatus: result.httpStatus,
+      reason: null,
       gateway: result.gateway,
     };
     healthCache = { at: Date.now(), value };
     return value;
-  } catch {
-    const value = { ...base, reason: "UNREACHABLE" };
+  } catch (error) {
+    const failed = error instanceof GeminiRequestError ? error : null;
+    const value: GeminiHealth = {
+      ...base,
+      model: failed?.model ?? model,
+      reachable: false,
+      httpStatus: failed?.providerStatus ?? null,
+      reason: failed?.providerError ?? failed?.code ?? "UNREACHABLE",
+      gateway: null,
+    };
     healthCache = { at: Date.now(), value };
     return value;
   }

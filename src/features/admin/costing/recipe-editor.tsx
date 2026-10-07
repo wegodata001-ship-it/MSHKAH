@@ -343,9 +343,19 @@ export function RecipeEditorModal({
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ name: productName, description: productDescription }),
                     });
-                    const data = (await response.json()) as { suggestions?: RecipeIngredientSuggestion[]; error?: string };
+                    const data = (await response.json()) as {
+                      suggestions?: RecipeIngredientSuggestion[];
+                      error?: string;
+                      code?: string;
+                    };
                     if (!response.ok) {
-                      setSuggestError(data.error === "ai-not-configured" ? t("admin.inventory.smart.notConfigured") : t("admin.inventory.smart.unavailable"));
+                      setSuggestError(
+                        data.code === "AI_NOT_CONFIGURED" || data.error === "ai-not-configured"
+                          ? t("admin.inventory.smart.notConfigured")
+                          : data.code === "PROVIDER_AUTH_ERROR"
+                            ? t("admin.inventory.smart.authError")
+                            : t("admin.inventory.smart.unavailable")
+                      );
                       return;
                     }
                     setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);

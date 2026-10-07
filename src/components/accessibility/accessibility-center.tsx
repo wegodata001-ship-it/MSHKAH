@@ -201,7 +201,7 @@ export function AccessibilityCenter() {
           "a11y-fab print:hidden fixed z-40 flex h-14 w-14 items-center justify-center rounded-full",
           "glass shadow-premium border border-white/30",
           "text-turquoise transition-transform hover:scale-105 active:scale-95",
-          "bottom-40 end-4 md:bottom-6 md:end-24",
+          "bottom-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+4.5rem)] start-4 md:bottom-6 md:start-auto md:end-24",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-turquoise focus-visible:ring-offset-2",
           panelOpen && "scale-0 opacity-0 pointer-events-none"
         )}
@@ -236,7 +236,7 @@ export function AccessibilityCenter() {
               className={cn(
                 "a11y-panel fixed z-[46] flex max-h-[min(85vh,720px)] w-[min(calc(100vw-2rem),400px)] flex-col",
                 "rounded-3xl glass shadow-premium overflow-hidden",
-                "bottom-40 end-4 md:bottom-6 md:end-24",
+                "bottom-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+4.5rem)] start-4 md:bottom-6 md:start-auto md:end-24",
                 "border border-white/40 dark:border-white/10"
               )}
               initial={{ opacity: 0, y: 24, scale: 0.96 }}

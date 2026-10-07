@@ -46,10 +46,16 @@ export type ExtractedInvoice = {
 };
 
 export type InvoiceExtractResponse = {
+  ok?: boolean;
   configured: boolean;
   provider?: "gemini";
   model?: string;
   reachable?: boolean;
+  requestId?: string;
+  code?: string;
+  message?: string;
+  providerStatus?: number | null;
+  providerError?: string | null;
   extraction?: ExtractedInvoice;
   invoice?: PurchaseInvoice;
   error?: string;

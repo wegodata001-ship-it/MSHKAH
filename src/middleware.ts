@@ -63,8 +63,11 @@ export function middleware(request: NextRequest) {
 
   // --- Admin portal host ---
   if (isPortalHost(host)) {
-    if (pathname === "/sw.js" || pathname === "/manifest.webmanifest") {
+    if (pathname === "/sw.js") {
       return new NextResponse(null, { status: 404 });
+    }
+    if (pathname === "/manifest.webmanifest") {
+      return NextResponse.next();
     }
 
     if (pathname.startsWith("/admin")) {

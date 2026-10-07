@@ -5,7 +5,6 @@ import {
   FileSpreadsheet,
   Filter,
   MoreHorizontal,
-  Printer,
   RefreshCw,
   RotateCcw,
   X,
@@ -23,7 +22,8 @@ import { AdminEmptyState } from "@/features/admin/components/admin-empty-state";
 import { BRAND } from "@/lib/brand";
 import { downloadReportExcel } from "@/lib/reports/excel";
 import { formatReportDate, formatReportDateTime, formatReportIls, formatReportQty } from "@/lib/reports/format";
-import type { ExceptionKind, ReportFilters, ReportPayload, ReportType } from "@/lib/reports/types";
+import type { ExceptionKind, ReportFilters, ReportPayload, ReportScope, ReportType } from "@/lib/reports/types";
+import { ReportPdfActions } from "@/features/admin/reports/pdf/report-preview-modal";
 import { cn } from "@/lib/utils";
 
 const EXCEPTION_LABEL: Record<ExceptionKind, string> = {
@@ -34,6 +34,8 @@ const EXCEPTION_LABEL: Record<ExceptionKind, string> = {
   "no-price": "admin.reports.ex.noPrice",
   negative: "admin.reports.ex.negative",
   "count-gap": "admin.reports.ex.gap",
+  stale: "admin.reports.ex.stale",
+  "bad-unit": "admin.reports.ex.badUnit",
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -43,6 +45,7 @@ const ACTION_LABEL: Record<string, string> = {
   "record-price": "admin.reports.action.price",
   adjust: "admin.reports.action.adjust",
   recount: "admin.reports.action.recount",
+  "fix-unit": "admin.reports.action.fixUnit",
 };
 
 export function ReportViewer({
@@ -64,12 +67,6 @@ export function ReportViewer({
   const [menu, setMenu] = useState(false);
   const [sheet, setSheet] = useState(false);
   const title = t(`admin.reports.type.${payload.type}`);
-
-  const printReport = () => {
-    document.body.setAttribute("data-report-orientation", payload.orientation);
-    window.print();
-    window.setTimeout(() => document.body.removeAttribute("data-report-orientation"), 500);
-  };
 
   const filterFields = (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
@@ -100,6 +97,13 @@ export function ReportViewer({
             <option key={key} value={key}>{t(EXCEPTION_LABEL[key as ExceptionKind])}</option>
           ))}
         </select>
+      ) : payload.type === "inventory" ? (
+        <select className="h-10 rounded-xl border border-beige-dark/30 bg-warm-white px-3 text-sm" value={filters.scope ?? "all"} onChange={(e) => onFilters({ ...filters, scope: e.target.value as ReportScope })}>
+          <option value="all">{t("admin.reports.scope.all")}</option>
+          <option value="exceptions">{t("admin.reports.scope.exceptions")}</option>
+          <option value="no-supplier">{t("admin.reports.scope.noSupplier")}</option>
+          <option value="to-order">{t("admin.reports.scope.toOrder")}</option>
+        </select>
       ) : (
         <Input value={filters.search ?? ""} onChange={(e) => onFilters({ ...filters, search: e.target.value || undefined })} placeholder={t("admin.reports.search")} />
       )}
@@ -113,9 +117,8 @@ export function ReportViewer({
           <button type="button" className="text-sm text-turquoise" onClick={onClose}>{t("common.back")}</button>
           <h2 className="font-display text-2xl font-semibold text-dark-brown">{title}</h2>
         </div>
-        <div className="hidden flex-wrap gap-2 md:flex">
-          <Button type="button" variant="outline" onClick={printReport}><Printer className="h-4 w-4" /> {t("admin.reports.print")}</Button>
-          <Button type="button" variant="outline" onClick={printReport}>{t("admin.reports.pdf")}</Button>
+        <div className="hidden flex-wrap items-center gap-2 md:flex">
+          <ReportPdfActions payload={payload} filters={filters} />
           <Button type="button" variant="outline" onClick={() => void downloadReportExcel(payload, title)}><FileSpreadsheet className="h-4 w-4" /> Excel</Button>
           <Button type="button" variant="outline" onClick={onRun}><RefreshCw className="h-4 w-4" /> {t("admin.reports.refresh")}</Button>
           <Button type="button" variant="ghost" onClick={() => onFilters({})}><RotateCcw className="h-4 w-4" /> {t("admin.reports.reset")}</Button>
@@ -127,7 +130,7 @@ export function ReportViewer({
       </div>
       {menu && (
         <div className="report-no-print grid gap-2 rounded-2xl border border-beige-dark/20 bg-warm-white p-3 md:hidden">
-          <Button type="button" variant="outline" onClick={printReport}>{t("admin.reports.print")} / PDF</Button>
+          <ReportPdfActions payload={payload} filters={filters} compact />
           <Button type="button" variant="outline" onClick={() => void downloadReportExcel(payload, title)}>Excel</Button>
           <Button type="button" variant="outline" onClick={onRun}>{t("admin.reports.refresh")}</Button>
         </div>
@@ -201,6 +204,9 @@ function ReportBody({ payload }: { payload: ReportPayload }) {
   }
   if (payload.type === "count-consumption" && !payload.counts?.length) {
     return <AdminEmptyState icon={X} title={t("admin.reports.empty.counts")} className="border-0 shadow-none" />;
+  }
+  if (payload.type === "supplier-compare" && !payload.priceCompare?.length) {
+    return <AdminEmptyState icon={X} title={t("admin.reports.empty.purchases")} className="border-0 shadow-none" />;
   }
 
   return (

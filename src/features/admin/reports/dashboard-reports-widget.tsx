@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ClipboardList, Package, Truck } from "lucide-react";
+import { AlertTriangle, ClipboardList, Package, Scale, Truck } from "lucide-react";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useT } from "@/components/providers/locale-provider";
 import { useAdminPath } from "@/hooks/useAdminPath";
@@ -42,12 +42,14 @@ export function DashboardReportsWidget() {
         </Link>
       }
     >
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         {[
           { type: "inventory", icon: Package, label: t("admin.reports.type.inventory") },
           { type: "exceptions", icon: AlertTriangle, label: t("admin.reports.type.exceptions") },
+          { type: "blank-count", icon: ClipboardList, label: t("admin.reports.type.blank-count") },
           { type: "count-consumption", icon: ClipboardList, label: t("admin.reports.type.count-consumption") },
           { type: "purchases", icon: Truck, label: t("admin.reports.type.purchases") },
+          { type: "supplier-compare", icon: Scale, label: t("admin.reports.type.supplier-compare") },
         ].map((item) => {
           const Icon = item.icon;
           return (

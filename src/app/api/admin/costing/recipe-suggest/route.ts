@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireAdminOnly } from "@/lib/auth/verify-admin";
-import { isGeminiConfigured } from "@/lib/ai/gemini-config";
+import { GeminiRequestError, httpStatusForAiCode, isGeminiConfigured } from "@/lib/ai/gemini-config";
 import { buildRecipeSuggestions, suggestRecipeIngredientsFromGemini } from "@/lib/ai/gemini-recipe";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { COLLECTIONS } from "@/lib/firebase/collections";
@@ -33,7 +33,21 @@ export async function POST(request: NextRequest) {
       suggestions: buildRecipeSuggestions(suggestions, ingredients),
     });
   } catch (error) {
-    const code = error instanceof Error && error.message.startsWith("ai-") ? error.message : "ai-unavailable";
-    return Response.json({ configured: true, error: code }, { status: 502 });
+    if (error instanceof GeminiRequestError) {
+      return Response.json(
+        {
+          configured: true,
+          ok: false,
+          code: error.code,
+          error: error.code,
+          providerStatus: error.providerStatus,
+          providerError: error.providerError,
+          model: error.model,
+          requestId: error.requestId,
+        },
+        { status: httpStatusForAiCode(error.code, error.providerStatus) }
+      );
+    }
+    return Response.json({ configured: true, error: "EXTRACTION_FAILED" }, { status: 502 });
   }
 }

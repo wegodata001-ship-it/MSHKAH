@@ -11,6 +11,7 @@ import type {
   SupplierOffer,
 } from "@/lib/inventory/types";
 import {
+  applyInventoryScope,
   buildBlankRows,
   buildCountRows,
   buildInventoryRows,
@@ -18,10 +19,13 @@ import {
   buildPurchaseRows,
   buildReportKpis,
   classifyExceptions,
+  countTotals,
   DEFAULT_VARIANCE_PERCENT,
+  groupPurchasesBySupplier,
   purchaseSummary,
 } from "@/lib/reports/compute";
-import type { ExceptionKind, ReportFilters, ReportType, StockCount } from "@/lib/reports/types";
+import { reportOrientation } from "@/lib/reports/pdf/filename";
+import type { ExceptionKind, ReportFilters, ReportScope, ReportType, StockCount } from "@/lib/reports/types";
 
 export const runtime = "nodejs";
 
@@ -53,6 +57,7 @@ export async function GET(request: NextRequest) {
   const rawType = url.searchParams.get("type") || "home";
   const type = (rawType === "home" ? "inventory" : rawType) as ReportType;
   const isHome = rawType === "home";
+  const scope = (url.searchParams.get("scope") as ReportScope | null) || undefined;
   const filters: ReportFilters = {
     from: url.searchParams.get("from") || undefined,
     to: url.searchParams.get("to") || undefined,
@@ -60,6 +65,7 @@ export async function GET(request: NextRequest) {
     supplierId: url.searchParams.get("supplierId") || undefined,
     productId: url.searchParams.get("productId") || undefined,
     status: (url.searchParams.get("status") as ExceptionKind | "all") || undefined,
+    scope,
     shift: url.searchParams.get("shift") || undefined,
     search: url.searchParams.get("search") || undefined,
   };
@@ -87,22 +93,25 @@ export async function GET(request: NextRequest) {
   const counts = countsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as StockCount);
   const variance = Number(settingsSnap.data()?.variancePercent ?? DEFAULT_VARIANCE_PERCENT);
 
-  const inventory = buildInventoryRows(products, movements, offers, records, suppliers, filters);
-  const kpis = buildReportKpis(inventory, records, movements);
-  const exceptions = classifyExceptions(inventory, counts, variance).filter(
+  const inventoryAll = buildInventoryRows(products, movements, offers, records, suppliers, { ...filters, scope: undefined });
+  const inventory = applyInventoryScope(inventoryAll, filters.scope);
+  const kpis = buildReportKpis(isHome ? inventoryAll : inventory, records, movements);
+  const exceptions = classifyExceptions(inventoryAll, counts, variance).filter(
     (row) => !filters.status || filters.status === "all" || row.kind === filters.status
   );
+  const purchaseRows = type === "purchases" || isHome ? buildPurchaseRows(records, products, suppliers, invoices, filters) : [];
+  const countRows = type === "count-consumption" ? buildCountRows(inventory, counts, filters, variance) : undefined;
 
   const payload = {
     type,
     generatedAt: new Date().toISOString(),
     periodFrom: filters.from,
     periodTo: filters.to,
-    orientation:
-      type === "exceptions" || type === "blank-count" ? "portrait" : "landscape",
+    orientation: reportOrientation(type),
+    branchName: "Mishkat Cafe",
     kpis,
     categories: [...new Set(products.map((item) => item.category).filter(Boolean))] as string[],
-    suppliers: suppliers.map((item) => ({ id: item.id, name: item.name })),
+    suppliers: suppliers.map((item) => ({ id: item.id, name: item.name, phone: item.phone, taxId: item.taxId })),
     products: products.map((item) => ({ id: item.id, name: item.name })),
     runs: runsSnap.docs
       .map((doc) => {
@@ -118,13 +127,17 @@ export async function GET(request: NextRequest) {
       })
       .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
       .slice(0, 8),
-    inventory: type === "inventory" || isHome ? inventory : undefined,
+    inventory: type === "inventory" || isHome ? (isHome ? inventoryAll : inventory) : undefined,
     exceptions: type === "exceptions" || isHome ? exceptions : undefined,
-    blank: type === "blank-count" ? buildBlankRows(products, filters) : undefined,
-    counts: type === "count-consumption" ? buildCountRows(inventory, counts, filters, variance) : undefined,
-    purchases: type === "purchases" ? buildPurchaseRows(records, products, suppliers, invoices, filters) : undefined,
-    purchaseSummary: type === "purchases" ? purchaseSummary(buildPurchaseRows(records, products, suppliers, invoices, filters)) : undefined,
-    priceCompare: type === "purchases" ? buildPriceCompare(records, products, suppliers, filters) : undefined,
+    blank: type === "blank-count" ? buildBlankRows(products, movements, filters) : undefined,
+    counts: countRows,
+    countTotals: countRows ? countTotals(countRows) : undefined,
+    purchases: type === "purchases" ? purchaseRows : undefined,
+    purchaseGroups: type === "purchases" ? groupPurchasesBySupplier(purchaseRows, suppliers) : undefined,
+    purchaseSummary: type === "purchases" ? purchaseSummary(purchaseRows) : undefined,
+    priceCompare: type === "supplier-compare" || type === "purchases"
+      ? buildPriceCompare(records, products, suppliers, filters)
+      : undefined,
   };
 
   return Response.json(payload);

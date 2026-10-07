@@ -37,11 +37,15 @@ describe("catalog shows all category products", () => {
       "utf8"
     );
 
+    expect(card).toMatch(/aspect-square/);
     expect(card).toMatch(/aspect-\[4\/3\]/);
     expect(card).toMatch(/flex-col/);
+    expect(card).toMatch(/line-clamp-2/);
+    expect(card).toMatch(/mt-auto/);
     expect(card).not.toMatch(/grid-cols-\[112px/);
     expect(card).not.toMatch(/showProductThumbnails/);
-    expect(layout).toMatch(/grid-cols-1/);
-    expect(layout).toMatch(/sm:grid-cols-2/);
+    expect(layout).toMatch(/grid-cols-2/);
+    expect(layout).toMatch(/md:grid-cols-3/);
+    expect(layout).not.toMatch(/grid-cols-1/);
   });
 });

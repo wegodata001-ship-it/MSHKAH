@@ -5,8 +5,8 @@ import {
   AlertTriangle,
   ClipboardList,
   FileSpreadsheet,
-  MoreHorizontal,
   Package,
+  Scale,
   Shield,
   ShoppingCart,
   Truck,
@@ -23,6 +23,7 @@ import { adminCard } from "@/features/admin/components/admin-styles";
 import { formatReportDate, formatReportDateTime, formatReportIls } from "@/lib/reports/format";
 import type { ReportFilters, ReportPayload, ReportType } from "@/lib/reports/types";
 import { ReportViewer } from "@/features/admin/reports/report-viewer";
+import { ReportPdfActions } from "@/features/admin/reports/pdf/report-preview-modal";
 import { cn } from "@/lib/utils";
 
 const CARDS: { type: ReportType; icon: typeof Package; descKey: string }[] = [
@@ -31,6 +32,7 @@ const CARDS: { type: ReportType; icon: typeof Package; descKey: string }[] = [
   { type: "blank-count", icon: ClipboardList, descKey: "admin.reports.card.blank" },
   { type: "count-consumption", icon: FileSpreadsheet, descKey: "admin.reports.card.counts" },
   { type: "purchases", icon: Truck, descKey: "admin.reports.card.purchases" },
+  { type: "supplier-compare", icon: Scale, descKey: "admin.reports.card.compare" },
 ];
 
 export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {}) {
@@ -43,9 +45,8 @@ export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {})
   const [activeType, setActiveType] = useState<ReportType | null>(initialType ?? null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(
+  const fetchPayload = useCallback(
     async (type: ReportType | "home", nextFilters = filters) => {
-      setLoading(true);
       const params = new URLSearchParams({ type });
       if (nextFilters.from) params.set("from", nextFilters.from);
       if (nextFilters.to) params.set("to", nextFilters.to);
@@ -53,10 +54,19 @@ export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {})
       if (nextFilters.supplierId) params.set("supplierId", nextFilters.supplierId);
       if (nextFilters.productId) params.set("productId", nextFilters.productId);
       if (nextFilters.status && nextFilters.status !== "all") params.set("status", nextFilters.status);
+      if (nextFilters.scope && nextFilters.scope !== "all") params.set("scope", nextFilters.scope);
       if (nextFilters.shift) params.set("shift", nextFilters.shift);
       if (nextFilters.search) params.set("search", nextFilters.search);
       const response = await authFetch(`/api/admin/reports/data?${params.toString()}`);
-      const json = (await response.json()) as ReportPayload;
+      return (await response.json()) as ReportPayload;
+    },
+    [authFetch, filters]
+  );
+
+  const load = useCallback(
+    async (type: ReportType | "home", nextFilters = filters) => {
+      setLoading(true);
+      const json = await fetchPayload(type, nextFilters);
       if (type === "home") setHome(json);
       else {
         setViewer({ ...json, type });
@@ -67,8 +77,9 @@ export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {})
         });
       }
       setLoading(false);
+      return json;
     },
-    [authFetch, filters]
+    [authFetch, fetchPayload, filters]
   );
 
   useEffect(() => {
@@ -141,26 +152,30 @@ export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {})
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-turquoise/10 text-turquoise">
                     <Icon className="h-5 w-5" />
                   </div>
-                  <button type="button" className="rounded-lg p-1 text-coffee/40" aria-label={t("admin.reports.more")}>
-                    <MoreHorizontal className="h-4 w-4" />
-                  </button>
                 </div>
                 <p className="font-semibold text-dark-brown">{t(`admin.reports.type.${card.type}`)}</p>
                 <p className="mt-1 flex-1 text-sm text-coffee/55">{t(card.descKey)}</p>
                 <p className="mt-2 text-xs text-coffee/45">
                   {t("admin.reports.lastRun")}: {last ? formatReportDateTime(last.generatedAt) : "—"}
                 </p>
-                <Button
-                  className="mt-4"
-                  type="button"
-                  variant="turquoise"
-                  onClick={() => {
-                    setActiveType(card.type);
-                    void load(card.type);
-                  }}
-                >
-                  {t("admin.reports.open")}
-                </Button>
+                <div className="mt-4 space-y-2">
+                  <ReportPdfActions
+                    compact
+                    filters={filters}
+                    getPayload={async () => ({ ...(await fetchPayload(card.type, filters)), type: card.type })}
+                  />
+                  <Button
+                    className="w-full"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setActiveType(card.type);
+                      void load(card.type);
+                    }}
+                  >
+                    {t("admin.reports.open")}
+                  </Button>
+                </div>
               </div>
             );
           })}

@@ -172,7 +172,7 @@ export function CatalogView() {
 
       <div className="mx-auto max-w-[1280px] px-4 md:px-8 lg:px-10">
         <div className="mt-6">
-          <div className="min-w-0 pb-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+1.5rem)] md:pb-12">
+          <div className="min-w-0 pb-[calc(var(--mobile-bottom-nav-height)+env(safe-area-inset-bottom,0px)+5.5rem)] md:pb-12">
             {!isSearchMode && (
               <div className="sticky top-12 z-30 -mx-4 bg-cream/95 px-4 py-2 backdrop-blur-md md:static md:top-auto md:mx-0 md:bg-transparent md:px-0 md:py-0 md:backdrop-blur-none">
                 <section className="space-y-2">

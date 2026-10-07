@@ -5,10 +5,11 @@ import type { PurchaseDocumentType, VatType } from "@/lib/inventory/types";
 const PROMPT = `Extract a supplier purchase document. Return JSON only.
 Read only what is visible. Do not invent missing VAT, prices, quantities, currency, dates, suppliers, or conversions.
 If a field is unclear, use null and a lower confidence (0-1).
+Separate net (before VAT), VAT, and gross (including VAT) at header and line level when visible.
+Do not assume 18% VAT. Use the invoice VAT type: inclusive, exclusive, exempt, or null/unknown.
 documentType must be one of: invoice, tax_invoice, receipt, tax_receipt, delivery, credit, other, or null.
-vatType per line if visible: inclusive, exclusive, exempt, or null.
 Dates as YYYY-MM-DD. Numbers as numbers.
-Each line must include description, sku, barcode, quantity, purchaseUnit, unitPrice, discount, vat, lineTotal.`;
+Each line: description, quantity, unit, unitPriceBeforeVat, lineTotalBeforeVat, vatRate, vatAmount, unitPriceIncludingVat, lineTotalIncludingVat, vatType.`;
 
 const FIELD = {
   type: "OBJECT",
@@ -54,10 +55,15 @@ const INVOICE_SCHEMA = {
           purchaseUnit: { type: "STRING", nullable: true },
           unit: { type: "STRING", nullable: true },
           unitPrice: { type: "NUMBER", nullable: true },
+          unitPriceBeforeVat: { type: "NUMBER", nullable: true },
+          unitPriceIncludingVat: { type: "NUMBER", nullable: true },
           discount: { type: "NUMBER", nullable: true },
           vat: { type: "NUMBER", nullable: true },
+          vatRate: { type: "NUMBER", nullable: true },
           vatAmount: { type: "NUMBER", nullable: true },
           lineTotal: { type: "NUMBER", nullable: true },
+          lineTotalBeforeVat: { type: "NUMBER", nullable: true },
+          lineTotalIncludingVat: { type: "NUMBER", nullable: true },
           sku: { type: "STRING", nullable: true },
           barcode: { type: "STRING", nullable: true },
           vatType: { type: "STRING", nullable: true },
@@ -146,12 +152,13 @@ export function parseInvoiceExtraction(text: string): ExtractedInvoice {
           name: str(item.description) || str(item.name) || str(item.rawName) || "",
           quantity: num(item.quantity),
           unit: str(item.purchaseUnit) || str(item.unit),
-          unitPrice: num(item.unitPrice),
+          unitPrice: num(item.unitPriceBeforeVat) ?? num(item.unitPrice),
           discount: num(item.discount),
-          priceBeforeVat: num(item.priceBeforeVat),
+          priceBeforeVat: num(item.unitPriceBeforeVat) ?? num(item.priceBeforeVat) ?? num(item.lineTotalBeforeVat),
           vatAmount: num(item.vat) ?? num(item.vatAmount),
-          priceIncludingVat: num(item.priceIncludingVat),
-          lineTotal: num(item.lineTotal),
+          priceIncludingVat:
+            num(item.unitPriceIncludingVat) ?? num(item.priceIncludingVat) ?? num(item.lineTotalIncludingVat),
+          lineTotal: num(item.lineTotalIncludingVat) ?? num(item.lineTotalBeforeVat) ?? num(item.lineTotal),
           sku: str(item.sku),
           barcode: str(item.barcode),
           vatType: (str(item.vatType) as VatType) || null,
@@ -169,11 +176,16 @@ export function parseInvoiceExtraction(text: string): ExtractedInvoice {
 export async function extractInvoiceWithGemini(input: {
   bytes: Buffer;
   mimeType: string;
-}): Promise<{ extraction: ExtractedInvoice; model: string; httpStatus: number }> {
-  const { text, model, httpStatus } = await geminiGenerateJson({
-    parts: [{ text: PROMPT }, { inlineData: { mimeType: input.mimeType, data: input.bytes.toString("base64") } }],
+  requestId?: string;
+}): Promise<{ extraction: ExtractedInvoice; model: string; httpStatus: number; requestId: string }> {
+  const { text, model, httpStatus, requestId } = await geminiGenerateJson({
+    parts: [
+      { text: PROMPT },
+      { inlineData: { mimeType: input.mimeType, data: input.bytes.toString("base64") } },
+    ],
     temperature: 0.1,
     schema: INVOICE_SCHEMA,
+    requestId: input.requestId,
   });
-  return { extraction: parseInvoiceExtraction(text), model, httpStatus };
+  return { extraction: parseInvoiceExtraction(text), model, httpStatus, requestId };
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   adminPath,
@@ -105,5 +107,12 @@ describe("menu display product filter", () => {
 
     const coffee = filterMenuDisplayProducts(products, "coffee", categories);
     expect(coffee.map((p) => p.id)).toEqual(["1"]);
+  });
+});
+
+describe("portal manifest", () => {
+  it("lets /manifest.webmanifest reach Next.js instead of rewriting to /admin", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/middleware.ts"), "utf8");
+    expect(source).toMatch(/isPortalHost[\s\S]*pathname === "\/manifest\.webmanifest"[\s\S]*NextResponse\.next\(\)/);
   });
 });

@@ -104,10 +104,17 @@ export function SmartInvoiceFlow({
       const response = await authFetch("/api/admin/inventory/invoice/extract", { method: "POST", body });
       const data = (await response.json()) as InvoiceExtractResponse;
       if (!response.ok || !data.invoice) {
+        const code = data.code || data.error || "";
         setError(
-          data.error === "ai-not-configured"
+          code === "AI_NOT_CONFIGURED" || code === "ai-not-configured"
             ? t("admin.inventory.smart.notConfigured")
-            : t("admin.inventory.smart.unavailable")
+            : code === "INVALID_FILE"
+              ? t("admin.inventory.smart.invalidFile")
+              : code === "PROVIDER_AUTH_ERROR"
+                ? t("admin.inventory.smart.authError")
+                : code === "PROVIDER_RATE_LIMIT"
+                  ? t("admin.inventory.smart.rateLimit")
+                  : t("admin.inventory.smart.extractFailed")
         );
         return;
       }
@@ -193,6 +200,19 @@ export function SmartInvoiceFlow({
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="button" variant="outline" onClick={onManual}>{t("admin.inventory.smart.manual")}</Button>
+          {error && (
+            <label className="inline-flex">
+              <input
+                type="file"
+                accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                className="hidden"
+                onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
+              />
+              <span className="inline-flex h-10 cursor-pointer items-center rounded-xl border px-3 text-sm">
+                {t("admin.inventory.smart.chooseOtherFile")}
+              </span>
+            </label>
+          )}
           {error && (
             <Button type="button" variant="outline" disabled={busy || !file} onClick={() => void scan()}>
               {t("admin.inventory.smart.retry")}

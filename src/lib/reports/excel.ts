@@ -70,6 +70,20 @@ export async function downloadReportExcel(payload: ReportPayload, title: string)
         }
       }
     }
+  } else if (payload.type === "supplier-compare" && payload.priceCompare) {
+    sheet.addRow(["מוצר", "ספק", "אריזה", "מחיר", "מחיר מנורמל", "הצעה טובה ביותר"]);
+    for (const item of payload.priceCompare) {
+      for (const offer of item.offers) {
+        sheet.addRow([
+          item.name,
+          offer.supplierName,
+          `${offer.packageQty ?? ""} ${offer.unit ?? ""}`.trim(),
+          offer.price,
+          offer.unitCost,
+          offer.supplierId === item.cheapestSupplierId ? "כן" : "",
+        ]);
+      }
+    }
   }
 
   const buffer = await workbook.xlsx.writeBuffer();

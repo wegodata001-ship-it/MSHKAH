@@ -5,7 +5,14 @@ import { Suspense } from "react";
 import { ReportsAdmin } from "@/features/admin/reports/reports-admin";
 import type { ReportType } from "@/lib/reports/types";
 
-const TYPES: ReportType[] = ["inventory", "exceptions", "blank-count", "count-consumption", "purchases"];
+const TYPES: ReportType[] = [
+  "inventory",
+  "exceptions",
+  "blank-count",
+  "count-consumption",
+  "purchases",
+  "supplier-compare",
+];
 
 function ReportsPageInner() {
   const params = useSearchParams();

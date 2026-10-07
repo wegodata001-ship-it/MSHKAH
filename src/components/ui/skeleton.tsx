@@ -19,9 +19,9 @@ function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>)
 
 function ProductCardSkeleton() {
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[22px] bg-warm-white ring-1 ring-black/[0.05]">
-      <Skeleton className="aspect-[4/3] w-full rounded-none" />
-      <div className="space-y-2 p-3 sm:p-4">
+    <div className="flex h-full flex-col overflow-hidden rounded-[16px] bg-warm-white ring-1 ring-black/[0.05] md:rounded-[22px]">
+      <Skeleton className="aspect-square w-full rounded-none md:aspect-[4/3]" />
+      <div className="space-y-2 p-2 md:p-3">
         <Skeleton className="h-4 w-3/4" />
         <Skeleton className="h-3 w-full" />
         <Skeleton className="h-3 w-2/3" />
