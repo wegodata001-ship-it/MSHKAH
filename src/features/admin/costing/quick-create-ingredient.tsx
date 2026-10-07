@@ -144,8 +144,9 @@ export function QuickCreateIngredientPanel({
           </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
             <div>
-              <Label>{t("admin.costing.ingredientName")} *</Label>
+              <Label htmlFor="qc-ingredient-name">{t("admin.costing.ingredientName")} *</Label>
               <Input
+                id="qc-ingredient-name"
                 className="mt-1 h-11"
                 value={name}
                 autoFocus
@@ -156,17 +157,23 @@ export function QuickCreateIngredientPanel({
               />
             </div>
             <div>
-              <Label>{t("admin.costing.category")}</Label>
-              <Input className="mt-1 h-11" value={category} onChange={(e) => setCategory(e.target.value)} />
+              <Label htmlFor="qc-ingredient-category">{t("admin.costing.category")}</Label>
+              <Input
+                id="qc-ingredient-category"
+                className="mt-1 h-11"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>{t("admin.costing.purchasePrice")} *</Label>
+                <Label htmlFor="qc-purchase-price">{t("admin.costing.purchasePrice")} *</Label>
                 <div className="relative mt-1">
                   <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-sm text-coffee/45">
                     ₪
                   </span>
                   <Input
+                    id="qc-purchase-price"
                     className="h-11 ps-8"
                     type="number"
                     min="0"
@@ -178,8 +185,9 @@ export function QuickCreateIngredientPanel({
                 </div>
               </div>
               <div>
-                <Label>{t("admin.costing.purchaseQty")} *</Label>
+                <Label htmlFor="qc-purchase-qty">{t("admin.costing.purchaseQty")} *</Label>
                 <Input
+                  id="qc-purchase-qty"
                   className="mt-1 h-11"
                   type="number"
                   min="0"
