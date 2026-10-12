@@ -9,6 +9,7 @@ import {
   Scale,
   Shield,
   ShoppingCart,
+  Target,
   Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const CARDS: { type: ReportType; icon: typeof Package; descKey: string }[] = [
   { type: "count-consumption", icon: FileSpreadsheet, descKey: "admin.reports.card.counts" },
   { type: "purchases", icon: Truck, descKey: "admin.reports.card.purchases" },
   { type: "supplier-compare", icon: Scale, descKey: "admin.reports.card.compare" },
+  { type: "breakeven", icon: Target, descKey: "admin.reports.card.breakeven" },
 ];
 
 export function ReportsAdmin({ initialType }: { initialType?: ReportType } = {}) {

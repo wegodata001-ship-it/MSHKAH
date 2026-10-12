@@ -20,6 +20,16 @@ export function geminiModelsToTry(): string[] {
 
 export type InvoiceAiCode =
   | "AI_NOT_CONFIGURED"
+  | "PROVIDER_NOT_CONFIGURED"
+  | "INVALID_API_KEY"
+  | "PROVIDER_FORBIDDEN"
+  | "QUOTA_EXCEEDED"
+  | "UNSUPPORTED_FILE"
+  | "FILE_TOO_LARGE"
+  | "PDF_PARSE_FAILED"
+  | "SCAN_FAILED"
+  | "INVALID_RESPONSE"
+  | "STORAGE_FAILED"
   | "INVALID_FILE"
   | "PROVIDER_AUTH_ERROR"
   | "PROVIDER_RATE_LIMIT"
@@ -51,10 +61,12 @@ export class GeminiRequestError extends Error {
 }
 
 export function httpStatusForAiCode(code: InvoiceAiCode, providerStatus?: number | null): number {
-  if (code === "AI_NOT_CONFIGURED") return 503;
-  if (code === "INVALID_FILE") return 400;
-  if (code === "PROVIDER_AUTH_ERROR") return 502;
-  if (code === "PROVIDER_RATE_LIMIT") return 429;
+  if (code === "AI_NOT_CONFIGURED" || code === "PROVIDER_NOT_CONFIGURED") return 503;
+  if (code === "INVALID_FILE" || code === "UNSUPPORTED_FILE") return 400;
+  if (code === "FILE_TOO_LARGE") return 413;
+  if (code === "INVALID_API_KEY" || code === "PROVIDER_FORBIDDEN" || code === "PROVIDER_AUTH_ERROR") return 502;
+  if (code === "QUOTA_EXCEEDED" || code === "PROVIDER_RATE_LIMIT") return 429;
+  if (code === "STORAGE_FAILED") return providerStatus && providerStatus >= 400 ? providerStatus : 502;
   if (providerStatus && providerStatus >= 500) return 502;
   return 422;
 }

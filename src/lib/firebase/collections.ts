@@ -29,6 +29,10 @@ export const COLLECTIONS = {
   costingSettings: "costingSettings",
   costingSnapshots: "costingSnapshots",
   costingImportHistory: "costingImportHistory",
+  breakEvenFixedCosts: "breakEvenFixedCosts",
+  breakEvenVariableCosts: "breakEvenVariableCosts",
+  breakEvenSettings: "breakEvenSettings",
+  breakEvenSnapshots: "breakEvenSnapshots",
   suppliers: "suppliers",
   supplierOffers: "supplierOffers",
   purchaseInvoices: "purchaseInvoices",
@@ -50,5 +54,6 @@ export const STORAGE_PATHS = {
   settings: "settings",
   modifiers: "modifiers",
   invoices: "purchase-invoices",
+  invoiceFiles: "invoice-files",
   test: "test",
 } as const;

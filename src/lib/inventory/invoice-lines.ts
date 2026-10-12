@@ -8,7 +8,7 @@ export function newInvoiceLineKey(): string {
   return `line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function emptyInvoiceLine(vatRate = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
+export function emptyInvoiceLine(vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
   return {
     key: newInvoiceLineKey(),
     rawName: "",
@@ -18,6 +18,7 @@ export function emptyInvoiceLine(vatRate = DEFAULT_VAT_RATE): PurchaseInvoiceLin
     discount: null,
     lineTotal: null,
     vatType: "inclusive",
+    taxMode: "inclusive",
     vatRate,
     priceBeforeVat: null,
     vatAmount: null,
@@ -33,29 +34,58 @@ export function lineNetAmount(line: Pick<PurchaseInvoiceLine, "quantity" | "unit
   return Math.max(0, qty * price - discount);
 }
 
-export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
-  const amount = lineNetAmount(line);
-  const rate = line.vatRate ?? vatRate;
-  const vatType = (line.vatType || line.vatMode || "inclusive") as VatType;
-  const vat = splitVat({
-    amount,
-    vatType,
-    vatRate: rate,
-  });
+export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
+  const taxMode = line.vatType || line.taxMode || line.vatMode;
   const qty = Number(line.quantity);
   const hasQty = Number.isFinite(qty) && qty > 0;
+  const computedNet = lineNetAmount(line);
+  const amount = computedNet > 0 ? computedNet : (line.lineTotal ?? line.lineNet ?? line.lineGross ?? 0);
+
+  if (taxMode === "unknown") {
+    const net = line.netAmount ?? line.lineNet ?? line.priceBeforeVat;
+    const gross = line.grossAmount ?? line.lineGross ?? line.priceIncludingVat;
+    const vatAmount = line.vatAmount ?? (net != null && gross != null ? roundSafe(gross - net) : null);
+    return {
+      ...line,
+      vatType: "unknown",
+      vatMode: "unknown",
+      taxMode: "unknown",
+      vatRate: line.vatRate ?? null,
+      lineTotal: computedNet > 0 ? computedNet : line.lineTotal,
+      priceBeforeVat: net ?? null,
+      vatAmount,
+      priceIncludingVat: gross ?? null,
+      netAmount: net ?? null,
+      grossAmount: gross ?? null,
+      lineNet: net ?? null,
+      lineGross: gross ?? null,
+      unitPriceNet: hasQty && net != null ? net / qty : line.unitPriceNet ?? null,
+      unitPriceGross: hasQty && gross != null ? gross / qty : line.unitPriceGross ?? null,
+    };
+  }
+
+  const vatType = (taxMode || "inclusive") as VatType;
+  const rate = line.vatRate ?? vatRate;
+  const vat = splitVat({ amount, vatType, vatRate: rate });
   return {
     ...line,
     vatType,
     vatMode: vatType,
+    taxMode: vatType,
     vatRate: rate,
     lineTotal: amount,
     ...vat,
     netAmount: vat.priceBeforeVat,
     grossAmount: vat.priceIncludingVat,
+    lineNet: vat.priceBeforeVat,
+    lineGross: vat.priceIncludingVat,
     unitPriceNet: hasQty ? vat.priceBeforeVat / qty : null,
     unitPriceGross: hasQty ? vat.priceIncludingVat / qty : null,
   };
+}
+
+function roundSafe(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 export function invoiceFinanceTotals(lines: PurchaseInvoiceLine[], vatRate = DEFAULT_VAT_RATE) {

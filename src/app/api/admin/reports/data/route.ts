@@ -26,6 +26,10 @@ import {
 } from "@/lib/reports/compute";
 import { reportOrientation } from "@/lib/reports/pdf/filename";
 import type { ExceptionKind, ReportFilters, ReportScope, ReportType, StockCount } from "@/lib/reports/types";
+import { computeBreakEven, monthBounds } from "@/lib/breakeven/compute";
+import { DEFAULT_BREAK_EVEN_SETTINGS, type BreakEvenFixedCost, type BreakEvenSettings, type BreakEvenVariableCost } from "@/lib/breakeven/types";
+import type { DishRecipe } from "@/lib/costing/types";
+import type { Order } from "@/types";
 
 export const runtime = "nodejs";
 
@@ -138,7 +142,79 @@ export async function GET(request: NextRequest) {
     priceCompare: type === "supplier-compare" || type === "purchases"
       ? buildPriceCompare(records, products, suppliers, filters)
       : undefined,
+    breakEven: type === "breakeven" ? await loadBreakEven(db, products, filters) : undefined,
   };
 
   return Response.json(payload);
+}
+
+async function loadBreakEven(
+  db: FirebaseFirestore.Firestore,
+  ingredients: CostingIngredient[],
+  filters: ReportFilters
+) {
+  const month = monthBounds();
+  const from = filters.from || month.from;
+  const to = filters.to || month.to;
+  const [fixedSnap, variableSnap, settingsSnap, recipesSnap, ordersSnap] = await Promise.all([
+    db.collection(COLLECTIONS.breakEvenFixedCosts).limit(400).get(),
+    db.collection(COLLECTIONS.breakEvenVariableCosts).limit(400).get(),
+    db.collection(COLLECTIONS.breakEvenSettings).doc("default").get(),
+    db.collection(COLLECTIONS.dishRecipes).limit(800).get(),
+    db.collection(COLLECTIONS.orders).limit(2000).get(),
+  ]);
+  const settingsData = settingsSnap.data() ?? {};
+  const settings: BreakEvenSettings = {
+    operatingDays: Number(settingsData.operatingDays ?? DEFAULT_BREAK_EVEN_SETTINGS.operatingDays) || 26,
+    vatBasis: settingsData.vatBasis === "including" ? "including" : "before",
+    vatRate: Number(settingsData.vatRate ?? DEFAULT_BREAK_EVEN_SETTINGS.vatRate) || 0.18,
+    alertGap: Number(settingsData.alertGap ?? DEFAULT_BREAK_EVEN_SETTINGS.alertGap) || 500,
+  };
+  const fixed = fixedSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as BreakEvenFixedCost);
+  const variable = variableSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as BreakEvenVariableCost);
+  const recipes = recipesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as DishRecipe);
+  const orders = ordersSnap.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      orderNumber: String(data.orderNumber ?? ""),
+      customerId: String(data.customerId ?? ""),
+      customerName: String(data.customerName ?? ""),
+      status: data.status,
+      items: Array.isArray(data.items) ? data.items : [],
+      total: Number(data.total ?? 0),
+      paymentStatus: data.paymentStatus,
+      isTestOrder: data.isTestOrder === true,
+      createdAt: data.createdAt?.toDate?.()?.toISOString?.() ?? String(data.createdAt ?? ""),
+      paidAt: data.paidAt?.toDate?.()?.toISOString?.() ?? data.paidAt ?? null,
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.() ?? data.completedAt ?? null,
+    } as Order;
+  });
+  const result = computeBreakEven({ settings, fixed, variable, orders, recipes, ingredients, from, to });
+  return {
+    canCompute: result.canCompute,
+    missing: result.missing,
+    vatBasis: result.vatBasis,
+    operatingDays: result.operatingDays,
+    revenue: result.revenue,
+    orders: result.orders,
+    averageOrderValue: result.averageOrderValue,
+    productsSold: result.productsSold,
+    fixedMonthly: result.fixedMonthly,
+    variableTotal: result.variableTotal,
+    foodCost: result.foodCost,
+    contribution: result.contribution,
+    contributionRatio: result.contributionRatio,
+    breakEvenMonthly: result.breakEvenMonthly,
+    breakEvenWeekly: result.breakEvenWeekly,
+    breakEvenDaily: result.breakEvenDaily,
+    ordersRequiredDaily: result.ordersRequiredDaily,
+    gap: result.gap,
+    progress: result.progress,
+    aboveBreakEven: result.aboveBreakEven,
+    achieved: result.achieved,
+    forecast: result.forecast,
+    forecastGap: result.forecastGap,
+    requiredDailyFromNow: result.requiredDailyFromNow,
+  };
 }

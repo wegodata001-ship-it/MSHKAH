@@ -208,6 +208,33 @@ function ReportBody({ payload }: { payload: ReportPayload }) {
   if (payload.type === "supplier-compare" && !payload.priceCompare?.length) {
     return <AdminEmptyState icon={X} title={t("admin.reports.empty.purchases")} className="border-0 shadow-none" />;
   }
+  if (payload.type === "breakeven") {
+    const data = payload.breakEven;
+    if (!data?.canCompute) {
+      return (
+        <AdminEmptyState
+          icon={X}
+          title={t("admin.breakeven.cannot")}
+          hint={data?.missing.map((item) => t(`admin.breakeven.missing.${item}`)).join(" · ")}
+          className="border-0 shadow-none"
+        />
+      );
+    }
+    return (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <SummaryChip label={t("admin.breakeven.sold")} value={formatReportIls(data.revenue)} />
+        <SummaryChip label={t("admin.breakeven.fixedTitle")} value={formatReportIls(data.fixedMonthly)} />
+        <SummaryChip label={t("admin.breakeven.variableTitle")} value={formatReportIls(data.variableTotal)} />
+        <SummaryChip label={t("admin.breakeven.foodCost")} value={formatReportIls(data.foodCost)} />
+        <SummaryChip label={t("admin.breakeven.contribution")} value={formatReportIls(data.contribution)} />
+        <SummaryChip label={t("admin.breakeven.title")} value={formatReportIls(data.breakEvenMonthly)} />
+        <SummaryChip label={t("admin.breakeven.short")} value={formatReportIls(data.gap)} />
+        <SummaryChip label={t("admin.breakeven.forecast")} value={formatReportIls(data.forecast)} />
+        <SummaryChip label={t("admin.breakeven.aov")} value={formatReportIls(data.averageOrderValue)} />
+        <SummaryChip label={t("admin.breakeven.orders")} value={data.orders == null ? "—" : String(data.orders)} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

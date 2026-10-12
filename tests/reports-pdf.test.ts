@@ -97,6 +97,9 @@ describe("report PDF filenames and orientation", () => {
     expect(reportPdfFilename("purchases", new Date("2026-10-07T10:00:00.000Z"))).toBe(
       "mishkat-supplier-purchases-2026-10-07.pdf"
     );
+    expect(reportPdfFilename("breakeven", new Date("2026-10-07T10:00:00.000Z"))).toBe(
+      "mishkat-break-even-2026-10-07.pdf"
+    );
     expect(reportOrientation("inventory")).toBe("portrait");
     expect(reportOrientation("purchases")).toBe("landscape");
   });
@@ -294,5 +297,45 @@ describe("blank count form pages", () => {
     const pages = paginateReport(doc);
     expect(pages[0]?.showFormMeta).toBe(true);
     expect(pages[pages.length - 1]?.showFormFooter).toBe(true);
+  });
+});
+
+describe("break-even PDF", () => {
+  it("renders one A4 portrait page from computed figures, not invented ones", () => {
+    const doc = payload("breakeven", {
+      breakEven: {
+        canCompute: true,
+        missing: [],
+        vatBasis: "before",
+        operatingDays: 26,
+        revenue: 41250,
+        orders: 800,
+        averageOrderValue: 50,
+        productsSold: 900,
+        fixedMonthly: 30000,
+        variableTotal: 16500,
+        foodCost: 12000,
+        contribution: 24750,
+        contributionRatio: 0.6,
+        breakEvenMonthly: 50000,
+        breakEvenWeekly: 13461.54,
+        breakEvenDaily: 1923.08,
+        ordersRequiredDaily: 38.46,
+        gap: 8750,
+        progress: 0.825,
+        aboveBreakEven: null,
+        achieved: false,
+        forecast: 47800,
+        forecastGap: -2200,
+        requiredDailyFromNow: 2000,
+      },
+    });
+    const pages = paginateReport(doc);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.orientation).toBe("portrait");
+    expect(pages[0]?.blocks[0]?.kind).toBe("breakeven");
+    const html = renderToStaticMarkup(ReportA4Pages({ pages, payload: doc, copy: buildReportCopy(doc, {}, t) }));
+    expect(html).toContain("50000");
+    expect(html).toContain("41250");
   });
 });

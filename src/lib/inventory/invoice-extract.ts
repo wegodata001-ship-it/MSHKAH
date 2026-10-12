@@ -11,17 +11,25 @@ export type ExtractedField<T> = {
 
 export type ExtractedInvoiceLine = {
   name: string;
+  originalDescription: string | null;
   quantity: number | null;
   unit: string | null;
   unitPrice: number | null;
+  unitPriceNet: number | null;
+  unitPriceGross: number | null;
   discount: number | null;
+  discountPercent: number | null;
+  discountAmount: number | null;
   priceBeforeVat: number | null;
   vatAmount: number | null;
   priceIncludingVat: number | null;
   lineTotal: number | null;
+  lineNet: number | null;
+  lineGross: number | null;
   sku: string | null;
   barcode: string | null;
   vatType: VatType | null;
+  vatRate: number | null;
   conversionNote: string | null;
   conversionFactor: number | null;
   confidence: number | null;
@@ -31,16 +39,28 @@ export type ExtractedInvoice = {
   supplierName: ExtractedField<string | null>;
   businessName: ExtractedField<string | null>;
   taxId: ExtractedField<string | null>;
+  supplierVatNumber: ExtractedField<string | null>;
+  supplierPhone: ExtractedField<string | null>;
+  supplierAddress: ExtractedField<string | null>;
   invoiceNumber: ExtractedField<string | null>;
   invoiceDate: ExtractedField<string | null>;
+  dueDate: ExtractedField<string | null>;
   currency: ExtractedField<string | null>;
   documentType: ExtractedField<PurchaseDocumentType | null>;
   paymentMethod: ExtractedField<string | null>;
+  paymentTerms: ExtractedField<string | null>;
   headerDiscount: ExtractedField<number | null>;
   vatRate: ExtractedField<number | null>;
   subtotal: ExtractedField<number | null>;
   vatTotal: ExtractedField<number | null>;
   grandTotal: ExtractedField<number | null>;
+  subtotalBeforeDiscount: ExtractedField<number | null>;
+  discountTotal: ExtractedField<number | null>;
+  shipping: ExtractedField<number | null>;
+  delivery: ExtractedField<number | null>;
+  serviceCharge: ExtractedField<number | null>;
+  rounding: ExtractedField<number | null>;
+  otherCharges: ExtractedField<number | null>;
   vatStatus: "detected" | "needs_review";
   lines: ExtractedInvoiceLine[];
 };
@@ -59,6 +79,7 @@ export type InvoiceExtractResponse = {
   extraction?: ExtractedInvoice;
   invoice?: PurchaseInvoice;
   error?: string;
+  errorCode?: string;
 };
 
 export function needsReview(confidence: number | null | undefined): boolean {
@@ -79,8 +100,9 @@ export function guessUnit(raw: string | null | undefined): PurchaseUnit | null {
 export function asVatType(value: string | null | undefined): VatType | null {
   const raw = (value || "").toLowerCase();
   if (!raw) return null;
+  if (/unknown|לא זוהה|غير واضح/.test(raw)) return "unknown";
   if (/exempt|פטור|معفى/.test(raw)) return "exempt";
-  if (/exclusive|לפני|قبل|ex-vat|before/.test(raw)) return "exclusive";
+  if (/exclusive|לפני|לא כולל|قبل|ex-vat|before/.test(raw)) return "exclusive";
   if (/inclusive|כולל|شامل|inc/.test(raw)) return "inclusive";
   return null;
 }

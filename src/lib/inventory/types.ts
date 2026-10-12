@@ -1,6 +1,55 @@
 import type { PurchaseUnit } from "@/lib/costing/types";
 
-export type VatType = "inclusive" | "exclusive" | "exempt";
+export type VatType = "inclusive" | "exclusive" | "exempt" | "unknown";
+export type InvoiceTaxMode = "inclusive" | "exclusive" | "exempt" | "unknown";
+export type InvoiceScanStatus =
+  | "uploaded"
+  | "scanning"
+  | "needs_review"
+  | "ready"
+  | "approved"
+  | "posted"
+  | "failed"
+  | "cancelled";
+export type InvoiceSourceKind = "camera" | "jpg" | "png" | "pdf" | "other";
+
+export type InvoiceSourceFile = {
+  storagePath: string;
+  downloadUrl: string;
+  originalFilename: string;
+  mimeType: string;
+  size: number;
+  uploadedAt: string;
+  uploadedBy?: string;
+  kind: InvoiceSourceKind;
+};
+
+export type InvoiceScanAttempt = {
+  id: string;
+  provider: string;
+  model?: string;
+  timestamp: string;
+  status: "ok" | "failed";
+  requestId?: string;
+  code?: string;
+  rawExtraction?: unknown;
+  normalizedExtraction?: unknown;
+  validationResult?: InvoiceTotalsValidation;
+};
+
+export type InvoiceTotalsValidation = {
+  lineNetSum: number;
+  lineVatSum: number;
+  lineGrossSum: number;
+  headerNet: number | null;
+  headerVat: number | null;
+  headerGross: number | null;
+  computedGross: number | null;
+  netDiff: number | null;
+  vatDiff: number | null;
+  grossDiff: number | null;
+  hasMismatch: boolean;
+};
 export type FoodCostVatMode = "before" | "including";
 export type CostBasis = "latest" | "weighted";
 
@@ -16,9 +65,13 @@ export type SupplierPriceSource = "MANUAL" | "PURCHASE_INVOICE" | "PURCHASE_ORDE
 export type Supplier = {
   id: string;
   name: string;
+  companyName?: string;
   phone?: string;
   email?: string;
   taxId?: string;
+  address?: string;
+  contactName?: string;
+  paymentTerms?: string;
   notes?: string;
   active: boolean;
   createdAt: string;
@@ -49,6 +102,14 @@ export type SupplierOffer = {
   lastPurchaseDate?: string;
   lastPackageQuantity?: number;
   lastUnit?: PurchaseUnit;
+  lastInvoiceId?: string;
+  lastInvoiceNumber?: string;
+  lastInvoiceLineId?: string;
+  lastUnitPriceNet?: number;
+  lastUnitPriceGross?: number;
+  lastLineTotalNet?: number;
+  lastLineTotalVat?: number;
+  lastLineTotalGross?: number;
   active?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -59,10 +120,19 @@ export type PurchasePriceRecord = {
   productId: string;
   supplierId?: string;
   invoiceId?: string;
+  invoiceLineId?: string;
+  invoiceLineKey?: string;
   purchaseDate: string;
   quantity: number;
   packageQuantity: number;
+  purchaseQuantity?: number;
   unit: PurchaseUnit;
+  purchaseUnit?: PurchaseUnit;
+  unitPriceNet?: number;
+  unitPriceGross?: number;
+  lineTotalNet?: number;
+  lineTotalVat?: number;
+  lineTotalGross?: number;
   priceBeforeVat: number;
   vatAmount: number;
   priceIncludingVat: number;
@@ -126,14 +196,20 @@ export type SupplierItemMap = {
 export type PurchaseInvoiceLine = {
   key: string;
   rawName: string;
+  originalDescription?: string;
   productId?: string;
   quantity: number | null;
   unit: PurchaseUnit | null;
   unitPrice: number | null;
   discount: number | null;
+  discountPercent?: number | null;
+  discountAmount?: number | null;
   lineTotal: number | null;
+  lineNet?: number | null;
+  lineGross?: number | null;
   vatType: VatType;
-  vatRate: number;
+  taxMode?: InvoiceTaxMode;
+  vatRate: number | null;
   priceBeforeVat: number | null;
   vatAmount: number | null;
   priceIncludingVat: number | null;
@@ -151,6 +227,10 @@ export type PurchaseInvoiceLine = {
   priceChangePercent?: number | null;
   cheaperSupplierName?: string;
   cheaperSupplierPrice?: number | null;
+  category?: string;
+  note?: string;
+  matchConfirmed?: boolean;
+  candidates?: { productId: string; name: string; score: number }[];
   unitPriceNet?: number | null;
   unitPriceGross?: number | null;
   netAmount?: number | null;
@@ -169,12 +249,18 @@ export type PurchaseInvoice = {
   supplierId?: string;
   supplierName: string;
   supplierTaxId?: string;
+  supplierVatNumber?: string;
+  supplierPhone?: string;
+  supplierAddress?: string;
+  supplierSnapshot?: Partial<Supplier>;
   invoiceNumber: string;
   invoiceDate: string;
+  dueDate?: string;
   receivedAt: string;
   documentType?: PurchaseDocumentType;
   currency?: string;
   paymentMethod?: string | null;
+  paymentTerms?: string | null;
   headerDiscount?: number | null;
   vatRate?: number | null;
   vatMode?: VatType | null;
@@ -184,10 +270,22 @@ export type PurchaseInvoice = {
   subtotal?: number | null;
   vatTotal?: number | null;
   grandTotal?: number | null;
+  subtotalBeforeDiscount?: number | null;
+  discountTotal?: number | null;
+  shipping?: number | null;
+  delivery?: number | null;
+  serviceCharge?: number | null;
+  rounding?: number | null;
+  otherCharges?: number | null;
   vatStatus?: InvoiceVatStatus;
   status: PurchaseInvoiceStatus;
+  scanStatus?: InvoiceScanStatus;
   stockStatus?: InvoiceStockStatus;
   lines: PurchaseInvoiceLine[];
+  sourceFile?: InvoiceSourceFile;
+  scanAttempts?: InvoiceScanAttempt[];
+  validation?: InvoiceTotalsValidation;
+  headerConfidence?: Record<string, number | null>;
   fileName?: string;
   fileUrl?: string;
   fileHash?: string;
@@ -197,8 +295,14 @@ export type PurchaseInvoice = {
   audit?: InvoiceAuditEvent[];
   duplicateOf?: string;
   createdAt: string;
+  createdBy?: string;
+  uploadedAt?: string;
+  updatedAt?: string;
   approvedAt?: string;
   approvedBy?: string;
+  inventoryPostedAt?: string;
+  inventoryPostedBy?: string;
+  inventoryPostingId?: string;
 };
 
 export type PosImportStatus = "draft" | "approved" | "blocked-duplicate";

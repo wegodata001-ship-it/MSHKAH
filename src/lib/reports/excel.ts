@@ -70,6 +70,19 @@ export async function downloadReportExcel(payload: ReportPayload, title: string)
         }
       }
     }
+  } else if (payload.type === "breakeven" && payload.breakEven) {
+    const data = payload.breakEven;
+    sheet.addRow(["שדה", "ערך"]);
+    sheet.addRow(["מחזור", data.revenue]);
+    sheet.addRow(["הוצאות קבועות", data.fixedMonthly]);
+    sheet.addRow(["הוצאות משתנות", data.variableTotal]);
+    sheet.addRow(["Food Cost", data.foodCost]);
+    sheet.addRow(["Contribution Margin", data.contribution]);
+    sheet.addRow(["נקודת איזון", data.breakEvenMonthly]);
+    sheet.addRow(["פער", data.gap]);
+    sheet.addRow(["תחזית", data.forecast]);
+    sheet.addRow(["הזמנות", data.orders]);
+    sheet.addRow(["ממוצע הזמנה", data.averageOrderValue]);
   } else if (payload.type === "supplier-compare" && payload.priceCompare) {
     sheet.addRow(["מוצר", "ספק", "אריזה", "מחיר", "מחיר מנורמל", "הצעה טובה ביותר"]);
     for (const item of payload.priceCompare) {

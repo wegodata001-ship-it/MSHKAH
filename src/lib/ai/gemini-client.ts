@@ -132,12 +132,14 @@ function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
   const auth = attempt.status === 401 || attempt.status === 403;
   throw new GeminiRequestError({
     code: !attempt.status
-      ? "EXTRACTION_FAILED"
+      ? "SCAN_FAILED"
       : attempt.status === 429
-        ? "PROVIDER_RATE_LIMIT"
-        : auth
-          ? "PROVIDER_AUTH_ERROR"
-          : "EXTRACTION_FAILED",
+        ? "QUOTA_EXCEEDED"
+        : attempt.status === 401
+          ? "INVALID_API_KEY"
+          : attempt.status === 403
+            ? "PROVIDER_FORBIDDEN"
+            : "SCAN_FAILED",
     message: auth
       ? "Invoice scanning could not authenticate with the AI provider"
       : attempt.status === 429

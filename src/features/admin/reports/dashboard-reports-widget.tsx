@@ -50,6 +50,7 @@ export function DashboardReportsWidget() {
           { type: "count-consumption", icon: ClipboardList, label: t("admin.reports.type.count-consumption") },
           { type: "purchases", icon: Truck, label: t("admin.reports.type.purchases") },
           { type: "supplier-compare", icon: Scale, label: t("admin.reports.type.supplier-compare") },
+          { type: "breakeven", icon: Scale, label: t("admin.reports.type.breakeven") },
         ].map((item) => {
           const Icon = item.icon;
           return (

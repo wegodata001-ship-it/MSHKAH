@@ -179,6 +179,24 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /breakEvenFixedCosts/{id} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /breakEvenVariableCosts/{id} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /breakEvenSettings/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /breakEvenSnapshots/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
     match /suppliers/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();

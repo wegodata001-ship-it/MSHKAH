@@ -38,14 +38,26 @@ describe("parseInvoiceExtraction", () => {
     );
     expect(parsed.supplierName.value).toBe("Barilla");
     expect(parsed.lines[0]?.unitPrice).toBe(10);
-    expect(parsed.lines[0]?.priceBeforeVat).toBe(10);
-    expect(parsed.lines[0]?.priceIncludingVat).toBe(11.8);
+    expect(parsed.lines[0]?.lineNet).toBe(50);
+    expect(parsed.lines[0]?.priceIncludingVat).toBe(59);
     expect(parsed.lines[0]?.lineTotal).toBe(59);
   });
 
   it("returns empty extraction when JSON is invalid instead of inventing totals", () => {
     const parsed = parseInvoiceExtraction("not-json");
     expect(parsed.grandTotal.value).toBeNull();
+    expect(parsed.supplierPhone.value).toBeNull();
     expect(parsed.lines).toEqual([]);
+  });
+
+  it("keeps unknown VAT instead of inventing 18%", () => {
+    const parsed = parseInvoiceExtraction(
+      JSON.stringify({
+        vatStatus: "needs_review",
+        lines: [{ description: "Water", quantity: 2, unitPrice: 5, taxMode: "unknown" }],
+      })
+    );
+    expect(parsed.lines[0]?.vatType).toBe("unknown");
+    expect(parsed.vatRate.value).toBeNull();
   });
 });

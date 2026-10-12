@@ -9,7 +9,6 @@ import { AdminCard } from "@/features/admin/components/admin-card";
 import { formatIls } from "@/lib/costing/money";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { cheapestLastPurchase, cheapestOffer, currentStockBase, latestPurchase, offerNormalizedLastPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
-import { canTransferStock, invoiceStockStatus, isFinanceSaved, headerGross, headerNet, headerVat } from "@/lib/inventory/invoice-finance";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
 import type {
@@ -35,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { useAuthFetch } from "@/lib/auth/auth-fetch";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
+import { InvoiceArchivePanel } from "@/features/admin/inventory/invoice-archive-panel";
 import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
 
 type InventoryPane = "products" | "ledger" | "alerts";
@@ -309,10 +309,10 @@ function SuppliersPane({ suppliers, onToast }: InventoryHubProps) {
 function ComparePane({ ingredients, offers, records, movements, suppliers }: InventoryHubProps) {
   const t = useT();
   const [productId, setProductId] = useState(ingredients[0]?.id ?? "");
-  const [mode, setMode] = useState<"net" | "gross">("net");
+  const [mode, setMode] = useState<"net" | "vat" | "gross">("net");
   const item = ingredients.find((row) => row.id === productId);
   const itemOffers = offers.filter((offer) => offer.productId === productId && offer.active !== false);
-  const cheap = item ? cheapestLastPurchase(itemOffers, mode, item.baseUnit) : cheapestLastPurchase(itemOffers, mode);
+  const cheap = item ? cheapestLastPurchase(itemOffers, mode === "gross" ? "gross" : "net", item.baseUnit) : cheapestLastPurchase(itemOffers, mode === "gross" ? "gross" : "net");
   const last = latestPurchase(records, productId);
   return (
     <div className="space-y-4">
@@ -323,6 +323,7 @@ function ComparePane({ ingredients, offers, records, movements, suppliers }: Inv
           ))}
         </select>
         <Button type="button" variant={mode === "net" ? "turquoise" : "outline"} onClick={() => setMode("net")}>{t("admin.finance.compareNet")}</Button>
+        <Button type="button" variant={mode === "vat" ? "turquoise" : "outline"} onClick={() => setMode("vat")}>{t("admin.inventory.vat")}</Button>
         <Button type="button" variant={mode === "gross" ? "turquoise" : "outline"} onClick={() => setMode("gross")}>{t("admin.finance.compareGross")}</Button>
       </div>
       {item && (
@@ -333,8 +334,12 @@ function ComparePane({ ingredients, offers, records, movements, suppliers }: Inv
               const supplier = suppliers.find((s) => s.id === offer.supplierId);
               const net = offerNormalizedNet(offer);
               const gross = offerNormalizedLastPurchase(offer);
-              const cost = mode === "net" ? net : gross;
-              const cheapCost = cheap ? (mode === "net" ? offerNormalizedNet(cheap) : offerNormalizedLastPurchase(cheap)) : undefined;
+              const vat = net != null && gross != null ? gross - net : null;
+              const cost = mode === "net" ? net : mode === "vat" ? vat : gross;
+              const cheapNet = cheap ? offerNormalizedNet(cheap) : undefined;
+              const cheapGross = cheap ? offerNormalizedLastPurchase(cheap) : undefined;
+              const cheapVat = cheapNet != null && cheapGross != null ? cheapGross - cheapNet : undefined;
+              const cheapCost = mode === "net" ? cheapNet : mode === "vat" ? cheapVat : cheapGross;
               const gap = cost != null && cheapCost != null ? cost - cheapCost : 0;
               return (
                 <div key={offer.id} className="rounded-xl bg-beige/30 px-3 py-2">
@@ -347,6 +352,8 @@ function ComparePane({ ingredients, offers, records, movements, suppliers }: Inv
                   </div>
                   <p className="mt-1 text-xs text-coffee/55">
                     {t("admin.finance.netTotal")}: {net != null ? formatIls(net, 4) : "—"}
+                    {" · "}
+                    {t("admin.inventory.vat")}: {vat != null ? formatIls(vat, 4) : "—"}
                     {" · "}
                     {t("admin.finance.grossTotal")}: {gross != null ? formatIls(gross, 4) : "—"}
                     {" · "}
@@ -367,6 +374,7 @@ function InvoicesPane(props: InventoryHubProps) {
   const ai = useSmartInvoiceEnabled();
   const [draft, setDraft] = useState<PurchaseInvoice | "new" | null>(null);
   const [smart, setSmart] = useState(false);
+  const [smartInvoice, setSmartInvoice] = useState<PurchaseInvoice | null>(null);
   const [transferInvoice, setTransferInvoice] = useState<PurchaseInvoice | null>(null);
 
   if (transferInvoice) {
@@ -387,11 +395,16 @@ function InvoicesPane(props: InventoryHubProps) {
         ingredients={props.ingredients}
         suppliers={props.suppliers}
         vatRate={props.settingsVatRate}
+        initialInvoice={smartInvoice}
         onToast={props.onToast}
-        onClose={() => setSmart(false)}
+        onClose={() => {
+          setSmart(false);
+          setSmartInvoice(null);
+        }}
         onManual={() => {
           setSmart(false);
-          setDraft("new");
+          setDraft(smartInvoice ?? "new");
+          setSmartInvoice(null);
         }}
       />
     );
@@ -433,32 +446,17 @@ function InvoicesPane(props: InventoryHubProps) {
           </Button>
         </div>
       </AdminCard>
-      {props.invoices.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-beige-dark/25 p-8 text-center text-sm text-coffee/55">
-          {t("admin.inventory.noInvoices")}
-        </p>
-      ) : (
-        props.invoices.map((invoice) => {
-          const stock = invoiceStockStatus(invoice);
-          return (
-            <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-beige-dark/20 px-4 py-3">
-              <button type="button" className="text-start" onClick={() => setDraft(invoice)}>
-                <p>#{invoice.invoiceNumber || invoice.id.slice(0, 6)} · {invoice.supplierName}</p>
-                <p className="text-xs text-coffee/55">
-                  {invoice.invoiceDate} · {t("admin.finance.netTotal")}: {formatIls(headerNet(invoice) ?? 0)} · {t("admin.inventory.vat")}: {formatIls(headerVat(invoice) ?? 0)} · {t("admin.finance.grossTotal")}: {formatIls(headerGross(invoice) ?? 0)}
-                </p>
-              </button>
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span>{isFinanceSaved(invoice) ? t("admin.finance.saved") : t("admin.inventory.draft")}</span>
-                <span>{stock === "posted" ? t("admin.finance.stockPosted") : stock === "partial" ? t("admin.finance.stockPartial") : t("admin.finance.stockNone")}</span>
-                {canTransferStock(invoice) ? (
-                  <Button type="button" variant="outline" onClick={() => setTransferInvoice(invoice)}>{t("admin.finance.transferLater")}</Button>
-                ) : null}
-              </div>
-            </div>
-          );
-        })
-      )}
+      <AdminCard title={t("admin.inventory.archive.title")}>
+        <InvoiceArchivePanel
+          invoices={props.invoices}
+          onOpen={(invoice) => setDraft(invoice)}
+          onRescan={(invoice) => {
+            setSmartInvoice(invoice);
+            setSmart(true);
+          }}
+          onTransfer={setTransferInvoice}
+        />
+      </AdminCard>
     </div>
   );
 }

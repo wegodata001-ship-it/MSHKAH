@@ -11,7 +11,17 @@ import {
 import { posDelta, posPeriod, theoreticalConsumption } from "@/lib/inventory/pos";
 import { hashPosFile } from "@/lib/inventory/pos-parse";
 import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
-import { findDuplicateInvoice, matchInventoryProduct, matchSupplier } from "@/lib/inventory/invoice-smart-match";
+import { archiveStatus, invoiceSourcePath, publicScanErrorCode, validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
+import { buildReviewedInvoice, findDuplicateInvoice, matchInventoryProduct, matchSupplier, unrecognizedScannedSupplier } from "@/lib/inventory/invoice-smart-match";
+import {
+  confirmSafeInvoiceMatches,
+  invoiceLineMatchesFilter,
+  invoiceLineMatchStatus,
+  invoiceReviewCounts,
+  isConfirmedInvoiceMatch,
+} from "@/lib/inventory/invoice-line-review";
+import { inventoryCategories, MATCH_SUGGEST_MIN, MATCH_TOP_N, productNameSimilarity, rankProductMatches } from "@/lib/inventory/product-match";
+import type { ExtractedInvoice } from "@/lib/inventory/invoice-extract";
 import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
 import { cheapestLastPurchase, offerNormalizedNet } from "@/lib/inventory/stock";
 import { canTransferStock, invoiceMismatch, invoiceStockStatus, transferableLines } from "@/lib/inventory/invoice-finance";
@@ -166,6 +176,10 @@ describe("smart invoice matching", () => {
       { id: "a", name: "شركة ABC", phone: "", active: true, createdAt: "", updatedAt: "" },
     ];
     expect(matchSupplier("شركة ABC", null, suppliers).kind).toBe("exact");
+    expect(unrecognizedScannedSupplier({ supplierName: "شركة ABC" }, suppliers)).toBeNull();
+    expect(unrecognizedScannedSupplier({ supplierName: "ספק חדש מהחשבונית" }, suppliers)).toBe("ספק חדש מהחשבונית");
+    expect(unrecognizedScannedSupplier({ supplierId: "a", supplierName: "ספק חדש מהחשבונית" }, suppliers)).toBeNull();
+    expect(unrecognizedScannedSupplier({ supplierName: "" }, suppliers)).toBeNull();
     expect(matchInventoryProduct({ name: "פסטה" }, [pasta], [], undefined).kind).toBe("exact");
     expect(matchInventoryProduct({ name: "Pasta Barilla 5KG" }, [pasta], [], undefined).kind).toBe("suggest");
     expect(matchInventoryProduct({ name: "Pasta Barilla 5KG" }, [pasta], [], undefined).item?.id).toBe("pasta");
@@ -185,6 +199,208 @@ describe("smart invoice matching", () => {
         { supplierId: "a", invoiceNumber: "100", invoiceDate: "2026-10-07" }
       )
     ).toBe("old");
+  });
+
+  it("suggests fuzzy inventory matches from 60% without auto-confirming them", () => {
+    const barilla = { ...coffee, id: "barilla", name: "פסטה ברילה", category: "מזון" };
+    const elite = { ...coffee, id: "elite", name: "קפה עלית", category: "קפה" };
+    expect(productNameSimilarity("פסטה ברילה 500 גרם", "פסטה ברילה")).toBeGreaterThanOrEqual(MATCH_SUGGEST_MIN);
+    expect(productNameSimilarity("קפה עלית 1 ק״ג", "קפה עלית")).toBeGreaterThanOrEqual(MATCH_SUGGEST_MIN);
+    const pastaMatch = matchInventoryProduct({ name: "פסטה ברילה 500 גרם" }, [barilla], [], undefined);
+    const coffeeMatch = matchInventoryProduct({ name: 'קפה עלית 1 ק"ג' }, [elite], [], undefined);
+    expect(pastaMatch.kind).toBe("suggest");
+    expect(pastaMatch.item?.id).toBe("barilla");
+    expect(coffeeMatch.kind).toBe("suggest");
+    expect(coffeeMatch.item?.id).toBe("elite");
+    expect(isConfirmedInvoiceMatch({ ...emptyInvoiceLine(), productId: barilla.id, matchKind: "suggest", matchConfirmed: false })).toBe(false);
+  });
+
+  it("returns at most three similar products and keeps a 60% suggestion unconfirmed on review", () => {
+    const stock: CostingIngredient[] = [
+      { ...coffee, id: "c1", name: "קרואסון חמאה", category: "מאפים" },
+      { ...coffee, id: "c2", name: "קרואסון גדול", category: "מאפים" },
+      { ...coffee, id: "c3", name: "קרואסון", category: "מאפים" },
+      { ...coffee, id: "bread", name: "לחם", category: "מאפים" },
+    ];
+    const ranked = rankProductMatches("קוראסון חמאה גדול", stock);
+    expect(ranked.length).toBeGreaterThan(0);
+    expect(ranked.length).toBeLessThanOrEqual(MATCH_TOP_N);
+    expect(ranked.every((item) => item.score >= MATCH_SUGGEST_MIN)).toBe(true);
+    expect(ranked[0].name).toMatch(/קרואסון/);
+    const invoice = buildReviewedInvoice({
+      extraction: extractedInvoice([
+        { name: "קוראסון חמאה גדול", quantity: 2, unit: "יח", unitPrice: 8, lineTotal: 16, vatType: "inclusive", confidence: 0.9 },
+      ]),
+      ingredients: stock,
+      suppliers: [],
+      offers: [],
+      records: [],
+      maps: [],
+      fileName: "inv.pdf",
+      fileHash: "hash-croissant",
+    });
+    expect(invoice.lines).toHaveLength(1);
+    expect(invoice.lines[0].matchConfirmed).toBe(false);
+    expect(invoice.lines[0].matchKind).toBe("suggest");
+    expect(invoiceLineMatchStatus(invoice.lines[0])).toBe("possible");
+    expect((invoice.lines[0].candidates ?? []).length).toBeLessThanOrEqual(3);
+  });
+
+  it("reviews a 30-line invoice as one compact row each and only confirms safe matches", () => {
+    const stock: CostingIngredient[] = [
+      { ...coffee, id: "barilla", name: "פסטה ברילה", category: "מזון" },
+      { ...coffee, id: "elite", name: "קפה עלית", category: "קפה" },
+      { ...coffee, id: "milk", name: "חלב 3%", category: "חלב" },
+    ];
+    const names = Array.from({ length: 30 }, (_, index) => {
+      if (index === 0) return "פסטה ברילה 500 גרם";
+      if (index === 1) return 'קפה עלית 1 ק"ג';
+      if (index === 2) return "חלב 3%";
+      return `פריט חשבונית ${index + 1}`;
+    });
+    const invoice = buildReviewedInvoice({
+      extraction: extractedInvoice(
+        names.map((name, index) => ({
+          name,
+          quantity: 1,
+          unit: "kg",
+          unitPrice: 10 + index,
+          lineTotal: 10 + index,
+          vatType: "inclusive" as const,
+          confidence: 0.92,
+        }))
+      ),
+      ingredients: stock,
+      suppliers: [{ id: "s1", name: "ספק א", active: true, createdAt: "", updatedAt: "" }],
+      offers: [],
+      records: [],
+      maps: [],
+      fileName: "big.pdf",
+      fileHash: "hash-30",
+    });
+    expect(invoice.lines).toHaveLength(30);
+    expect(invoice.lines.every((line) => line.rawName && line.key)).toBe(true);
+    const fuzzy = invoice.lines.find((line) => line.rawName.includes("פסטה ברילה"));
+    expect(fuzzy?.productId).toBe("barilla");
+    expect(fuzzy?.matchConfirmed).toBe(false);
+    expect(invoiceLineMatchStatus(fuzzy!)).toBe("possible");
+    const exact = invoice.lines.find((line) => line.rawName === "חלב 3%");
+    expect(exact?.matchConfirmed).toBe(true);
+    expect(invoiceLineMatchStatus(exact!)).toBe("confirmed");
+    const unknown = invoice.lines.find((line) => line.rawName === "פריט חשבונית 10");
+    expect(unknown?.productId).toBeUndefined();
+    expect(invoiceLineMatchStatus(unknown!)).toBe("none");
+    const counts = invoiceReviewCounts(invoice.lines);
+    expect(counts.total).toBe(30);
+    expect(counts.confirmed).toBeGreaterThanOrEqual(1);
+    expect(counts.none).toBeGreaterThan(0);
+    expect(invoice.lines.filter((line) => invoiceLineMatchesFilter(line, "unmapped", "")).length).toBe(counts.none);
+    const weak = { ...invoice.lines[5], productId: "barilla", matchKind: "suggest" as const, matchConfirmed: false, matchConfidence: 0.72 };
+    expect(confirmSafeInvoiceMatches([weak])[0].matchConfirmed).toBe(false);
+    expect(confirmSafeInvoiceMatches([{ ...weak, matchConfidence: 0.94 }])[0].matchConfirmed).toBe(true);
+    expect(inventoryCategories(stock)).toEqual(["חלב", "מזון", "קפה"]);
+  });
+});
+
+function extractedInvoice(
+  lines: Array<{
+    name: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    lineTotal: number;
+    vatType: "inclusive" | "exclusive" | "exempt";
+    confidence: number;
+  }>
+): ExtractedInvoice {
+  const field = <T,>(value: T) => ({ value, confidence: 0.95 });
+  return {
+    supplierName: field("ספק א"),
+    businessName: field("ספק א"),
+    taxId: field(null),
+    invoiceNumber: field("INV-30"),
+    invoiceDate: field("2026-10-07"),
+    currency: field("ILS"),
+    documentType: field("invoice"),
+    paymentMethod: field(null),
+    headerDiscount: field(null),
+    vatRate: field(0.18),
+    subtotal: field(100),
+    vatTotal: field(18),
+    grandTotal: field(118),
+    vatStatus: "detected",
+    supplierVatNumber: field(null),
+    supplierPhone: field(null),
+    supplierAddress: field(null),
+    dueDate: field(null),
+    paymentTerms: field(null),
+    subtotalBeforeDiscount: field(null),
+    discountTotal: field(null),
+    shipping: field(null),
+    delivery: field(null),
+    serviceCharge: field(null),
+    rounding: field(null),
+    otherCharges: field(null),
+    lines: lines.map((line) => ({
+      name: line.name,
+      originalDescription: line.name,
+      quantity: line.quantity,
+      unit: line.unit,
+      unitPrice: line.unitPrice,
+      unitPriceNet: line.unitPrice,
+      unitPriceGross: null,
+      discount: 0,
+      discountPercent: null,
+      discountAmount: 0,
+      priceBeforeVat: null,
+      vatAmount: null,
+      priceIncludingVat: null,
+      lineTotal: line.lineTotal,
+      lineNet: null,
+      lineGross: null,
+      sku: null,
+      barcode: null,
+      vatType: line.vatType,
+      vatRate: null,
+      conversionNote: null,
+      conversionFactor: null,
+      confidence: line.confidence,
+    })),
+  };
+}
+
+describe("invoice archive and VAT honesty", () => {
+  it("does not invent 18% when tax mode is unknown", () => {
+    const invoice = buildReviewedInvoice({
+      extraction: extractedInvoice([
+        { name: "פטור", quantity: 1, unit: "unit", unitPrice: 10, lineTotal: 10, vatType: "unknown" as never, confidence: 0.5 },
+      ]),
+      ingredients: [coffee],
+      suppliers: [],
+      offers: [],
+      records: [],
+      maps: [],
+      fileName: "a.jpg",
+      fileHash: "h",
+    });
+    expect(invoice.lines[0]?.taxMode ?? invoice.lines[0]?.vatType).toBe("unknown");
+    expect(invoice.lines[0]?.vatRate).toBeNull();
+    expect(invoice.scanStatus).toBe("needs_review");
+  });
+
+  it("surfaces header vs line mismatches and keeps archive statuses", () => {
+    const validation = validateInvoiceTotals({
+      lines: [{ ...emptyInvoiceLine(), netAmount: 842.37, vatAmount: 151.63, grossAmount: 994 }],
+      headerNet: 842.37,
+      headerVat: 151.63,
+      headerGross: 1004,
+    });
+    expect(validation.hasMismatch).toBe(true);
+    expect(validation.grossDiff).toBeCloseTo(-10, 1);
+    expect(archiveStatus({ status: "draft", stockStatus: "none", lines: [], supplierName: "", invoiceNumber: "", invoiceDate: "", receivedAt: "", createdAt: "", id: "1" })).toBe("uploaded");
+    expect(invoiceSourcePath("abc", "scan.PDF", new Date("2026-10-11"))).toBe("invoice-files/2026/10/abc/original.pdf");
+    expect(publicScanErrorCode("AI_NOT_CONFIGURED")).toBe("PROVIDER_NOT_CONFIGURED");
+    expect(publicScanErrorCode("PROVIDER_AUTH_ERROR", 403)).toBe("PROVIDER_FORBIDDEN");
   });
 });
 
@@ -310,6 +526,9 @@ describe("finance-first invoices", () => {
     expect(canTransferStock(invoice)).toBe(true);
     expect(transferableLines([{ ...line, productId: "pasta", skipInventory: true }])).toHaveLength(0);
     expect(transferableLines([{ ...line, productId: "pasta", transferToInventory: true }])).toHaveLength(1);
+    expect(
+      transferableLines([{ ...line, productId: "pasta", matchKind: "suggest", matchConfirmed: false, transferToInventory: true }])
+    ).toHaveLength(0);
   });
 
   it("compares last purchase net prices across suppliers", () => {

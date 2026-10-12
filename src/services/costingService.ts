@@ -249,6 +249,21 @@ export async function createIngredient(input: IngredientWriteInput): Promise<Ser
   }
 }
 
+export async function setIngredientCategory(
+  id: string,
+  category: string | null
+): Promise<ServiceResult<void>> {
+  try {
+    await updateDoc(doc(getDb(), COLLECTIONS.ingredients, id), {
+      category: category?.trim() || null,
+      updatedAt: nowTimestamp(),
+    });
+    return success(undefined);
+  } catch (error) {
+    return writeFailure(error, "Failed to update category");
+  }
+}
+
 export async function updateIngredient(
   id: string,
   input: IngredientWriteInput,

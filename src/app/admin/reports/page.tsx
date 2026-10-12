@@ -12,6 +12,7 @@ const TYPES: ReportType[] = [
   "count-consumption",
   "purchases",
   "supplier-compare",
+  "breakeven",
 ];
 
 function ReportsPageInner() {

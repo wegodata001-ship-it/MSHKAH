@@ -183,6 +183,16 @@ export function buildReportCopy(
       approverName: t("admin.reports.blank.approver"),
       inStock: t("admin.reports.kpi.inStock"),
       purchaseValue: t("admin.reports.kpi.purchases"),
+      beSales: t("admin.breakeven.sold"),
+      beFixed: t("admin.breakeven.fixedTitle"),
+      beVariable: t("admin.breakeven.variableTitle"),
+      beFood: t("admin.breakeven.foodCost"),
+      beContribution: t("admin.breakeven.contribution"),
+      beBreakEven: t("admin.breakeven.title"),
+      beGap: t("admin.breakeven.short"),
+      beForecast: t("admin.breakeven.forecast"),
+      beOrders: t("admin.breakeven.orders"),
+      beAov: t("admin.breakeven.aov"),
     },
   };
 }
@@ -212,6 +222,16 @@ function reportKpis(payload: ReportPayload, t: Translate): { label: string; valu
       { label: t("admin.reports.products"), value: String(items.length || "—") },
       { label: t("admin.reports.kpi.withOffers"), value: String(items.filter((item) => item.offers.length > 1).length || "—") },
       { label: t("admin.reports.savings"), value: savings.length ? formatReportIls(savings.reduce((sum, n) => sum + n, 0)) : "—" },
+    ];
+  }
+  if (payload.type === "breakeven" && payload.breakEven) {
+    const data = payload.breakEven;
+    return [
+      { label: t("admin.breakeven.sold"), value: formatReportIls(data.revenue) },
+      { label: t("admin.breakeven.title"), value: formatReportIls(data.breakEvenMonthly) },
+      { label: t("admin.breakeven.contribution"), value: formatReportIls(data.contribution) },
+      { label: t("admin.breakeven.forecast"), value: formatReportIls(data.forecast) },
+      { label: t("admin.breakeven.aov"), value: formatReportIls(data.averageOrderValue) },
     ];
   }
   if (payload.type === "exceptions") {

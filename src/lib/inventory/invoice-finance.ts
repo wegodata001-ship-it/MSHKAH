@@ -1,4 +1,5 @@
 import { roundMoney } from "@/lib/costing/money";
+import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
 import type { InvoiceStockStatus, PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 
@@ -27,7 +28,7 @@ export function transferableLines(lines: PurchaseInvoiceLine[]): PurchaseInvoice
       !line.skipInventory &&
       !line.postedToStock &&
       line.transferToInventory !== false &&
-      Boolean(line.productId) &&
+      isConfirmedInvoiceMatch(line) &&
       Boolean(line.quantity) &&
       Boolean(line.unit)
   );

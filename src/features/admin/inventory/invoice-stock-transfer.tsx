@@ -10,16 +10,19 @@ import type { CostingIngredient } from "@/lib/costing/types";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
 import { invoiceStockStatus } from "@/lib/inventory/invoice-finance";
 import { transferInvoiceLinesToStock } from "@/services/inventoryService";
+import { NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 
 export function InvoiceStockTransfer({
   invoice,
   ingredients,
   onClose,
   onToast,
+  skipSupplierWarning,
 }: {
   invoice: PurchaseInvoice;
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
+  skipSupplierWarning?: boolean;
   onClose: () => void;
   onToast: (message: string, variant?: "success" | "error") => void;
 }) {
@@ -32,7 +35,20 @@ export function InvoiceStockTransfer({
   );
   const [saving, setSaving] = useState(false);
   const [createKey, setCreateKey] = useState<string | null>(null);
+  const [warnNoSupplier, setWarnNoSupplier] = useState(false);
   const alreadyPosted = invoiceStockStatus(invoice) === "posted";
+
+  const postStock = async () => {
+    setSaving(true);
+    const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys);
+    setSaving(false);
+    if (!result.success) {
+      onToast(result.error === "NO_STOCK_LINES" ? t("admin.finance.noStockLines") : result.error, "error");
+      return;
+    }
+    onToast(t("admin.finance.stockTransferred"));
+    onClose();
+  };
 
   const selectedKeys = useMemo(
     () => lines.filter((line) => line.transferToInventory && !line.postedToStock && line.productId).map((line) => line.key),
@@ -106,22 +122,26 @@ export function InvoiceStockTransfer({
             type="button"
             variant="turquoise"
             disabled={saving || selectedKeys.length === 0}
-            onClick={async () => {
-              setSaving(true);
-              const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys);
-              setSaving(false);
-              if (!result.success) {
-                onToast(result.error === "NO_STOCK_LINES" ? t("admin.finance.noStockLines") : result.error, "error");
+            onClick={() => {
+              if (!invoice.supplierId && !skipSupplierWarning) {
+                setWarnNoSupplier(true);
                 return;
               }
-              onToast(t("admin.finance.stockTransferred"));
-              onClose();
+              void postStock();
             }}
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.finance.confirmTransfer")}
           </Button>
         </div>
       </AdminCard>
+      <NoSupplierStockWarning
+        open={warnNoSupplier}
+        onCancel={() => setWarnNoSupplier(false)}
+        onContinue={() => {
+          setWarnNoSupplier(false);
+          void postStock();
+        }}
+      />
       <QuickCreateIngredientPanel
         open={createKey != null}
         existing={ingredients}

@@ -7,6 +7,7 @@ const SLUG: Record<ReportType, string> = {
   "count-consumption": "consumption-report",
   purchases: "supplier-purchases",
   "supplier-compare": "supplier-compare",
+  breakeven: "break-even",
 };
 
 export function reportPdfFilename(type: ReportType, date = new Date()): string {

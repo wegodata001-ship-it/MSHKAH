@@ -38,6 +38,7 @@ import { AdminEmptyState } from "./components/admin-empty-state";
 import { QrLinksGrid } from "./qr-links-admin";
 import { DashboardReportsWidget } from "@/features/admin/reports/dashboard-reports-widget";
 import { FinanceDashboardWidget } from "@/features/admin/finance-dashboard-widget";
+import { BreakEvenDashboardWidget } from "@/features/admin/breakeven/breakeven-widget";
 import { isActiveOrder } from "@/lib/orders/status";
 import { isJerusalemToday } from "@/lib/orders/time";
 import type { OrderStatus } from "@/types";
@@ -176,6 +177,8 @@ export function AdminDashboard() {
       </div>
 
       <FinanceDashboardWidget />
+
+      <BreakEvenDashboardWidget />
 
       <DashboardReportsWidget />
 

@@ -14,13 +14,28 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { emptyIngredientForm } from "@/features/admin/costing/ingredient-form";
 import { createIngredient } from "@/services/costingService";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
+import { inventoryCategories } from "@/lib/inventory/product-match";
 import { cn } from "@/lib/utils";
 
 const LAST_UNIT_KEY = "mishkah.costing.lastPurchaseUnit";
 
+export type QuickCreateInitial = {
+  name?: string;
+  category?: string;
+  purchasePrice?: number;
+  purchaseQuantity?: number;
+  purchaseUnit?: PurchaseUnit;
+  supplier?: string;
+  priceBeforeVat?: number | null;
+  priceIncludingVat?: number | null;
+  vatRate?: number;
+  vatAmount?: number | null;
+};
+
 export function QuickCreateIngredientPanel({
   open,
   initialName,
+  initial,
   existing,
   onClose,
   onCreated,
@@ -28,6 +43,7 @@ export function QuickCreateIngredientPanel({
 }: {
   open: boolean;
   initialName?: string;
+  initial?: QuickCreateInitial;
   existing: CostingIngredient[];
   onClose: () => void;
   onCreated: (item: CostingIngredient) => void;
@@ -35,11 +51,12 @@ export function QuickCreateIngredientPanel({
 }) {
   const t = useT();
   const [mounted, setMounted] = useState(false);
-  const [name, setName] = useState(initialName ?? "");
-  const [category, setCategory] = useState("");
-  const [purchasePrice, setPurchasePrice] = useState("");
-  const [purchaseQuantity, setPurchaseQuantity] = useState("");
-  const [purchaseUnit, setPurchaseUnit] = useState<PurchaseUnit>(emptyIngredientForm().purchaseUnit);
+  const [name, setName] = useState(initial?.name ?? initialName ?? "");
+  const [category, setCategory] = useState(initial?.category ?? "");
+  const [purchasePrice, setPurchasePrice] = useState(initial?.purchasePrice != null ? String(initial.purchasePrice) : "");
+  const [purchaseQuantity, setPurchaseQuantity] = useState(initial?.purchaseQuantity != null ? String(initial.purchaseQuantity) : "");
+  const [purchaseUnit, setPurchaseUnit] = useState<PurchaseUnit>(initial?.purchaseUnit ?? emptyIngredientForm().purchaseUnit);
+  const [supplier, setSupplier] = useState(initial?.supplier ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [duplicate, setDuplicate] = useState<CostingIngredient | null>(null);
@@ -48,14 +65,17 @@ export function QuickCreateIngredientPanel({
 
   useEffect(() => {
     if (!open) return;
-    setName(initialName ?? "");
-    setCategory("");
-    setPurchasePrice("");
-    setPurchaseQuantity("");
-    setPurchaseUnit(emptyIngredientForm().purchaseUnit);
+    setName(initial?.name ?? initialName ?? "");
+    setCategory(initial?.category ?? "");
+    setPurchasePrice(initial?.purchasePrice != null ? String(initial.purchasePrice) : "");
+    setPurchaseQuantity(initial?.purchaseQuantity != null ? String(initial.purchaseQuantity) : "");
+    setPurchaseUnit(initial?.purchaseUnit ?? emptyIngredientForm().purchaseUnit);
+    setSupplier(initial?.supplier ?? "");
     setError(null);
     setDuplicate(null);
-  }, [open, initialName]);
+    // Reset only when the panel opens so parent-created `initial` objects don't wipe edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,6 +117,7 @@ export function QuickCreateIngredientPanel({
         purchasePrice: Number(purchasePrice) || 0,
         purchaseQuantity: Number(purchaseQuantity) || 1,
         purchaseUnit,
+        supplier,
       });
       if (!result.success) {
         setError(
@@ -158,9 +179,15 @@ export function QuickCreateIngredientPanel({
               <Input
                 id="qc-ingredient-category"
                 className="mt-1 h-11"
+                list="qc-ingredient-categories"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
               />
+              <datalist id="qc-ingredient-categories">
+                {inventoryCategories(existing).map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -195,6 +222,22 @@ export function QuickCreateIngredientPanel({
                 />
               </div>
             </div>
+            <div>
+              <Label htmlFor="qc-ingredient-supplier">{t("admin.costing.supplier")}</Label>
+              <Input
+                id="qc-ingredient-supplier"
+                className="mt-1 h-11"
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+              />
+            </div>
+            {initial && (initial.priceBeforeVat != null || initial.priceIncludingVat != null || initial.vatRate != null) && (
+              <div className="grid grid-cols-3 gap-2 rounded-2xl bg-beige/40 px-3 py-2 text-xs text-coffee/70">
+                <p>{t("admin.finance.compareNet")}: {initial.priceBeforeVat != null ? formatIls(initial.priceBeforeVat) : "—"}</p>
+                <p>{t("admin.inventory.vat")}: {initial.vatRate != null ? `${Math.round(initial.vatRate * 100)}%` : "—"}</p>
+                <p>{t("admin.finance.compareGross")}: {initial.priceIncludingVat != null ? formatIls(initial.priceIncludingVat) : "—"}</p>
+              </div>
+            )}
             <div>
               <Label>{t("admin.costing.purchaseUnit")} *</Label>
               <div className="mt-2 flex flex-wrap gap-2">

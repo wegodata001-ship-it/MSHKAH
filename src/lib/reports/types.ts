@@ -4,7 +4,8 @@ export type ReportType =
   | "blank-count"
   | "count-consumption"
   | "purchases"
-  | "supplier-compare";
+  | "supplier-compare"
+  | "breakeven";
 
 export type ExceptionKind =
   | "out"
@@ -226,6 +227,32 @@ export type ReportPayload = {
   purchaseGroups?: PurchaseSupplierGroup[];
   purchaseSummary?: PurchaseSummary;
   priceCompare?: SupplierPriceCompare[];
+  breakEven?: {
+    canCompute: boolean;
+    missing: string[];
+    vatBasis: "before" | "including";
+    operatingDays: number;
+    revenue: number | null;
+    orders: number | null;
+    averageOrderValue: number | null;
+    productsSold: number | null;
+    fixedMonthly: number | null;
+    variableTotal: number | null;
+    foodCost: number | null;
+    contribution: number | null;
+    contributionRatio: number | null;
+    breakEvenMonthly: number | null;
+    breakEvenWeekly: number | null;
+    breakEvenDaily: number | null;
+    ordersRequiredDaily: number | null;
+    gap: number | null;
+    progress: number | null;
+    aboveBreakEven: number | null;
+    achieved: boolean;
+    forecast: number | null;
+    forecastGap: number | null;
+    requiredDailyFromNow: number | null;
+  };
   categories: string[];
   suppliers: ReportSupplierRef[];
   products: { id: string; name: string }[];

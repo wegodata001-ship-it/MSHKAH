@@ -22,7 +22,8 @@ export type ReportBlock =
       showHeader: boolean;
       showFooter: boolean;
     }
-  | { kind: "compare"; items: SupplierPriceCompare[] };
+  | { kind: "compare"; items: SupplierPriceCompare[] }
+  | { kind: "breakeven" };
 
 export type PurchaseReportRowSlice = PurchaseSupplierGroup["rows"];
 
@@ -176,6 +177,16 @@ export function paginateReport(payload: ReportPayload): ReportDocPage[] {
       showFormFooter: false,
       blocks: items.length ? [{ kind: "compare", items }] : [],
     }));
+  } else if (payload.type === "breakeven") {
+    pages = [{
+      index: 0,
+      total: 1,
+      orientation,
+      showKpis: true,
+      showFormMeta: false,
+      showFormFooter: false,
+      blocks: [{ kind: "breakeven" }],
+    }];
   }
 
   if (!pages.length) {

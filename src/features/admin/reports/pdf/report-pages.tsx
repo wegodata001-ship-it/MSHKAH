@@ -183,11 +183,43 @@ function ReportBlockView({
   if (block.kind === "purchase-group") {
     return <PurchaseGroupView group={block.group} rows={block.rows} showHeader={block.showHeader} showFooter={block.showFooter} copy={copy} />;
   }
+  if (block.kind === "breakeven") {
+    return <BreakEvenReportView payload={payload} copy={copy} />;
+  }
   return (
     <ReportSection>
       {block.items.map((item) => (
         <CompareCard key={item.productId} item={item} copy={copy} />
       ))}
+    </ReportSection>
+  );
+}
+
+function BreakEvenReportView({ payload, copy }: { payload: ReportPayload; copy: ReportCopy }) {
+  const data = payload.breakEven;
+  if (!data) return null;
+  const rows: [string, string][] = [
+    [copy.col.beSales, formatReportIls(data.revenue)],
+    [copy.col.beFixed, formatReportIls(data.fixedMonthly)],
+    [copy.col.beVariable, formatReportIls(data.variableTotal)],
+    [copy.col.beFood, formatReportIls(data.foodCost)],
+    [copy.col.beContribution, formatReportIls(data.contribution)],
+    [copy.col.beBreakEven, formatReportIls(data.breakEvenMonthly)],
+    [copy.col.beGap, formatReportIls(data.gap)],
+    [copy.col.beForecast, formatReportIls(data.forecast)],
+    [copy.col.beOrders, data.orders == null ? "—" : String(data.orders)],
+    [copy.col.beAov, formatReportIls(data.averageOrderValue)],
+  ];
+  return (
+    <ReportSection>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ border: `1px solid ${REPORT_INK.line}`, padding: 8 }}>
+            <div style={{ fontSize: 9, color: REPORT_INK.muted }}>{label}</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}><Num>{value}</Num></div>
+          </div>
+        ))}
+      </div>
     </ReportSection>
   );
 }

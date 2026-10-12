@@ -79,6 +79,8 @@ import {
 import { RecipeEditorModal } from "./recipe-editor";
 import { CostingImportWizard, downloadCostingWorkbook } from "./import-wizard";
 import { InventorySection, PosSection, PurchaseSection } from "@/features/admin/inventory/inventory-hub";
+import { BreakEvenPanel } from "@/features/admin/breakeven/breakeven-panel";
+import { productContribution } from "@/lib/breakeven/compute";
 import {
   subscribeToInventoryMovements,
   subscribeToPosImports,
@@ -100,7 +102,7 @@ import type {
 } from "@/lib/inventory/types";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
-type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -143,10 +145,12 @@ export function CostingAdmin() {
   const authFetch = useAuthFetch();
 
   useEffect(() => {
-    const hubParam = new URLSearchParams(window.location.search).get("hub");
+    const params = new URLSearchParams(window.location.search);
+    const hubParam = params.get("hub");
+    const tabParam = params.get("tab");
     if (hubParam === "finance") {
       setHub("finance");
-      setTab("invoices");
+      setTab(tabParam === "breakeven" ? "breakeven" : "invoices");
     }
   }, []);
 
@@ -382,7 +386,10 @@ export function CostingAdmin() {
     {
       id: "finance",
       label: t("admin.finance.hub"),
-      tabs: [{ id: "invoices", label: t("admin.finance.purchases") }],
+      tabs: [
+        { id: "invoices", label: t("admin.finance.purchases") },
+        { id: "breakeven", label: t("admin.breakeven.tab") },
+      ],
     },
     {
       id: "inventory",
@@ -496,6 +503,16 @@ export function CostingAdmin() {
 
       {(tab === "invoices" || tab === "suppliers" || tab === "compare") && (
         <PurchaseSection {...hubProps} pane={tab === "invoices" ? "invoices" : tab === "suppliers" ? "suppliers" : "compare"} />
+      )}
+
+      {tab === "breakeven" && (
+        <BreakEvenPanel
+          recipes={recipes}
+          ingredients={costingIngredients}
+          products={products}
+          vatRate={settings.vatRate ?? 0.18}
+          costingVatMode={settings.foodCostVatMode ?? "before"}
+        />
       )}
 
       {(tab === "pos-upload" || tab === "pos-maps" || tab === "pos-history") && (
@@ -794,6 +811,24 @@ function DashboardTab({
               <Kpi label={t("admin.costing.foodCost")} value={selected.foodCost == null ? "—" : `${selected.foodCost.toFixed(1)}%`} />
               <Kpi label={t("admin.costing.grossMargin")} value={selected.grossMargin == null ? "—" : `${selected.grossMargin.toFixed(1)}%`} />
             </div>
+            {selected.recipe && (() => {
+              const cm = productContribution(
+                selected.product.id,
+                selected.product.name_he,
+                selected.sellingPrice,
+                [selected.recipe],
+                ingredients
+              );
+              if (!cm) return null;
+              return (
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <Kpi label={t("admin.breakeven.foodCost")} value={formatIls(cm.foodCost)} />
+                  <Kpi label={t("admin.breakeven.extraVariable")} value={formatIls(cm.extraVariable)} />
+                  <Kpi label={t("admin.breakeven.contribution")} value={formatIls(cm.contribution)} />
+                  <Kpi label={t("admin.breakeven.cmRatio")} value={cm.contributionRatio == null ? "—" : `${(cm.contributionRatio * 100).toFixed(1)}%`} />
+                </div>
+              );
+            })()}
 
             {!selected.recipe ? (
               <AdminEmptyState

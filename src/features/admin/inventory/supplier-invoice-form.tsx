@@ -18,6 +18,7 @@ import type { PurchaseDocumentType, PurchaseInvoice, PurchaseInvoiceLine, Suppli
 import { saveFinanceInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
 import { invoiceMismatch } from "@/lib/inventory/invoice-finance";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
+import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 import { uploadImageWithProgress } from "@/services/storageService";
 import { STORAGE_PATHS } from "@/lib/firebase/collections";
 
@@ -64,6 +65,8 @@ export function SupplierInvoiceForm({
   const [createForKey, setCreateForKey] = useState<string | null>(null);
   const [askStock, setAskStock] = useState(false);
   const [transfer, setTransfer] = useState(false);
+  const [warnNoSupplier, setWarnNoSupplier] = useState(false);
+  const [allowNoSupplier, setAllowNoSupplier] = useState(false);
   const locked = form.status === "saved" || form.status === "approved";
 
   const summary = useMemo(() => invoiceSummary(form.lines, vatRate), [form.lines, vatRate]);
@@ -84,6 +87,7 @@ export function SupplierInvoiceForm({
         invoice={form}
         ingredients={ingredients}
         suppliers={suppliers}
+        skipSupplierWarning={allowNoSupplier}
         onToast={onToast}
         onClose={onClose}
       />
@@ -120,22 +124,23 @@ export function SupplierInvoiceForm({
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <Label>{t("admin.costing.supplier")} *</Label>
-          <select
-            className="mt-1 h-10 w-full rounded-xl border border-beige-dark/40 px-3 text-sm"
-            disabled={locked}
-            value={form.supplierId ?? ""}
-            onChange={(e) => {
-              const supplier = suppliers.find((item) => item.id === e.target.value);
-              setForm({ ...form, supplierId: e.target.value || undefined, supplierName: supplier?.name ?? "" });
-            }}
-          >
-            <option value="">{t("admin.inventory.noSupplier")}</option>
-            {suppliers.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+          <div className="mt-1">
+            <InvoiceSupplierField
+              suppliers={suppliers}
+              supplierId={form.supplierId}
+              supplierName={form.supplierName}
+              supplierTaxId={form.supplierTaxId}
+              disabled={locked}
+              onSelect={(item) =>
+                setForm({
+                  ...form,
+                  supplierId: item?.id,
+                  supplierName: item?.name ?? "",
+                  supplierTaxId: item?.taxId ?? form.supplierTaxId,
+                })
+              }
+            />
+          </div>
         </div>
         <div>
           <Label>{t("admin.inventory.invoiceNumber")}</Label>
@@ -316,10 +321,33 @@ export function SupplierInvoiceForm({
           <p className="font-medium">{t("admin.finance.askStock")}</p>
           <div className="mt-3 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>{t("admin.finance.notNow")}</Button>
-            <Button type="button" variant="turquoise" onClick={() => { setAskStock(false); setTransfer(true); }}>{t("admin.finance.transferNow")}</Button>
+            <Button
+              type="button"
+              variant="turquoise"
+              onClick={() => {
+                if (!form.supplierId && !allowNoSupplier) {
+                  setWarnNoSupplier(true);
+                  return;
+                }
+                setAskStock(false);
+                setTransfer(true);
+              }}
+            >
+              {t("admin.finance.transferNow")}
+            </Button>
           </div>
         </div>
       )}
+      <NoSupplierStockWarning
+        open={warnNoSupplier}
+        onCancel={() => setWarnNoSupplier(false)}
+        onContinue={() => {
+          setAllowNoSupplier(true);
+          setWarnNoSupplier(false);
+          setAskStock(false);
+          setTransfer(true);
+        }}
+      />
 
       <QuickCreateIngredientPanel
         open={createForKey != null}

@@ -1,6 +1,7 @@
 import { initializeApp, getApps, cert, type App } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 
 let adminApp: App | undefined;
 
@@ -46,6 +47,7 @@ export function getAdminApp(): App {
           clientEmail: sa.client_email,
           privateKey: sa.private_key,
         }),
+        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET,
       });
     }
   }
@@ -62,4 +64,12 @@ export function getAdminDb(): Firestore {
 
 export async function verifyIdToken(token: string) {
   return getAdminAuth().verifyIdToken(token);
+}
+
+export function getAdminBucket() {
+  const name = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET;
+  if (!name) {
+    throw new Error("STORAGE_NOT_CONFIGURED");
+  }
+  return getStorage(getAdminApp()).bucket(name);
 }

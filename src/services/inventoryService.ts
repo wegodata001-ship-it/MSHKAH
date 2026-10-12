@@ -21,6 +21,7 @@ import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/
 import { splitVat } from "@/lib/inventory/vat";
 import { currentStockBase, unitCostFromPackage } from "@/lib/inventory/stock";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
+import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import { findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
 import { invoiceStockStatus, syncInvoiceTotals, transferableLines } from "@/lib/inventory/invoice-finance";
 import type {
@@ -45,9 +46,13 @@ function mapSupplier(id: string, data: Record<string, unknown>): Supplier {
   return {
     id,
     name: String(data.name ?? ""),
+    companyName: data.companyName ? String(data.companyName) : undefined,
     phone: data.phone ? String(data.phone) : undefined,
     email: data.email ? String(data.email) : undefined,
     taxId: data.taxId ? String(data.taxId) : undefined,
+    address: data.address ? String(data.address) : undefined,
+    contactName: data.contactName ? String(data.contactName) : undefined,
+    paymentTerms: data.paymentTerms ? String(data.paymentTerms) : undefined,
     notes: data.notes ? String(data.notes) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
@@ -80,6 +85,8 @@ function mapOffer(id: string, data: Record<string, unknown>): SupplierOffer {
     lastPurchaseDate: data.lastPurchaseDate ? String(data.lastPurchaseDate) : undefined,
     lastPackageQuantity: data.lastPackageQuantity != null ? asNumber(data.lastPackageQuantity) : undefined,
     lastUnit: (data.lastUnit as PurchaseUnit) || undefined,
+    lastInvoiceId: data.lastInvoiceId ? String(data.lastInvoiceId) : undefined,
+    lastInvoiceNumber: data.lastInvoiceNumber ? String(data.lastInvoiceNumber) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
@@ -161,8 +168,12 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           supplierId: data.supplierId ? String(data.supplierId) : undefined,
           supplierName: String(data.supplierName ?? ""),
           supplierTaxId: data.supplierTaxId ? String(data.supplierTaxId) : undefined,
+          supplierVatNumber: data.supplierVatNumber ? String(data.supplierVatNumber) : undefined,
+          supplierPhone: data.supplierPhone ? String(data.supplierPhone) : undefined,
+          supplierAddress: data.supplierAddress ? String(data.supplierAddress) : undefined,
           invoiceNumber: String(data.invoiceNumber ?? ""),
           invoiceDate: String(data.invoiceDate ?? ""),
+          dueDate: data.dueDate ? String(data.dueDate) : undefined,
           receivedAt: String(data.receivedAt ?? ""),
           documentType: data.documentType || "invoice",
           currency: data.currency ? String(data.currency) : undefined,
@@ -178,11 +189,23 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           grandTotal: data.grandTotal != null ? asNumber(data.grandTotal) : undefined,
           vatStatus: data.vatStatus === "detected" || data.vatStatus === "needs_review" ? data.vatStatus : undefined,
           status: (data.status as PurchaseInvoice["status"]) || "draft",
+          scanStatus: data.scanStatus || undefined,
           stockStatus: data.stockStatus === "partial" || data.stockStatus === "posted" || data.stockStatus === "none" ? data.stockStatus : undefined,
           lines: Array.isArray(data.lines) ? data.lines : [],
+          sourceFile: data.sourceFile && typeof data.sourceFile === "object" ? (data.sourceFile as PurchaseInvoice["sourceFile"]) : undefined,
+          scanAttempts: Array.isArray(data.scanAttempts) ? data.scanAttempts : undefined,
+          validation: data.validation && typeof data.validation === "object" ? data.validation : undefined,
+          headerConfidence: data.headerConfidence && typeof data.headerConfidence === "object" ? data.headerConfidence : undefined,
           fileName: data.fileName ? String(data.fileName) : undefined,
           fileUrl: data.fileUrl ? String(data.fileUrl) : undefined,
           fileHash: data.fileHash ? String(data.fileHash) : undefined,
+          shipping: data.shipping != null ? asNumber(data.shipping) : undefined,
+          delivery: data.delivery != null ? asNumber(data.delivery) : undefined,
+          inventoryPostedAt: data.inventoryPostedAt ? timestampToIso(data.inventoryPostedAt as never) : data.inventoryPostedAt ? String(data.inventoryPostedAt) : undefined,
+          inventoryPostedBy: data.inventoryPostedBy ? String(data.inventoryPostedBy) : undefined,
+          inventoryPostingId: data.inventoryPostingId ? String(data.inventoryPostingId) : undefined,
+          createdBy: data.createdBy ? String(data.createdBy) : undefined,
+          uploadedAt: data.uploadedAt ? String(data.uploadedAt) : undefined,
           aiProvider: data.aiProvider ? String(data.aiProvider) : undefined,
           aiModel: data.aiModel ? String(data.aiModel) : undefined,
           audit: Array.isArray(data.audit) ? data.audit : undefined,
@@ -234,18 +257,26 @@ export function subscribeToPosProductMaps(onData: (items: PosProductMap[]) => vo
 export async function saveSupplier(input: {
   id?: string;
   name: string;
+  companyName?: string;
   phone?: string;
   email?: string;
   taxId?: string;
+  address?: string;
+  contactName?: string;
+  paymentTerms?: string;
   notes?: string;
 }): Promise<ServiceResult<Supplier>> {
   try {
     const now = nowTimestamp();
     const payload = sanitizeFirestoreData({
       name: input.name.trim(),
+      companyName: input.companyName?.trim() || null,
       phone: input.phone?.trim() || null,
       email: input.email?.trim() || null,
       taxId: input.taxId?.trim() || null,
+      address: input.address?.trim() || null,
+      contactName: input.contactName?.trim() || null,
+      paymentTerms: input.paymentTerms?.trim() || null,
       notes: input.notes?.trim() || null,
       active: true,
       updatedAt: now,
@@ -364,6 +395,14 @@ export async function recordSupplierPurchase(input: {
   purchasedAt: string;
   vatType?: VatType;
   vatRate?: number;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  invoiceLineId?: string;
+  unitPriceNet?: number;
+  unitPriceGross?: number;
+  lineTotalNet?: number;
+  lineTotalVat?: number;
+  lineTotalGross?: number;
 }): Promise<ServiceResult<void>> {
   try {
     const now = nowTimestamp();
@@ -380,6 +419,14 @@ export async function recordSupplierPurchase(input: {
       lastPriceBeforeVat: input.priceBeforeVat ?? null,
       lastPackageQuantity: input.packageQuantity,
       lastUnit: input.purchaseUnit,
+      lastInvoiceId: input.invoiceId || null,
+      lastInvoiceNumber: input.invoiceNumber || null,
+      lastInvoiceLineId: input.invoiceLineId || null,
+      lastUnitPriceNet: input.unitPriceNet ?? null,
+      lastUnitPriceGross: input.unitPriceGross ?? null,
+      lastLineTotalNet: input.lineTotalNet ?? null,
+      lastLineTotalVat: input.lineTotalVat ?? null,
+      lastLineTotalGross: input.lineTotalGross ?? null,
       lastUnitCost: current?.normalizedPrice ?? current?.lastUnitCost ?? normalized,
       active: true,
       updatedAt: now,
@@ -540,21 +587,30 @@ export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<Serv
     );
     const recordedKeys = new Set(existingRecords.docs.map((item) => String(item.data().invoiceLineKey || "")));
     for (const line of synced.lines) {
-      if (!line.productId || !line.quantity || !line.unit) continue;
+      const productId = line.productId;
+      if (!productId || !isConfirmedInvoiceMatch(line) || !line.quantity || !line.unit) continue;
       if (recordedKeys.has(line.key)) continue;
       const net = line.netAmount ?? line.priceBeforeVat ?? 0;
       const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
       await addDoc(
         collection(getDb(), COLLECTIONS.purchasePriceRecords),
         sanitizeFirestoreData({
-          productId: line.productId,
+          productId,
           supplierId: synced.supplierId || null,
           invoiceId: id,
+          invoiceLineId: line.key,
           invoiceLineKey: line.key,
           purchaseDate: synced.invoiceDate,
           quantity: line.quantity,
           packageQuantity: line.quantity,
+          purchaseQuantity: line.quantity,
           unit: line.unit,
+          purchaseUnit: line.unit,
+          unitPriceNet: line.unitPriceNet ?? null,
+          unitPriceGross: line.unitPriceGross ?? null,
+          lineTotalNet: net,
+          lineTotalVat: line.vatAmount ?? 0,
+          lineTotalGross: gross,
           priceBeforeVat: net,
           vatAmount: line.vatAmount ?? 0,
           priceIncludingVat: gross,
@@ -567,7 +623,7 @@ export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<Serv
       );
       if (synced.supplierId) {
         await recordSupplierPurchase({
-          productId: line.productId,
+          productId,
           supplierId: synced.supplierId,
           priceIncludingVat: gross,
           priceBeforeVat: net,
@@ -575,14 +631,22 @@ export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<Serv
           purchaseUnit: line.unit,
           purchasedAt: synced.receivedAt || synced.invoiceDate,
           vatType: line.vatType,
-          vatRate: line.vatRate,
+          vatRate: line.vatRate ?? undefined,
+          invoiceId: id,
+          invoiceNumber: synced.invoiceNumber,
+          invoiceLineId: line.key,
+          unitPriceNet: line.unitPriceNet ?? undefined,
+          unitPriceGross: line.unitPriceGross ?? undefined,
+          lineTotalNet: net,
+          lineTotalVat: line.vatAmount ?? 0,
+          lineTotalGross: gross,
         });
         if (line.rawName) {
           await saveSupplierItemMap({
             supplierId: synced.supplierId,
             supplierProductName: line.rawName,
             supplierSku: line.sku,
-            inventoryProductId: line.productId,
+            inventoryProductId: productId,
             conversion: line.conversionFactor ?? undefined,
           });
         }
@@ -600,6 +664,9 @@ export async function transferInvoiceLinesToStock(
 ): Promise<ServiceResult<void>> {
   try {
     if (!invoice.id) return failure(new Error("Invoice required"), "Invoice required");
+    if (invoice.inventoryPostedAt && invoice.stockStatus === "posted") {
+      return failure(new Error("ALREADY_POSTED"), "ALREADY_POSTED");
+    }
     let current = invoice;
     if (current.status !== "saved" && current.status !== "approved") {
       const saved = await saveFinanceInvoice(current);
@@ -669,6 +736,36 @@ export async function transferInvoiceLinesToStock(
         lastReceivedAt: current.receivedAt,
         updatedAt: now,
       });
+      if (current.supplierId) {
+        await recordSupplierPurchase({
+          productId: line.productId!,
+          supplierId: current.supplierId,
+          priceIncludingVat: gross,
+          priceBeforeVat: net,
+          packageQuantity: line.quantity!,
+          purchaseUnit: line.unit!,
+          purchasedAt: current.receivedAt || current.invoiceDate,
+          vatType: line.vatType,
+          vatRate: line.vatRate ?? undefined,
+          invoiceId: current.id,
+          invoiceNumber: current.invoiceNumber,
+          invoiceLineId: line.key,
+          unitPriceNet: line.unitPriceNet ?? undefined,
+          unitPriceGross: line.unitPriceGross ?? undefined,
+          lineTotalNet: net,
+          lineTotalVat: line.vatAmount ?? 0,
+          lineTotalGross: gross,
+        });
+        if (line.rawName) {
+          await saveSupplierItemMap({
+            supplierId: current.supplierId,
+            supplierProductName: line.rawName,
+            supplierSku: line.sku,
+            inventoryProductId: line.productId!,
+            conversion: line.conversionFactor ?? undefined,
+          });
+        }
+      }
       const idx = nextLines.findIndex((item) => item.key === line.key);
       if (idx >= 0) {
         nextLines[idx] = {
@@ -686,13 +783,18 @@ export async function transferInvoiceLinesToStock(
         ? "partial"
         : "posted"
       : "none";
+    const postingId = current.inventoryPostingId || `post-${current.id}`;
     await updateDoc(doc(db, COLLECTIONS.purchaseInvoices, current.id), {
       status: "saved",
+      scanStatus: stockStatus === "posted" ? "posted" : current.scanStatus || "approved",
       stockStatus,
       lines: nextLines,
+      inventoryPostedAt: stockStatus === "posted" ? new Date().toISOString() : current.inventoryPostedAt || null,
+      inventoryPostedBy: current.approvedBy || current.createdBy || null,
+      inventoryPostingId: stockStatus === "posted" ? postingId : current.inventoryPostingId || null,
       audit: [
         ...(current.audit ?? []),
-        { at: new Date().toISOString(), actor: current.approvedBy, action: "stock-transfer", detail: stockStatus },
+        { at: new Date().toISOString(), actor: current.approvedBy, action: "INVENTORY_POSTED", detail: stockStatus },
       ],
       updatedAt: now,
     });
