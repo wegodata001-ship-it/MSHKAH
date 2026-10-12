@@ -2,6 +2,7 @@ import type { PurchaseUnit } from "@/lib/costing/types";
 
 export type VatType = "inclusive" | "exclusive" | "exempt" | "unknown";
 export type InvoiceTaxMode = "inclusive" | "exclusive" | "exempt" | "unknown";
+export type InvoiceLineType = "INVENTORY_ITEM" | "SERVICE" | "DISCOUNT" | "SHIPPING" | "GENERAL" | "UNKNOWN";
 export type InvoiceScanStatus =
   | "uploaded"
   | "scanning"
@@ -238,6 +239,9 @@ export type PurchaseInvoiceLine = {
   vatMode?: VatType;
   transferToInventory?: boolean;
   skipInventory?: boolean;
+  lineType?: InvoiceLineType | null;
+  lineNumber?: number | null;
+  rawText?: string | null;
   postedToStock?: boolean;
   quantityBefore?: number | null;
   quantityIn?: number | null;

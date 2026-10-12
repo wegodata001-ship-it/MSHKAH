@@ -111,12 +111,19 @@ export function SmartInvoiceFlow({
       if (!body.has("file") && !body.has("invoiceId") && nextFile) body.set("file", nextFile);
       const response = await authFetch("/api/admin/inventory/invoice/extract", { method: "POST", body });
       const data = (await response.json()) as InvoiceExtractResponse;
-      if (data.invoice) setInvoice(data.invoice);
-      if (!response.ok || !data.invoice?.lines?.length) {
-        const mapped = publicScanErrorCode(data.errorCode || data.code || data.error, data.providerStatus);
+      const empty =
+        !data.invoice?.invoiceNumber &&
+        !data.invoice?.lines?.length &&
+        data.invoice?.grossAmount == null &&
+        data.invoice?.grandTotal == null &&
+        data.invoice?.netAmount == null;
+      if (!response.ok || data.code === "EXTRACTION_FAILED" || empty) {
+        const mapped = publicScanErrorCode(data.errorCode || data.code || data.error || "EXTRACTION_FAILED", data.providerStatus);
         setError(t(scanErrorMessageKey(mapped)));
+        if (data.invoice?.id) setInvoice({ ...data.invoice, scanStatus: "failed" });
         return;
       }
+      if (data.invoice) setInvoice(data.invoice);
     } catch {
       setError(t("admin.inventory.smart.err.SCAN_FAILED"));
     } finally {
@@ -140,7 +147,7 @@ export function SmartInvoiceFlow({
     });
   };
 
-  if (!invoice) {
+  if (!invoice || invoice.scanStatus === "failed") {
     return (
       <AdminCard title={t("admin.inventory.smart.title")}>
         <label
@@ -212,11 +219,11 @@ export function SmartInvoiceFlow({
             </label>
           )}
           {error && (
-            <Button type="button" variant="outline" disabled={busy || !file} onClick={() => void scan()}>
+            <Button type="button" variant="outline" disabled={busy || (!file && !invoice?.id)} onClick={() => void scan(file, invoice?.id)}>
               {t("admin.inventory.smart.retry")}
             </Button>
           )}
-          <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan()}>
+          <Button type="button" variant="turquoise" disabled={busy || (!file && !invoice?.id)} onClick={() => void scan(file, invoice?.id)}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.scan")}
           </Button>
         </div>

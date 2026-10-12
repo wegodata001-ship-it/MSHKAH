@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { httpStatusForAiCode } from "@/lib/ai/gemini-config";
-import { parseInvoiceExtraction } from "@/lib/ai/gemini-invoice";
+import {
+  isEmptyInvoiceExtraction,
+  parseInvoiceExtraction,
+  parseInvoiceExtractionResult,
+  parseVisibleNumber,
+} from "@/lib/ai/gemini-invoice";
+import { validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
 
 describe("invoice AI error mapping", () => {
   it("maps structured codes to HTTP statuses", () => {
@@ -59,5 +65,83 @@ describe("parseInvoiceExtraction", () => {
     );
     expect(parsed.lines[0]?.vatType).toBe("unknown");
     expect(parsed.vatRate.value).toBeNull();
+  });
+
+  it("unwraps Gemini {value,confidence} line fields instead of dropping the table", () => {
+    const parsed = parseInvoiceExtraction(
+      JSON.stringify({
+        invoiceNumber: { value: "01/002182", confidence: 0.94 },
+        subtotal: { value: 13500, confidence: 0.95 },
+        vatTotal: { value: 2430, confidence: 0.95 },
+        grandTotal: { value: 15930, confidence: 0.96 },
+        vatRate: { value: 18, confidence: 0.9 },
+        vatStatus: "detected",
+        lines: [
+          {
+            description: { value: "פריט 1", confidence: 0.88 },
+            quantity: { value: 1, confidence: 0.8 },
+            unitPriceBeforeVat: { value: 13500, confidence: 0.8 },
+            lineTotalBeforeVat: { value: 13500, confidence: 0.8 },
+            vatAmount: { value: 2430, confidence: 0.8 },
+            lineTotalIncludingVat: { value: 15930, confidence: 0.8 },
+            lineType: { value: "INVENTORY_ITEM", confidence: 0.7 },
+          },
+        ],
+      })
+    );
+    expect(parsed.invoiceNumber.value).toBe("01/002182");
+    expect(parsed.lines).toHaveLength(1);
+    expect(parsed.lines[0]?.name).toBe("פריט 1");
+    expect(parsed.lines[0]?.quantity).toBe(1);
+    expect(parsed.lines[0]?.lineNet).toBe(13500);
+    expect(parsed.lines[0]?.lineType).toBe("INVENTORY_ITEM");
+    expect(isEmptyInvoiceExtraction(parsed)).toBe(false);
+  });
+
+  it("keeps the attached Hebrew invoice numbers and does not treat empty scan as success", () => {
+    const parsed = parseInvoiceExtraction(
+      JSON.stringify({
+        documentNumber: "01/002182",
+        supplierName: "ספק בדיקה",
+        invoiceDate: "2026-03-01",
+        subtotalBeforeVat: "13,500.00",
+        vatRate: "18%",
+        vatAmount: "2,430.00",
+        totalToPay: "15,930.00",
+        vatStatus: "detected",
+        lines: [
+          { description: "שורה 1", quantity: "1", unitPriceBeforeVat: "13,500.00", lineSubtotalBeforeVat: "13,500.00", vatAmount: "2,430.00", lineTotalIncludingVat: "15,930.00" },
+        ],
+      })
+    );
+    expect(parsed.invoiceNumber.value).toBe("01/002182");
+    expect(parsed.subtotal.value).toBe(13500);
+    expect(parsed.vatRate.value).toBe(18);
+    expect(parsed.vatTotal.value).toBe(2430);
+    expect(parsed.grandTotal.value).toBe(15930);
+    expect(parsed.lines.length).toBeGreaterThan(0);
+    expect(isEmptyInvoiceExtraction(parsed)).toBe(false);
+
+    const totals = validateInvoiceTotals({
+      lines: [],
+      headerNet: parsed.subtotal.value,
+      headerVat: parsed.vatTotal.value,
+      headerGross: parsed.grandTotal.value,
+    });
+    expect(totals.hasMismatch).toBe(false);
+    expect(totals.computedGross).toBe(15930);
+
+    const empty = parseInvoiceExtractionResult("{}");
+    expect(empty.empty).toBe(true);
+    expect(empty.extraction.lines).toEqual([]);
+    expect(empty.extraction.invoiceNumber.value).toBeNull();
+    expect(empty.extraction.grandTotal.value).toBeNull();
+  });
+
+  it("parses Israeli thousand separators instead of turning them into empty totals", () => {
+    expect(parseVisibleNumber("13,500.00")).toBe(13500);
+    expect(parseVisibleNumber("2,430.00 ₪")).toBe(2430);
+    expect(parseVisibleNumber("15.930,00")).toBe(15930);
+    expect(parseVisibleNumber({ value: "13,500.00", confidence: 0.9 })).toBe(13500);
   });
 });

@@ -56,6 +56,7 @@ export function validateInvoiceTotals(input: {
   headerNet?: number | null;
   headerVat?: number | null;
   headerGross?: number | null;
+  headerDiscount?: number | null;
 }): InvoiceTotalsValidation {
   const lineNetSum = roundMoney(input.lines.reduce((sum, line) => sum + (line.netAmount ?? line.lineNet ?? line.priceBeforeVat ?? 0), 0));
   const lineVatSum = roundMoney(input.lines.reduce((sum, line) => sum + (line.vatAmount ?? 0), 0));
@@ -63,13 +64,14 @@ export function validateInvoiceTotals(input: {
   const headerNet = input.headerNet ?? null;
   const headerVat = input.headerVat ?? null;
   const headerGross = input.headerGross ?? null;
-  const computedGross = headerNet != null && headerVat != null ? roundMoney(headerNet + headerVat) : roundMoney(lineNetSum + lineVatSum);
-  const netDiff = headerNet == null ? null : roundMoney(lineNetSum - headerNet);
-  const vatDiff = headerVat == null ? null : roundMoney(lineVatSum - headerVat);
-  const grossDiff = headerGross == null ? null : roundMoney(lineGrossSum - headerGross);
+  const discount = input.headerDiscount ?? 0;
+  const computedGross = headerNet != null && headerVat != null ? roundMoney(headerNet + headerVat - discount) : roundMoney(lineNetSum + lineVatSum);
+  const netDiff = headerNet == null || !input.lines.length ? null : roundMoney(lineNetSum - headerNet);
+  const vatDiff = headerVat == null || !input.lines.length ? null : roundMoney(lineVatSum - headerVat);
+  const grossDiff = headerGross == null || !input.lines.length ? null : roundMoney(lineGrossSum - headerGross);
   const off = (value: number | null) => value != null && Math.abs(value) > 0.05;
   const netPlusVat = headerNet != null && headerVat != null && headerGross != null
-    ? Math.abs(roundMoney(headerNet + headerVat - headerGross)) > 0.05
+    ? Math.abs(roundMoney(headerNet + headerVat - discount - headerGross)) > 0.05
     : false;
   return {
     lineNetSum,

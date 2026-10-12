@@ -279,6 +279,11 @@ export async function POST(request: NextRequest) {
       providerStatus: httpStatus,
       duration: Date.now() - started,
       invoiceId: invoiceRef.id,
+      documentNumber: extraction.invoiceNumber.value,
+      lines: extraction.lines.length,
+      subtotal: extraction.subtotal.value,
+      vat: extraction.vatTotal.value,
+      total: extraction.grandTotal.value,
     });
     return Response.json({
       ok: true,

@@ -33,6 +33,9 @@ export type ExtractedInvoiceLine = {
   conversionNote: string | null;
   conversionFactor: number | null;
   confidence: number | null;
+  lineNumber?: number | null;
+  lineType?: import("@/lib/inventory/types").InvoiceLineType | null;
+  rawText?: string | null;
 };
 
 export type ExtractedInvoice = {

@@ -210,6 +210,10 @@ export function buildReviewedInvoice(input: {
         category: match.item?.category,
         matchConfirmed: confirmed,
         candidates: ranked,
+        lineType: line.lineType,
+        lineNumber: line.lineNumber,
+        rawText: line.rawText,
+        skipInventory: Boolean(line.lineType && line.lineType !== "INVENTORY_ITEM" && line.lineType !== "UNKNOWN"),
       },
       lineVatRate
     );
@@ -227,6 +231,7 @@ export function buildReviewedInvoice(input: {
     headerNet: input.extraction.subtotal.value,
     headerVat: input.extraction.vatTotal.value,
     headerGross: input.extraction.grandTotal.value,
+    headerDiscount: input.extraction.discountTotal.value ?? input.extraction.headerDiscount.value,
   });
 
   return {
