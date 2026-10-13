@@ -204,6 +204,7 @@ export function InvoiceLinesReview({
               <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colCategory")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.qty")}</th>
               <th className="px-2 text-start font-medium">{t("admin.costing.unit")}</th>
+              <th className="px-2 text-start font-medium">{t("admin.inventory.unitPrice")}</th>
               <th className="px-2 text-start font-medium">{t("admin.finance.compareNet")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.vat")}</th>
               <th className="px-2 text-start font-medium">{t("admin.finance.compareGross")}</th>
@@ -247,6 +248,7 @@ export function InvoiceLinesReview({
                   </td>
                   <td className="px-2 tabular-nums">{line.quantity ?? "—"}</td>
                   <td className="px-2">{line.unit ? t(unitLabelKey(line.unit)) : "—"}</td>
+                  <td className="px-2 tabular-nums">{line.unitPrice != null ? formatIls(line.unitPrice) : "—"}</td>
                   <td className="px-2 tabular-nums">{line.netAmount != null ? formatIls(line.netAmount) : "—"}</td>
                   <td className="px-2 tabular-nums">{line.vatRate != null ? `${Math.round(line.vatRate * 100)}%` : "—"}</td>
                   <td className="px-2 tabular-nums">{line.grossAmount != null ? formatIls(line.grossAmount) : "—"}</td>
@@ -287,9 +289,9 @@ export function InvoiceLinesReview({
                 <p className="truncate text-xs text-coffee/60">
                   {t("admin.inventory.match")}: {match?.name || t("admin.inventory.smart.noMatch")}
                 </p>
-                <div className="mt-0.5 flex items-center justify-between text-xs text-coffee/70">
-                  <span>{line.quantity ?? "—"} × {line.grossAmount != null ? formatIls(line.grossAmount) : "—"}</span>
-                  <span>{t("admin.costing.category")}: {line.category || t("admin.inventory.smart.uncategorized")}</span>
+                <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-xs text-coffee/70">
+                  <span>{line.quantity ?? "—"} {line.unit ? t(unitLabelKey(line.unit)) : ""} · {t("admin.inventory.unitPrice")}: {line.unitPrice != null ? formatIls(line.unitPrice) : "—"}</span>
+                  <span>{t("admin.inventory.lineTotal")}: {line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</span>
                 </div>
               </div>
               {dir === "rtl" ? <ChevronLeft className="h-4 w-4 text-coffee/40" /> : <ChevronRight className="h-4 w-4 text-coffee/40" />}
@@ -424,7 +426,7 @@ function LineEditModal({
   ingredients,
   categories,
   supplierName,
-  vatRate,
+  vatRate: _headerVatRate,
   locked,
   onClose,
   onChange,
@@ -540,11 +542,11 @@ function LineEditModal({
               ))}
             </select>
           </Field>
-          <Field label={t("admin.finance.compareNet")}>
-            <Input type="number" min="0" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onChange({ unitPrice: e.target.value ? Number(e.target.value) : null })} />
+          <Field label={t("admin.inventory.unitPrice")}>
+            <Input type="number" min="0" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onChange({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })} />
           </Field>
           <Field label={t("admin.inventory.vatRate")}>
-            <Input type="number" min="0" value={Math.round((line.vatRate ?? vatRate) * 100)} disabled={locked} onChange={(e) => onChange({ vatRate: Number(e.target.value) / 100 })} />
+            <Input type="number" min="0" value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => onChange({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })} />
           </Field>
           <Field label={t("admin.inventory.smart.vatAmount")}>
             <p className="h-10 rounded-xl bg-beige/40 px-3 leading-10">{line.vatAmount != null ? formatIls(line.vatAmount) : "—"}</p>

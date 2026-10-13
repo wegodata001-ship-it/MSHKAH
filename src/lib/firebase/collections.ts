@@ -39,6 +39,7 @@ export const COLLECTIONS = {
   supplierItemMaps: "supplierItemMaps",
   purchasePriceRecords: "purchasePriceRecords",
   inventoryMovements: "inventoryMovements",
+  inventoryBalances: "inventoryBalances",
   posImports: "posImports",
   posProductMaps: "posProductMaps",
   stockCounts: "stockCounts",

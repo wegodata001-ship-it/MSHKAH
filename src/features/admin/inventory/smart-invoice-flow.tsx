@@ -21,7 +21,16 @@ import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview } from "@/features/admin/inventory/invoice-lines-review";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
-import { confidenceTone, publicScanErrorCode, scanErrorMessageKey, validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
+import { toDateOnly } from "@/lib/dates/normalize";
+import {
+  confidenceTone,
+  incompleteInvoiceLineCount,
+  mergeScannedInvoice,
+  missingInvoiceFields,
+  publicScanErrorCode,
+  scanErrorMessageKey,
+  validateInvoiceTotals,
+} from "@/lib/inventory/invoice-archive";
 import { uploadImageWithProgress } from "@/services/storageService";
 import { STORAGE_PATHS } from "@/lib/firebase/collections";
 
@@ -87,14 +96,18 @@ export function SmartInvoiceFlow({
   const [transfer, setTransfer] = useState(false);
   const [warnNoSupplier, setWarnNoSupplier] = useState(false);
   const [allowNoSupplier, setAllowNoSupplier] = useState(false);
+  const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
 
   const summary = useMemo(() => (invoice ? invoiceSummary(invoice.lines, vatRate) : null), [invoice, vatRate]);
+  const missing = useMemo(() => (invoice ? missingInvoiceFields(invoice) : []), [invoice]);
+  const incompleteLines = useMemo(() => (invoice ? incompleteInvoiceLineCount(invoice.lines) : 0), [invoice]);
 
   const takeFile = (next: File | null) => {
     if (!next) return;
     setFile(next);
     setError(null);
     setInvoice(null);
+    setEditedKeys(new Set());
     if (preview) URL.revokeObjectURL(preview);
     setPreview(URL.createObjectURL(next));
   };
@@ -105,13 +118,12 @@ export function SmartInvoiceFlow({
     setError(null);
     try {
       const body = new FormData();
-      if (nextFile && !invoice?.sourceFile) body.set("file", nextFile);
-      else if (nextFile && !invoiceId) body.set("file", nextFile);
+      if (nextFile) body.set("file", nextFile);
       if (invoiceId) body.set("invoiceId", invoiceId);
-      if (!body.has("file") && !body.has("invoiceId") && nextFile) body.set("file", nextFile);
       const response = await authFetch("/api/admin/inventory/invoice/extract", { method: "POST", body });
       const data = (await response.json()) as InvoiceExtractResponse;
       const empty =
+        !data.extraction?.invoiceNumber?.value &&
         !data.invoice?.invoiceNumber &&
         !data.invoice?.lines?.length &&
         data.invoice?.grossAmount == null &&
@@ -120,10 +132,26 @@ export function SmartInvoiceFlow({
       if (!response.ok || data.code === "EXTRACTION_FAILED" || empty) {
         const mapped = publicScanErrorCode(data.errorCode || data.code || data.error || "EXTRACTION_FAILED", data.providerStatus);
         setError(t(scanErrorMessageKey(mapped)));
-        if (data.invoice?.id) setInvoice({ ...data.invoice, scanStatus: "failed" });
+        setInvoice((prev) => {
+          if (prev) {
+            return {
+              ...prev,
+              id: data.invoice?.id || prev.id,
+              sourceFile: data.invoice?.sourceFile ?? prev.sourceFile,
+              fileName: data.invoice?.fileName ?? prev.fileName,
+              fileHash: data.invoice?.fileHash ?? prev.fileHash,
+              fileUrl: data.invoice?.fileUrl ?? prev.fileUrl,
+              scanStatus: "failed",
+            };
+          }
+          return data.invoice ? { ...data.invoice, scanStatus: "failed" } : prev;
+        });
         return;
       }
-      if (data.invoice) setInvoice(data.invoice);
+      if (data.invoice) {
+        setInvoice((prev) => mergeScannedInvoice(prev, data.invoice as PurchaseInvoice, editedKeys));
+        if (data.persistWarning) setError(t("admin.inventory.smart.err.SCAN_FAILED"));
+      }
     } catch {
       setError(t("admin.inventory.smart.err.SCAN_FAILED"));
     } finally {
@@ -133,6 +161,7 @@ export function SmartInvoiceFlow({
 
   const update = (patch: Partial<PurchaseInvoice>) => {
     if (!invoice) return;
+    setEditedKeys((current) => new Set([...current, ...Object.keys(patch)]));
     setInvoice({
       ...invoice,
       ...patch,
@@ -142,12 +171,15 @@ export function SmartInvoiceFlow({
 
   const updateLine = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
     if (!invoice) return;
-    update({
+    setEditedKeys((current) => new Set([...current, `line:${key}`]));
+    setInvoice({
+      ...invoice,
       lines: invoice.lines.map((line) => (line.key === key ? finalizeInvoiceLine({ ...line, ...patch }, vatRate) : line)),
+      audit: [...(invoice.audit ?? []), { at: new Date().toISOString(), action: "edit", detail: `line:${key}` }],
     });
   };
 
-  if (!invoice || invoice.scanStatus === "failed") {
+  if (!invoice) {
     return (
       <AdminCard title={t("admin.inventory.smart.title")}>
         <label
@@ -219,11 +251,11 @@ export function SmartInvoiceFlow({
             </label>
           )}
           {error && (
-            <Button type="button" variant="outline" disabled={busy || (!file && !invoice?.id)} onClick={() => void scan(file, invoice?.id)}>
+            <Button type="button" variant="outline" disabled={busy || !file} onClick={() => void scan(file)}>
               {t("admin.inventory.smart.retry")}
             </Button>
           )}
-          <Button type="button" variant="turquoise" disabled={busy || (!file && !invoice?.id)} onClick={() => void scan(file, invoice?.id)}>
+          <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan(file)}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.scan")}
           </Button>
         </div>
@@ -246,15 +278,33 @@ export function SmartInvoiceFlow({
 
   const locked = invoice.status === "saved" || invoice.status === "approved";
   const mismatch = invoiceMismatch(invoice);
-  const canSave = Boolean(invoice.invoiceDate) && !invoice.duplicateOf && !locked;
+  const invoiceDate = toDateOnly(invoice.invoiceDate) || "";
+  const receivedAt = toDateOnly(invoice.receivedAt) || "";
+  const dueDate = toDateOnly(invoice.dueDate) || "";
+  const canSave = Boolean(invoiceDate) && !invoice.duplicateOf && !locked;
+  const vatRateValue = invoice.vatRate == null ? "" : invoice.vatRate > 1 ? invoice.vatRate : invoice.vatRate * 100;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4 overflow-x-hidden">
       <AdminCard title={t("admin.inventory.smart.review")}>
         {invoice.duplicateOf && (
           <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{t("admin.inventory.smart.duplicate")}</p>
         )}
-        <div className="mb-4 grid gap-2 sm:grid-cols-4">
+        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+        {(missing.length > 0 || incompleteLines > 0) && (
+          <div className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-medium">{t("admin.inventory.smart.partialScan")}</p>
+            {missing.length > 0 && (
+              <p className="mt-1">
+                {t("admin.inventory.smart.missingHint")}: {missing.map((field) => t(field.labelKey)).join(" · ")}
+              </p>
+            )}
+            {incompleteLines > 0 && (
+              <p className="mt-1">{t("admin.inventory.smart.incompleteLines")}: {incompleteLines}</p>
+            )}
+          </div>
+        )}
+        <div className="mb-4 grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryStat label={t("admin.finance.compareNet")} value={invoice.netAmount ?? invoice.subtotal} />
           <SummaryStat label={t("admin.inventory.vat")} value={invoice.vatAmount ?? invoice.vatTotal} />
           <SummaryStat label={t("admin.finance.compareGross")} value={invoice.grossAmount ?? invoice.grandTotal} />
@@ -265,15 +315,15 @@ export function SmartInvoiceFlow({
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("admin.inventory.archive.rescan")}
           </Button>
         </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-2xl bg-beige/30 p-3">
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+          <div className="min-w-0 rounded-2xl bg-beige/30 p-3">
             <InvoiceSourcePreview
               source={invoice.sourceFile}
               fallbackUrl={preview}
               fileName={invoice.fileName}
             />
           </div>
-          <div className="grid gap-3">
+          <div className="grid min-w-0 gap-3">
             <Field label={`${t("admin.costing.supplier")} *`} confidence={invoice.headerConfidence?.supplier}>
               <InvoiceSupplierField
                 suppliers={suppliers}
@@ -292,28 +342,34 @@ export function SmartInvoiceFlow({
               />
             </Field>
             <Field label={t("admin.inventory.invoiceNumber")} confidence={invoice.headerConfidence?.invoiceNumber}>
-              <Input value={invoice.invoiceNumber || ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ invoiceNumber: e.target.value })} />
+              <Input className="min-w-0" value={invoice.invoiceNumber || ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ invoiceNumber: e.target.value })} />
             </Field>
             <Field label={`${t("admin.inventory.invoiceDate")} *`} confidence={invoice.headerConfidence?.invoiceDate}>
-              <Input type="date" value={invoice.invoiceDate} disabled={locked} onChange={(e) => update({ invoiceDate: e.target.value })} />
+              <Input className="min-w-0" type="date" value={invoiceDate} disabled={locked} onChange={(e) => update({ invoiceDate: e.target.value })} />
             </Field>
-            <Field label={t("admin.finance.receivedAt")}>
-              <Input type="date" value={invoice.receivedAt} disabled={locked} onChange={(e) => update({ receivedAt: e.target.value })} />
+            <Field label={t("admin.inventory.receivedAt")}>
+              <Input className="min-w-0" type="date" value={receivedAt} disabled={locked} onChange={(e) => update({ receivedAt: e.target.value })} />
+            </Field>
+            <Field label={t("admin.inventory.dueDate")}>
+              <Input className="min-w-0" type="date" value={dueDate} disabled={locked} onChange={(e) => update({ dueDate: e.target.value || undefined })} />
             </Field>
             <Field label={t("admin.finance.currency")}>
-              <Input value={invoice.currency ?? ""} disabled={locked} onChange={(e) => update({ currency: e.target.value || undefined })} />
+              <Input className="min-w-0" value={invoice.currency ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ currency: e.target.value || undefined })} />
             </Field>
             <Field label={t("admin.finance.paymentMethod")}>
-              <Input value={invoice.paymentMethod ?? ""} disabled={locked} onChange={(e) => update({ paymentMethod: e.target.value || null })} />
+              <Input className="min-w-0" value={invoice.paymentMethod ?? ""} disabled={locked} onChange={(e) => update({ paymentMethod: e.target.value || null })} />
             </Field>
             <Field label={t("admin.finance.netTotal")}>
-              <Input type="number" value={invoice.netAmount ?? invoice.subtotal ?? ""} disabled={locked} onChange={(e) => update({ netAmount: e.target.value ? Number(e.target.value) : null, subtotal: e.target.value ? Number(e.target.value) : null })} />
+              <Input className="min-w-0" type="number" value={invoice.netAmount ?? invoice.subtotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ netAmount: e.target.value === "" ? null : Number(e.target.value), subtotal: e.target.value === "" ? null : Number(e.target.value) })} />
+            </Field>
+            <Field label={t("admin.inventory.vatRate")}>
+              <Input className="min-w-0" type="number" value={vatRateValue} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ vatRate: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Field label={t("admin.finance.vatTotal")}>
-              <Input type="number" value={invoice.vatAmount ?? invoice.vatTotal ?? ""} disabled={locked} onChange={(e) => update({ vatAmount: e.target.value ? Number(e.target.value) : null, vatTotal: e.target.value ? Number(e.target.value) : null })} />
+              <Input className="min-w-0" type="number" value={invoice.vatAmount ?? invoice.vatTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ vatAmount: e.target.value === "" ? null : Number(e.target.value), vatTotal: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Field label={t("admin.finance.grossTotal")}>
-              <Input type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value ? Number(e.target.value) : null, grandTotal: e.target.value ? Number(e.target.value) : null })} />
+              <Input className="min-w-0" type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value === "" ? null : Number(e.target.value), grandTotal: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
           </div>
         </div>

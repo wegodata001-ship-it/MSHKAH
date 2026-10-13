@@ -57,9 +57,12 @@ export type CostBasis = "latest" | "weighted";
 export type InventoryMovementType =
   | "PURCHASE_IN"
   | "SALE_OUT"
+  | "ISSUE_OUT"
   | "ADJUSTMENT"
   | "REVERSAL"
   | "OPENING";
+
+export type InventoryIssueReason = "kitchen" | "waste" | "return" | "recipe" | "other";
 
 export type SupplierPriceSource = "MANUAL" | "PURCHASE_INVOICE" | "PURCHASE_ORDER";
 
@@ -155,6 +158,14 @@ export type InventoryMovement = {
   invoiceId?: string;
   posImportId?: string;
   orderId?: string;
+  recipeId?: string;
+  menuProductId?: string;
+  dishCount?: number;
+  reason?: InventoryIssueReason;
+  actor?: string;
+  issueBatchId?: string;
+  idempotencyKey?: string;
+  reversesId?: string;
   unitCost?: number;
   unitCostNet?: number;
   unitCostGross?: number;
@@ -189,6 +200,8 @@ export type SupplierItemMap = {
   supplierProductName: string;
   supplierSku?: string;
   inventoryProductId: string;
+  purchaseUnit?: PurchaseUnit;
+  packageQuantity?: number;
   conversion?: number;
   createdAt: string;
   updatedAt: string;

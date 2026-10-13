@@ -23,7 +23,7 @@ export function InvoiceSourcePreview({
   }
   const pdf = kind === "pdf" || name.toLowerCase().endsWith(".pdf");
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2 overflow-x-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs font-semibold text-coffee/55">{name}</p>
         <div className="flex gap-2 text-xs">

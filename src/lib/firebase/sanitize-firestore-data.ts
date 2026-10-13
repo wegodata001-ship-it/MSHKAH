@@ -1,27 +1,35 @@
 import { Timestamp } from "firebase/firestore";
 
+function isNonFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && !Number.isFinite(value);
+}
+
+function isFirestoreSentinel(value: object): boolean {
+  return "_methodName" in value || value instanceof Timestamp || value instanceof Date;
+}
+
 /** Firestore-native values that must pass through unchanged */
 function isFirestoreLeaf(value: unknown): boolean {
   return (
-    value instanceof Timestamp ||
-    value instanceof Date ||
     value === null ||
-    typeof value !== "object"
+    typeof value !== "object" ||
+    isFirestoreSentinel(value)
   );
 }
 
 /**
- * Recursively removes `undefined` from objects and arrays before Firestore writes.
- * Arrays drop undefined elements; nested objects omit undefined keys entirely.
+ * Recursively removes `undefined` and non-finite numbers from objects and arrays
+ * before Firestore writes. Arrays drop those elements; nested objects omit the keys.
+ * FieldValue / Timestamp sentinels are left intact.
  */
 export function sanitizeFirestoreData<T>(data: T): T {
-  if (data === undefined) {
-    return data;
+  if (data === undefined || isNonFiniteNumber(data)) {
+    return undefined as T;
   }
 
   if (Array.isArray(data)) {
     return data
-      .filter((item) => item !== undefined)
+      .filter((item) => item !== undefined && !isNonFiniteNumber(item))
       .map((item) => sanitizeFirestoreData(item)) as T;
   }
 
@@ -31,8 +39,10 @@ export function sanitizeFirestoreData<T>(data: T): T {
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    if (value === undefined) continue;
-    result[key] = sanitizeFirestoreData(value);
+    if (value === undefined || isNonFiniteNumber(value)) continue;
+    const next = sanitizeFirestoreData(value);
+    if (next === undefined) continue;
+    result[key] = next;
   }
   return result as T;
 }

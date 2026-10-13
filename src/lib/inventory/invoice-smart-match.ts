@@ -7,6 +7,7 @@ import { validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
 import { cheapestOffer, offerNormalizedCost, unitCostFromPackage } from "@/lib/inventory/stock";
 import { detectedVatRate, splitVat } from "@/lib/inventory/vat";
 import { finalizeInvoiceLine, newInvoiceLineKey } from "@/lib/inventory/invoice-lines";
+import { toDateOnly } from "@/lib/dates/normalize";
 import type {
   PurchaseInvoice,
   PurchaseInvoiceLine,
@@ -246,8 +247,8 @@ export function buildReviewedInvoice(input: {
       ? { id: supplier.id, name: supplier.name, taxId: supplier.taxId, phone: supplier.phone, address: supplier.address }
       : undefined,
     invoiceNumber: input.extraction.invoiceNumber.value || "",
-    invoiceDate: input.extraction.invoiceDate.value || "",
-    dueDate: input.extraction.dueDate.value ?? undefined,
+    invoiceDate: toDateOnly(input.extraction.invoiceDate.value) || "",
+    dueDate: toDateOnly(input.extraction.dueDate.value) ?? undefined,
     receivedAt: new Date().toISOString().slice(0, 10),
     documentType: input.extraction.documentType.value ?? undefined,
     currency: input.extraction.currency.value ?? undefined,

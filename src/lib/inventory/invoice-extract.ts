@@ -81,6 +81,7 @@ export type InvoiceExtractResponse = {
   providerError?: string | null;
   extraction?: ExtractedInvoice;
   invoice?: PurchaseInvoice;
+  persistWarning?: boolean;
   error?: string;
   errorCode?: string;
 };

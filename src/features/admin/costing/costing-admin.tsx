@@ -66,6 +66,7 @@ import {
   subscribeToModifierOptions,
 } from "@/services/modifierService";
 import { getLocalizedDescription, getLocalizedName, getProductDisplayName } from "@/lib/i18n/localized-content";
+import type { Product } from "@/types";
 import { formatPrice } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { ModifierOption, ProductModifierGroup } from "@/types/modifiers";
@@ -87,6 +88,7 @@ import {
   subscribeToPosProductMaps,
   subscribeToPurchaseInvoices,
   subscribeToPurchasePriceRecords,
+  subscribeToSupplierItemMaps,
   subscribeToSupplierOffers,
   subscribeToSuppliers,
   latestUnitCost,
@@ -98,8 +100,12 @@ import type {
   PurchaseInvoice,
   PurchasePriceRecord,
   Supplier,
+  SupplierItemMap,
   SupplierOffer,
 } from "@/lib/inventory/types";
+import { IssueIngredientForm } from "@/features/admin/inventory/issue-ingredient-form";
+import { currentStockBase } from "@/lib/inventory/stock";
+import { stockInDisplayUnit } from "@/lib/inventory/issue";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
 type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
@@ -122,6 +128,7 @@ export function CostingAdmin() {
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [posImports, setPosImports] = useState<PosImport[]>([]);
   const [posMaps, setPosMaps] = useState<PosProductMap[]>([]);
+  const [itemMaps, setItemMaps] = useState<SupplierItemMap[]>([]);
   const [recipes, setRecipes] = useState<DishRecipe[]>([]);
   const [history, setHistory] = useState<IngredientPriceHistory[]>([]);
   const [snapshots, setSnapshots] = useState<CostingSnapshot[]>([]);
@@ -176,6 +183,7 @@ export function CostingAdmin() {
       subscribeToPurchaseInvoices(setInvoices),
       subscribeToPosImports(setPosImports),
       subscribeToPosProductMaps(setPosMaps),
+      subscribeToSupplierItemMaps(setItemMaps),
     ];
     return () => unsubs.forEach((fn) => fn());
   }, []);
@@ -444,6 +452,7 @@ export function CostingAdmin() {
     maps: posMaps,
     recipes,
     products,
+    itemMaps,
     locale,
     settingsVatRate: settings.vatRate ?? 0.18,
     onToast: toast,
@@ -559,6 +568,10 @@ export function CostingAdmin() {
       {tab === "ingredients" && (
         <IngredientsTab
           ingredients={ingredients}
+          movements={movements}
+          recipes={recipes}
+          products={products}
+          onToast={toast}
           onAdd={() => {
             setIngredientError(null);
             setIngredientForm("new");
@@ -1108,6 +1121,10 @@ function RecipesTab({
 
 function IngredientsTab({
   ingredients,
+  movements,
+  recipes,
+  products,
+  onToast,
   onAdd,
   onImport,
   onDownloadTemplate,
@@ -1116,6 +1133,10 @@ function IngredientsTab({
   onDelete,
 }: {
   ingredients: CostingIngredient[];
+  movements: InventoryMovement[];
+  recipes: DishRecipe[];
+  products: Product[];
+  onToast: (message: string, variant?: "success" | "error") => void;
   onAdd: () => void;
   onImport: () => void;
   onDownloadTemplate: () => void;
@@ -1124,9 +1145,13 @@ function IngredientsTab({
   onDelete: (item: CostingIngredient) => void;
 }) {
   const t = useT();
+  const [issueId, setIssueId] = useState<string | null | "all">(null);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" onClick={() => setIssueId("all")}>
+          {t("admin.inventory.issue")}
+        </Button>
         <Button variant="turquoise" onClick={onAdd}>
           <Plus className="h-4 w-4" /> {t("admin.costing.addIngredient")}
         </Button>
@@ -1162,6 +1187,9 @@ function IngredientsTab({
                 </div>
                 <StatusDot status={item.active ? "good" : "none"} />
               </div>
+              <p className="mt-2 text-sm text-coffee/65">
+                {t("admin.inventory.current")}: {stockInDisplayUnit(currentStockBase(movements, item.id), item).toFixed(2)} {t(unitLabelKey(item.purchaseUnit))}
+              </p>
               <dl className="mt-3 space-y-1 text-sm">
                 <div className="flex justify-between gap-3">
                   <dt className="text-coffee/55">{t("admin.costing.paidPrice")}</dt>
@@ -1190,7 +1218,10 @@ function IngredientsTab({
                   </div>
                 );
               })()}
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="turquoise" size="sm" onClick={() => setIssueId(item.id)}>
+                  {t("admin.inventory.issue")}
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => onEdit(item)}>
                   <Pencil className="h-3.5 w-3.5" /> {t("admin.costing.editLine")}
                 </Button>
@@ -1201,6 +1232,18 @@ function IngredientsTab({
             </div>
           ))}
         </div>
+      )}
+      {issueId != null && (
+        <IssueIngredientForm
+          open
+          ingredients={ingredients}
+          movements={movements}
+          recipes={recipes}
+          products={products}
+          initialProductId={issueId === "all" ? undefined : issueId}
+          onClose={() => setIssueId(null)}
+          onToast={onToast}
+        />
       )}
     </div>
   );

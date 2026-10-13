@@ -7,8 +7,11 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { AdminCard } from "@/features/admin/components/admin-card";
 import { formatIls } from "@/lib/costing/money";
+import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
-import { cheapestLastPurchase, cheapestOffer, currentStockBase, latestPurchase, offerNormalizedLastPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { cheapestLastPurchase, cheapestOffer, currentStockBase, latestPurchase, movementSignedBase, offerNormalizedLastPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { stockInDisplayUnit } from "@/lib/inventory/issue";
+import { IssueIngredientForm } from "@/features/admin/inventory/issue-ingredient-form";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
 import type {
@@ -47,6 +50,7 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   const [missingOnly, setMissingOnly] = useState(false);
   const [ledgerId, setLedgerId] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [issueId, setIssueId] = useState<string | null | "all">(null);
   const q = search.trim().toLowerCase();
 
   const rows = props.ingredients
@@ -85,6 +89,9 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         <Button type="button" variant={missingOnly ? "turquoise" : "outline"} onClick={() => setMissingOnly((v) => !v)}>
           {t("admin.inventory.filterMissingSupplier")}
         </Button>
+        <Button type="button" variant="outline" onClick={() => setIssueId("all")}>
+          {t("admin.inventory.issue")}
+        </Button>
         <Button type="button" variant="turquoise" onClick={props.onAddProduct}>
           <Plus className="h-4 w-4" /> {t("admin.inventory.newProduct")}
         </Button>
@@ -120,7 +127,22 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
       )}
 
       {props.pane !== "ledger" && (
-        <div className="overflow-x-auto rounded-2xl border border-beige-dark/20">
+        <>
+        <div className="space-y-2 lg:hidden">
+          {rows.map((row) => (
+            <div key={row.item.id} className="rounded-2xl border border-beige-dark/15 p-3">
+              <button type="button" className="font-semibold" onClick={() => setDetailsId(row.item.id)}>{row.item.name}</button>
+              <p className="mt-1 text-sm text-coffee/65">
+                {t("admin.inventory.current")}: {stockInDisplayUnit(row.current, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="text-sm text-turquoise" onClick={() => setIssueId(row.item.id)}>{t("admin.inventory.issue")}</button>
+                <button type="button" className="text-sm text-turquoise" onClick={() => props.onEditProduct(row.item)}>{t("common.edit")}</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/20 lg:block">
           <table className="min-w-[920px] w-full text-sm">
             <thead className="bg-beige/40 text-coffee/70">
               <tr>
@@ -167,15 +189,21 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    <button type="button" className="text-turquoise" onClick={() => props.onEditProduct(row.item)}>
-                      {t("common.edit")}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className="text-turquoise" onClick={() => setIssueId(row.item.id)}>
+                        {t("admin.inventory.issue")}
+                      </button>
+                      <button type="button" className="text-turquoise" onClick={() => props.onEditProduct(row.item)}>
+                        {t("common.edit")}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
       {detailsId && (() => {
         const product = props.ingredients.find((item) => item.id === detailsId);
@@ -187,6 +215,11 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             offers={props.offers}
             records={props.records}
             movements={props.movements}
+            recipes={props.recipes}
+            products={props.products}
+            itemMaps={props.itemMaps ?? []}
+            locale={props.locale}
+            onIssue={() => setIssueId(product.id)}
             onEdit={() => {
               setDetailsId(null);
               props.onEditProduct(product);
@@ -196,6 +229,18 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
           />
         );
       })()}
+      {issueId != null && (
+        <IssueIngredientForm
+          open
+          ingredients={props.ingredients}
+          movements={props.movements}
+          recipes={props.recipes}
+          products={props.products}
+          initialProductId={issueId === "all" ? undefined : issueId}
+          onClose={() => setIssueId(null)}
+          onToast={props.onToast}
+        />
+      )}
     </div>
   );
 }
@@ -238,14 +283,14 @@ function LedgerPane({
         <table className="w-full text-sm">
           <tbody>
             {rows.map((row) => {
-              running += row.type === "SALE_OUT" ? -Math.abs(row.quantityBase) : row.quantityBase;
+              running += movementSignedBase(row);
               const supplier = suppliers.find((item) => item.id === row.supplierId)?.name;
               return (
                 <tr key={row.id} className="border-b border-beige-dark/10">
                   <td className="py-2">{row.receivedAt.slice(0, 10)}</td>
-                  <td className="py-2">{row.type === "SALE_OUT" ? `-${row.quantity}` : `+${row.quantity}`}</td>
+                  <td className="py-2">{movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`}</td>
                   <td className="py-2 text-coffee/60">
-                    {row.type} {supplier ? `· ${supplier}` : ""}
+                    {t(`admin.inventory.movement.${row.type}`, row.type)} {row.reason ? `· ${t(`admin.inventory.reason.${row.reason}`)}` : ""} {supplier ? `· ${supplier}` : ""}
                   </td>
                   <td className="py-2 text-end">{running.toFixed(2)}</td>
                 </tr>
@@ -681,6 +726,7 @@ export type InventoryHubProps = {
   maps: PosProductMap[];
   recipes: DishRecipe[];
   products: Product[];
+  itemMaps?: import("@/lib/inventory/types").SupplierItemMap[];
   locale: Locale;
   settingsVatRate: number;
   onToast: (message: string, variant?: "success" | "error") => void;

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "crypto";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, type DocumentReference } from "firebase-admin/firestore";
 import { NextRequest } from "next/server";
 import { requireAdminOnly } from "@/lib/auth/verify-admin";
 import {
@@ -12,6 +12,7 @@ import { extractInvoiceWithGemini } from "@/lib/ai/gemini-invoice";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { COLLECTIONS } from "@/lib/firebase/collections";
 import { publicScanErrorCode } from "@/lib/inventory/invoice-archive";
+import { findUndefinedPaths, sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { readInvoiceSourceBytes, saveInvoiceSourceFile } from "@/lib/inventory/invoice-source-store";
 import { buildReviewedInvoice, findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
 import type { CostingIngredient } from "@/lib/costing/types";
@@ -190,7 +191,7 @@ export async function POST(request: NextRequest) {
   };
   await invoiceRef.set(
     {
-      ...uploadedInvoice,
+      ...sanitizeFirestoreData(uploadedInvoice),
       audit: FieldValue.arrayUnion({
         at: new Date().toISOString(),
         actor: auth.email,
@@ -210,7 +211,15 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  logExtract({ requestId, event: "started", fileType: mimeType, fileSize: bytes.length, invoiceId: invoiceRef.id, rescan: Boolean(existingId) });
+  logExtract({
+    requestId,
+    event: "started",
+    fileType: mimeType,
+    fileSize: bytes.length,
+    invoiceId: invoiceRef.id,
+    rescan: Boolean(existingId),
+    fileSource: file instanceof File ? "upload" : "storage",
+  });
 
   try {
     const { extraction, rawText, model, httpStatus } = await extractInvoiceWithGemini({
@@ -261,16 +270,13 @@ export async function POST(request: NextRequest) {
       validationResult: invoice.validation,
     };
     invoice.scanAttempts = [...(existing?.scanAttempts ?? []), attempt].slice(-8);
-    await invoiceRef.set(
-      {
-        ...invoice,
-        sourceFile,
-        scanAttempts: invoice.scanAttempts,
-        updatedAt: new Date().toISOString(),
-        audit: FieldValue.arrayUnion({ at: new Date().toISOString(), actor: auth.email, action: "SCANNED", detail: requestId }),
-      },
-      { merge: true }
-    );
+    const persisted = await persistExtractedInvoice({
+      invoiceRef,
+      invoice,
+      sourceFile,
+      actor: auth.email,
+      requestId,
+    });
     logExtract({
       requestId,
       event: "provider-ok",
@@ -284,6 +290,7 @@ export async function POST(request: NextRequest) {
       subtotal: extraction.subtotal.value,
       vat: extraction.vatTotal.value,
       total: extraction.grandTotal.value,
+      persisted,
     });
     return Response.json({
       ok: true,
@@ -292,6 +299,7 @@ export async function POST(request: NextRequest) {
       model,
       reachable: true,
       requestId,
+      persistWarning: persisted ? undefined : true,
       extraction,
       invoice,
     });
@@ -336,7 +344,13 @@ export async function POST(request: NextRequest) {
         invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "failed" } as PurchaseInvoice,
       });
     }
-    logExtract({ requestId, event: "post-extract-error", duration: Date.now() - started, invoiceId: invoiceRef.id });
+    logExtract({
+      requestId,
+      event: "post-extract-error",
+      duration: Date.now() - started,
+      invoiceId: invoiceRef.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return fail("SCAN_FAILED", {
       message: "We could not scan the invoice. The original file was saved and you can try again.",
       requestId,
@@ -344,6 +358,67 @@ export async function POST(request: NextRequest) {
       fileSize: bytes.length,
       invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "failed" } as PurchaseInvoice,
     });
+  }
+}
+
+async function persistExtractedInvoice(input: {
+  invoiceRef: DocumentReference;
+  invoice: PurchaseInvoice;
+  sourceFile: PurchaseInvoice["sourceFile"];
+  actor: string;
+  requestId: string;
+}): Promise<boolean> {
+  const payload = sanitizeFirestoreData({
+    ...input.invoice,
+    sourceFile: input.sourceFile,
+    scanAttempts: input.invoice.scanAttempts,
+    updatedAt: new Date().toISOString(),
+  });
+  const leftover = findUndefinedPaths(payload);
+  if (leftover.length) {
+    logExtract({ requestId: input.requestId, event: "undefined-after-sanitize", leftover });
+  }
+  try {
+    await input.invoiceRef.set(
+      {
+        ...payload,
+        audit: FieldValue.arrayUnion({
+          at: new Date().toISOString(),
+          actor: input.actor,
+          action: "SCANNED",
+          detail: input.requestId,
+        }),
+      },
+      { merge: true }
+    );
+    return true;
+  } catch (error) {
+    logExtract({
+      requestId: input.requestId,
+      event: "persist-failed",
+      invoiceId: input.invoice.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    try {
+      const slim = sanitizeFirestoreData({
+        ...input.invoice,
+        sourceFile: input.sourceFile,
+        scanAttempts: undefined,
+        audit: undefined,
+        lines: input.invoice.lines.map((line) => ({ ...line, candidates: undefined })),
+        updatedAt: new Date().toISOString(),
+      });
+      await input.invoiceRef.set(slim, { merge: true });
+      return true;
+    } catch (retryError) {
+      logExtract({
+        requestId: input.requestId,
+        event: "persist-retry-failed",
+        invoiceId: input.invoice.id,
+        message: retryError instanceof Error ? retryError.message : String(retryError),
+      });
+      return false;
+    }
   }
 }
 

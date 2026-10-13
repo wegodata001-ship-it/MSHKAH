@@ -227,6 +227,11 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /inventoryBalances/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     match /posImports/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if false;

@@ -144,4 +144,26 @@ describe("parseInvoiceExtraction", () => {
     expect(parseVisibleNumber("15.930,00")).toBe(15930);
     expect(parseVisibleNumber({ value: "13,500.00", confidence: 0.9 })).toBe(13500);
   });
+
+  it("reads the attached invoice date and ILS totals from printed text", () => {
+    const parsed = parseInvoiceExtraction(
+      JSON.stringify({
+        invoiceDate: "05/10/2026",
+        subtotal: "2,814.92",
+        vatAmount: "506.69",
+        totalToPay: "3,321.61",
+        currency: "ILS",
+        vatStatus: "detected",
+        lines: [
+          { description: "שורה", quantity: 1, unitPriceBeforeVat: "2,814.92", lineTotalBeforeVat: "2,814.92", vatAmount: "506.69", lineTotalIncludingVat: "3,321.61" },
+        ],
+      })
+    );
+    expect(parsed.invoiceDate.value).toBe("2026-10-05");
+    expect(parsed.subtotal.value).toBe(2814.92);
+    expect(parsed.vatTotal.value).toBe(506.69);
+    expect(parsed.grandTotal.value).toBe(3321.61);
+    expect(parsed.lines).toHaveLength(1);
+    expect(isEmptyInvoiceExtraction(parsed)).toBe(false);
+  });
 });

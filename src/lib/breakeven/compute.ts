@@ -150,7 +150,7 @@ export function fixedMonthlyTotal(
   costs: BreakEvenFixedCost[],
   settings: BreakEvenSettings
 ): number | null {
-  const active = costs.filter((item) => item.active && item.amount > 0);
+  const active = (costs ?? []).filter((item) => item.active && item.amount > 0);
   if (!active.length) return null;
   return active.reduce((sum, item) => {
     const monthly = monthlyEquivalent(item.amount, item.frequency, settings.operatingDays);
@@ -164,7 +164,7 @@ export function variableTotalForRevenue(
   revenue: number | null,
   orders: number | null
 ): number | null {
-  const active = costs.filter((item) => item.active && item.amount > 0);
+  const active = (costs ?? []).filter((item) => item.active && item.amount > 0);
   if (!active.length) return null;
   return active.reduce((sum, item) => {
     let raw = 0;

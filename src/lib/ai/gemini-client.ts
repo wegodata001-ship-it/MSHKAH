@@ -110,19 +110,29 @@ async function postGemini(input: {
       }),
     });
     const payload = (await response.json().catch(() => null)) as
-      | { candidates?: { content?: { parts?: { text?: string }[] } }[]; error?: unknown }
+      | {
+          candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
+          promptFeedback?: { blockReason?: string };
+          error?: unknown;
+        }
       | null;
-    const text = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+    const candidate = payload?.candidates?.[0];
+    const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+    const emptyReason = payload?.promptFeedback?.blockReason || candidate?.finishReason || "EMPTY_CANDIDATE";
     last = {
       ok: response.ok && Boolean(text),
       status: response.status,
       gateway: target.gateway,
       text,
-      reason: response.ok ? null : readReason(payload),
+      reason: response.ok ? (text ? null : emptyReason) : readReason(payload),
       model: input.model,
     };
     if (last.ok) return last;
     if (target.gateway === "generativelanguage") preferredFailure = last;
+    if (response.status === 503 || response.status === 429) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      continue;
+    }
     if (response.status !== 403 && response.status !== 404) return last;
   }
   return preferredFailure ?? last;
@@ -130,6 +140,7 @@ async function postGemini(input: {
 
 function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
   const auth = attempt.status === 401 || attempt.status === 403;
+  const emptyOk = attempt.status === 200 && !attempt.text;
   throw new GeminiRequestError({
     code: !attempt.status
       ? "SCAN_FAILED"
@@ -139,7 +150,9 @@ function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
           ? "INVALID_API_KEY"
           : attempt.status === 403
             ? "PROVIDER_FORBIDDEN"
-            : "SCAN_FAILED",
+            : emptyOk
+              ? "EXTRACTION_FAILED"
+              : "SCAN_FAILED",
     message: auth
       ? "Invoice scanning could not authenticate with the AI provider"
       : attempt.status === 429
@@ -177,6 +190,14 @@ export async function geminiGenerateJson(input: {
       temperature: input.temperature ?? 0.1,
       schema: input.schema,
     });
+    if (!last.ok && input.schema && last.status === 200 && !last.text) {
+      last = await postGemini({
+        key,
+        model,
+        parts: input.parts,
+        temperature: input.temperature ?? 0,
+      });
+    }
     if (last.ok) {
       return {
         text: last.text,
@@ -186,7 +207,7 @@ export async function geminiGenerateJson(input: {
         requestId,
       };
     }
-    if (last.status && last.status !== 403 && last.status !== 404) {
+    if (last.status && last.status !== 403 && last.status !== 404 && last.status !== 503) {
       throwFromAttempt(last, requestId);
     }
   }

@@ -1,5 +1,6 @@
 import { geminiGenerateJson } from "@/lib/ai/gemini-client";
 import { GeminiRequestError } from "@/lib/ai/gemini-config";
+import { toDateOnly } from "@/lib/dates/normalize";
 import type { ExtractedInvoice, ExtractedInvoiceLine } from "@/lib/inventory/invoice-extract";
 import { asVatType } from "@/lib/inventory/invoice-extract";
 import type { InvoiceLineType, PurchaseDocumentType } from "@/lib/inventory/types";
@@ -317,8 +318,8 @@ export function parseInvoiceExtractionResult(text: string): {
       supplierPhone: field(json.supplierPhone, str),
       supplierAddress: field(json.supplierAddress, str),
       invoiceNumber,
-      invoiceDate: field(json.invoiceDate, str),
-      dueDate: field(json.dueDate, str),
+      invoiceDate: field(json.invoiceDate, (v) => toDateOnly(str(v) ?? unwrap(v))),
+      dueDate: field(json.dueDate, (v) => toDateOnly(str(v) ?? unwrap(v))),
       currency: field(json.currency, str),
       documentType: field(json.documentType, (v) => {
         const value = str(v);

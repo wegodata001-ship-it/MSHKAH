@@ -1,4 +1,5 @@
 import { roundMoney } from "@/lib/costing/money";
+import { toDateOnly } from "@/lib/dates/normalize";
 import type {
   InvoiceScanStatus,
   InvoiceSourceKind,
@@ -154,4 +155,77 @@ export function publicScanErrorCode(code?: string | null, providerStatus?: numbe
 
 export function scanErrorMessageKey(code: ScanErrorCode): string {
   return `admin.inventory.smart.err.${code}`;
+}
+
+export type InvoiceMissingField = { key: string; labelKey: string };
+
+const HEADER_EDIT_KEYS = [
+  "supplierId",
+  "supplierName",
+  "supplierTaxId",
+  "invoiceNumber",
+  "invoiceDate",
+  "dueDate",
+  "currency",
+  "paymentMethod",
+  "vatRate",
+  "netAmount",
+  "vatAmount",
+  "grossAmount",
+  "subtotal",
+  "vatTotal",
+  "grandTotal",
+] as const;
+
+export function missingInvoiceFields(invoice: PurchaseInvoice): InvoiceMissingField[] {
+  const missing: InvoiceMissingField[] = [];
+  if (!invoice.supplierName?.trim()) missing.push({ key: "supplier", labelKey: "admin.costing.supplier" });
+  if (!invoice.invoiceNumber?.trim()) missing.push({ key: "invoiceNumber", labelKey: "admin.inventory.invoiceNumber" });
+  if (!toDateOnly(invoice.invoiceDate)) missing.push({ key: "invoiceDate", labelKey: "admin.inventory.invoiceDate" });
+  if (!invoice.currency?.trim()) missing.push({ key: "currency", labelKey: "admin.finance.currency" });
+  if (invoice.netAmount == null && invoice.subtotal == null) missing.push({ key: "net", labelKey: "admin.finance.netTotal" });
+  if (invoice.vatAmount == null && invoice.vatTotal == null) missing.push({ key: "vat", labelKey: "admin.finance.vatTotal" });
+  if (invoice.grossAmount == null && invoice.grandTotal == null) missing.push({ key: "gross", labelKey: "admin.finance.grossTotal" });
+  if (!invoice.lines.length) missing.push({ key: "lines", labelKey: "admin.inventory.smart.lines" });
+  return missing;
+}
+
+export function incompleteInvoiceLineCount(lines: PurchaseInvoiceLine[]): number {
+  return lines.filter((line) => !line.rawName?.trim() || line.quantity == null || line.unitPrice == null || (line.lineTotal == null && line.lineNet == null && line.lineGross == null)).length;
+}
+
+export function mergeScannedInvoice(
+  previous: PurchaseInvoice | null,
+  scanned: PurchaseInvoice,
+  editedKeys: Iterable<string>
+): PurchaseInvoice {
+  if (!previous) return scanned;
+  const edited = new Set(editedKeys);
+  const next: PurchaseInvoice = {
+    ...scanned,
+    id: scanned.id || previous.id,
+    receivedAt: previous.receivedAt || scanned.receivedAt,
+    sourceFile: scanned.sourceFile ?? previous.sourceFile,
+    fileUrl: scanned.fileUrl ?? previous.fileUrl,
+    fileName: scanned.fileName ?? previous.fileName,
+    fileHash: scanned.fileHash ?? previous.fileHash,
+  };
+  for (const key of HEADER_EDIT_KEYS) {
+    if (edited.has(key)) {
+      (next as Record<string, unknown>)[key] = previous[key];
+    }
+  }
+  const editedLines = edited.has("lines") || [...edited].some((key) => key.startsWith("line:"));
+  if (editedLines) {
+    const incoming = new Map(scanned.lines.map((line) => [line.rawName, line]));
+    const kept = previous.lines.map((line) => {
+      if (edited.has(`line:${line.key}`) || edited.has("lines")) return line;
+      return incoming.get(line.rawName) ?? line;
+    });
+    for (const line of scanned.lines) {
+      if (!kept.some((row) => row.rawName === line.rawName || row.key === line.key)) kept.push(line);
+    }
+    next.lines = kept;
+  }
+  return next;
 }

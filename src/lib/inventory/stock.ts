@@ -3,7 +3,7 @@ import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
 import type { InventoryMovement, PurchasePriceRecord, SupplierOffer } from "@/lib/inventory/types";
 
 export function movementSignedBase(movement: Pick<InventoryMovement, "type" | "quantityBase">): number {
-  if (movement.type === "SALE_OUT") return -Math.abs(movement.quantityBase);
+  if (movement.type === "SALE_OUT" || movement.type === "ISSUE_OUT") return -Math.abs(movement.quantityBase);
   if (movement.type === "REVERSAL") return movement.quantityBase;
   return movement.quantityBase;
 }
@@ -22,7 +22,7 @@ export function stockInBase(movements: InventoryMovement[], productId: string): 
 
 export function stockOutBase(movements: InventoryMovement[], productId: string): number {
   return movements
-    .filter((row) => row.productId === productId && row.type === "SALE_OUT")
+    .filter((row) => row.productId === productId && (row.type === "SALE_OUT" || row.type === "ISSUE_OUT"))
     .reduce((sum, row) => sum + Math.abs(row.quantityBase), 0);
 }
 

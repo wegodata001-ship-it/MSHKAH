@@ -9,20 +9,27 @@ import {
   AdminModalHeader,
   AdminModalTitle,
 } from "@/features/admin/components/admin-modal";
+import { useAuth } from "@/components/providers/auth-provider";
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
-import type { CostingIngredient } from "@/lib/costing/types";
+import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
+import { canReverseMovement, stockInDisplayUnit } from "@/lib/inventory/issue";
 import {
   cheapestOffer,
   currentStockBase,
   latestPurchase,
+  movementSignedBase,
   offerLastPurchaseCost,
   offerNormalizedCost,
   offerPurchaseUnit,
 } from "@/lib/inventory/stock";
-import type { InventoryMovement, PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
+import type { InventoryMovement, PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-panel";
+import { getProductDisplayName } from "@/lib/i18n/localized-content";
+import type { Locale } from "@/lib/i18n/types";
+import type { Product } from "@/types";
+import { reverseInventoryMovement } from "@/services/inventoryService";
 import { cn } from "@/lib/utils";
 
 type DetailTab = "info" | "suppliers" | "ledger" | "history";
@@ -33,6 +40,11 @@ export function InventoryProductDetails({
   offers,
   records,
   movements,
+  recipes,
+  products,
+  itemMaps,
+  locale,
+  onIssue,
   onEdit,
   onClose,
   onToast,
@@ -42,16 +54,26 @@ export function InventoryProductDetails({
   offers: SupplierOffer[];
   records: PurchasePriceRecord[];
   movements: InventoryMovement[];
+  recipes: DishRecipe[];
+  products: Product[];
+  itemMaps: SupplierItemMap[];
+  locale: Locale;
+  onIssue: () => void;
   onEdit: () => void;
   onClose: () => void;
   onToast: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
+  const { user } = useAuth();
   const [tab, setTab] = useState<DetailTab>("suppliers");
+  const [reversing, setReversing] = useState<string | null>(null);
   const stock = currentStockBase(movements, product.id);
+  const displayStock = stockInDisplayUnit(stock, product);
   const productOffers = offers.filter((offer) => offer.productId === product.id && offer.active !== false);
   const cheap = cheapestOffer(productOffers, product.baseUnit);
   const last = latestPurchase(records, product.id);
+  const aliases = itemMaps.filter((item) => item.inventoryProductId === product.id);
+  const dishes = recipes.filter((recipe) => recipe.ingredients.some((line) => line.ingredientId === product.id));
   const tabs: { id: DetailTab; label: string }[] = [
     { id: "info", label: t("admin.inventory.tab.productInfo") },
     { id: "suppliers", label: t("admin.inventory.supplierPrices") },
@@ -64,11 +86,10 @@ export function InventoryProductDetails({
       <AdminModalHeader onClose={onClose}>
         <AdminModalTitle>{product.name}</AdminModalTitle>
         <p className="mt-1 text-sm text-coffee/60">
-          {t("admin.inventory.current")}: {stock.toFixed(2)}
-          {t(unitLabelKey(product.purchaseUnit))}
+          {t("admin.inventory.current")}: {displayStock.toFixed(2)} {t(unitLabelKey(product.purchaseUnit))}
         </p>
       </AdminModalHeader>
-      <AdminModalBody>
+      <AdminModalBody className="min-w-0 overflow-x-hidden">
         <div className="mb-4 flex flex-wrap gap-2">
           {tabs.map((item) => (
             <button
@@ -83,28 +104,54 @@ export function InventoryProductDetails({
               {item.label}
             </button>
           ))}
+          <Button type="button" variant="turquoise" className="h-8 text-xs" onClick={onIssue}>
+            {t("admin.inventory.issue")}
+          </Button>
         </div>
 
         {tab === "info" && (
           <div className="space-y-2 text-sm">
             <p>{t("admin.costing.category")}: {product.category || "—"}</p>
-            <p>{t("admin.costing.unit")}: {t(unitLabelKey(product.purchaseUnit))}</p>
+            <p>{t("admin.costing.unit")}: {t(unitLabelKey(product.baseUnit))}</p>
             <p>{t("admin.inventory.minStock")}: {product.minStock ?? "—"}</p>
             <p>{t("admin.inventory.barcode")}: {product.barcode || "—"}</p>
             <p>{t("admin.costing.notes")}: {product.notes || "—"}</p>
             <p>{t("admin.inventory.lastPaid")}: {last ? formatIls(last.unitCost, 4) : "—"}</p>
+            <div>
+              <p className="font-medium">{t("admin.inventory.linkedDishes")}</p>
+              {dishes.length === 0 ? (
+                <p className="text-coffee/55">—</p>
+              ) : (
+                dishes.map((recipe) => {
+                  const dish = products.find((item) => item.id === recipe.productId);
+                  return <p key={recipe.id}>{dish ? getProductDisplayName(dish, locale) : recipe.productId}</p>;
+                })
+              )}
+            </div>
             <Button type="button" variant="outline" onClick={onEdit}>{t("common.edit")}</Button>
           </div>
         )}
 
         {tab === "suppliers" && (
           <div className="space-y-3">
+            {aliases.length > 0 && (
+              <div className="rounded-2xl bg-beige/40 p-3 text-sm">
+                {aliases.map((alias) => (
+                  <p key={alias.id}>
+                    {suppliers.find((item) => item.id === alias.supplierId)?.name || alias.supplierId}: {t("admin.inventory.supplierAlias")} «{alias.supplierProductName}»
+                    {alias.supplierSku ? ` · ${alias.supplierSku}` : ""}
+                    {alias.packageQuantity && alias.purchaseUnit ? ` · ${alias.packageQuantity} ${t(unitLabelKey(alias.purchaseUnit))}` : ""}
+                  </p>
+                ))}
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               {productOffers.map((offer) => {
                 const supplier = suppliers.find((item) => item.id === offer.supplierId);
                 const unit = offerPurchaseUnit(offer);
                 const quote = offerNormalizedCost(offer);
                 const paid = offerLastPurchaseCost(offer);
+                const alias = aliases.find((item) => item.supplierId === offer.supplierId);
                 return (
                   <div key={offer.id} className="rounded-2xl border border-beige-dark/20 p-3 text-sm">
                     <p className="font-semibold">
@@ -113,7 +160,8 @@ export function InventoryProductDetails({
                         <span className="ms-2 text-emerald-700"><Trophy className="inline h-3 w-3" /> {t("admin.inventory.bestPrice")}</span>
                       )}
                     </p>
-                    <p>{t("admin.inventory.listPrice")}: {quote != null && unit ? `${formatIls(quote, 4)}/${t(unitLabelKey(unit))}` : "—"}</p>
+                    {alias && <p className="text-coffee/60">{t("admin.inventory.supplierAlias")}: {alias.supplierProductName}</p>}
+                    <p>{t("admin.inventory.listPrice")}: {quote != null && unit ? `${formatIls(quote, 4)}/${t(unitLabelKey(product.baseUnit))}` : "—"}</p>
                     <p>{t("admin.inventory.lastPaid")}: {paid != null ? formatIls(paid, 4) : "—"}</p>
                     <p className="text-coffee/55">{t("admin.inventory.date")}: {offer.lastQuotedAt || offer.lastPurchaseDate || "—"}</p>
                   </div>
@@ -135,11 +183,32 @@ export function InventoryProductDetails({
             {movements
               .filter((row) => row.productId === product.id)
               .slice()
-              .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))
+              .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || b.createdAt.localeCompare(a.createdAt))
               .map((row) => (
-                <div key={row.id} className="flex justify-between border-b border-beige-dark/10 py-1">
-                  <span>{row.receivedAt.slice(0, 10)} · {row.type}</span>
-                  <span>{row.type === "SALE_OUT" ? `-${row.quantity}` : `+${row.quantity}`}</span>
+                <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-beige-dark/10 py-1">
+                  <span>
+                    {row.receivedAt.slice(0, 10)} · {t(`admin.inventory.movement.${row.type}`, row.type)}
+                    {row.reason ? ` · ${t(`admin.inventory.reason.${row.reason}`)}` : ""}
+                    {row.note ? ` · ${row.note}` : ""}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`} {t(unitLabelKey(row.unit))}
+                    {canReverseMovement(row, movements) && (
+                      <button
+                        type="button"
+                        className="text-xs text-turquoise"
+                        disabled={reversing === row.id}
+                        onClick={async () => {
+                          setReversing(row.id);
+                          const result = await reverseInventoryMovement(row.id, user?.email);
+                          setReversing(null);
+                          onToast(result.success ? t("admin.inventory.reversed") : result.error, result.success ? "success" : "error");
+                        }}
+                      >
+                        {t("admin.inventory.reverse")}
+                      </button>
+                    )}
+                  </span>
                 </div>
               ))}
           </div>

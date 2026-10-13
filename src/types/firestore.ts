@@ -1,4 +1,5 @@
 import { Timestamp } from "firebase/firestore";
+import { toIsoTimestamp } from "@/lib/dates/normalize";
 import type { OrderStatus, PaymentStatus } from "@/types";
 
 import type { BusinessType } from "@/types";
@@ -262,9 +263,8 @@ export interface FirestoreUiTranslations {
 
 export type FirestoreDoc<T> = T & { id: string };
 
-export function timestampToIso(value: Timestamp | null | undefined): string {
-  if (!value) return new Date(0).toISOString();
-  return value.toDate().toISOString();
+export function timestampToIso(value: Timestamp | string | Date | null | undefined | unknown): string {
+  return toIsoTimestamp(value) ?? new Date(0).toISOString();
 }
 
 export function isoToTimestamp(iso: string): Timestamp {

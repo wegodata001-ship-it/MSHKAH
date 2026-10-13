@@ -8,6 +8,7 @@ import {
   query,
   updateDoc,
   where,
+  runTransaction,
   type Unsubscribe,
 } from "firebase/firestore";
 import { getDb } from "@/lib/firebase";
@@ -15,16 +16,19 @@ import { COLLECTIONS } from "@/lib/firebase/collections";
 import { failure, success, type ServiceResult } from "@/lib/errors";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { nowTimestamp, timestampToIso } from "@/types/firestore";
+import { toDateOnly } from "@/lib/dates/normalize";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { costPerBaseUnit } from "@/lib/costing/units";
 import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
 import { splitVat } from "@/lib/inventory/vat";
-import { currentStockBase, unitCostFromPackage } from "@/lib/inventory/stock";
+import { currentStockBase, movementSignedBase, unitCostFromPackage } from "@/lib/inventory/stock";
 import { theoreticalConsumption } from "@/lib/inventory/pos";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import { findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
 import { invoiceStockStatus, syncInvoiceTotals, transferableLines } from "@/lib/inventory/invoice-finance";
+import { validateIssueLines, type IssueDraftLine } from "@/lib/inventory/issue";
 import type {
+  InventoryIssueReason,
   InventoryMovement,
   PosImport,
   PosProductMap,
@@ -105,6 +109,14 @@ function mapMovement(id: string, data: Record<string, unknown>): InventoryMoveme
     invoiceId: data.invoiceId ? String(data.invoiceId) : undefined,
     posImportId: data.posImportId ? String(data.posImportId) : undefined,
     orderId: data.orderId ? String(data.orderId) : undefined,
+    recipeId: data.recipeId ? String(data.recipeId) : undefined,
+    menuProductId: data.menuProductId ? String(data.menuProductId) : undefined,
+    dishCount: data.dishCount != null ? asNumber(data.dishCount) : undefined,
+    reason: data.reason === "kitchen" || data.reason === "waste" || data.reason === "return" || data.reason === "recipe" || data.reason === "other" ? data.reason : undefined,
+    actor: data.actor ? String(data.actor) : undefined,
+    issueBatchId: data.issueBatchId ? String(data.issueBatchId) : undefined,
+    idempotencyKey: data.idempotencyKey ? String(data.idempotencyKey) : undefined,
+    reversesId: data.reversesId ? String(data.reversesId) : undefined,
     unitCost: data.unitCost != null ? asNumber(data.unitCost) : undefined,
     note: data.note ? String(data.note) : undefined,
     invoiceDate: data.invoiceDate ? String(data.invoiceDate) : undefined,
@@ -132,6 +144,55 @@ function mapRecord(id: string, data: Record<string, unknown>): PurchasePriceReco
     source: data.source === "PURCHASE_INVOICE" || data.source === "PURCHASE_ORDER" || data.source === "MANUAL" ? data.source : undefined,
     createdAt: timestampToIso(data.createdAt as never),
   };
+}
+
+async function commitStockMovement(input: {
+  movementId?: string;
+  productId: string;
+  deltaBase: number;
+  fallbackAvailable: number;
+  requireNonNegative?: boolean;
+  payload: Record<string, unknown>;
+}): Promise<{ id: string; reused: boolean }> {
+  const db = getDb();
+  const movementRef = input.movementId
+    ? doc(db, COLLECTIONS.inventoryMovements, input.movementId)
+    : doc(collection(db, COLLECTIONS.inventoryMovements));
+  let reused = false;
+  await runTransaction(db, async (tx) => {
+    const existingMove = await tx.get(movementRef);
+    if (existingMove.exists()) {
+      reused = true;
+      return;
+    }
+    const balRef = doc(db, COLLECTIONS.inventoryBalances, input.productId);
+    const bal = await tx.get(balRef);
+    const available = bal.exists()
+      ? asNumber((bal.data() as Record<string, unknown>).quantityBase)
+      : input.fallbackAvailable;
+    const next = available + input.deltaBase;
+    if (input.requireNonNegative && next < -0.0001) {
+      throw new Error("overStock");
+    }
+    tx.set(
+      movementRef,
+      sanitizeFirestoreData({
+        ...input.payload,
+        quantityBefore: available,
+        quantityAfter: next,
+      })
+    );
+    tx.set(
+      balRef,
+      sanitizeFirestoreData({
+        productId: input.productId,
+        quantityBase: next,
+        updatedAt: nowTimestamp(),
+      }),
+      { merge: true }
+    );
+  });
+  return { id: movementRef.id, reused };
 }
 
 export function subscribeToSuppliers(onData: (items: Supplier[]) => void): Unsubscribe {
@@ -172,9 +233,9 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           supplierPhone: data.supplierPhone ? String(data.supplierPhone) : undefined,
           supplierAddress: data.supplierAddress ? String(data.supplierAddress) : undefined,
           invoiceNumber: String(data.invoiceNumber ?? ""),
-          invoiceDate: String(data.invoiceDate ?? ""),
-          dueDate: data.dueDate ? String(data.dueDate) : undefined,
-          receivedAt: String(data.receivedAt ?? ""),
+          invoiceDate: toDateOnly(data.invoiceDate) || "",
+          dueDate: toDateOnly(data.dueDate) ?? undefined,
+          receivedAt: toDateOnly(data.receivedAt) || "",
           documentType: data.documentType || "invoice",
           currency: data.currency ? String(data.currency) : undefined,
           paymentMethod: data.paymentMethod ? String(data.paymentMethod) : undefined,
@@ -497,6 +558,8 @@ export function subscribeToSupplierItemMaps(onData: (items: SupplierItemMap[]) =
           supplierProductName: String(data.supplierProductName ?? ""),
           supplierSku: data.supplierSku ? String(data.supplierSku) : undefined,
           inventoryProductId: String(data.inventoryProductId ?? ""),
+          purchaseUnit: data.purchaseUnit ? (data.purchaseUnit as PurchaseUnit) : undefined,
+          packageQuantity: data.packageQuantity != null ? asNumber(data.packageQuantity) : undefined,
           conversion: data.conversion != null ? asNumber(data.conversion) : undefined,
           createdAt: timestampToIso(data.createdAt as never),
           updatedAt: timestampToIso(data.updatedAt as never),
@@ -511,6 +574,8 @@ export async function saveSupplierItemMap(input: {
   supplierProductName: string;
   supplierSku?: string;
   inventoryProductId: string;
+  purchaseUnit?: PurchaseUnit;
+  packageQuantity?: number;
   conversion?: number;
 }): Promise<ServiceResult<void>> {
   try {
@@ -647,6 +712,8 @@ export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<Serv
             supplierProductName: line.rawName,
             supplierSku: line.sku,
             inventoryProductId: productId,
+            purchaseUnit: line.unit ?? undefined,
+            packageQuantity: line.quantity ?? undefined,
             conversion: line.conversionFactor ?? undefined,
           });
         }
@@ -704,9 +771,12 @@ export async function transferInvoiceLinesToStock(
       const qtyBase = purchaseQuantityInBase(line.quantity!, line.unit!);
       const net = line.netAmount ?? line.priceBeforeVat ?? 0;
       const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
-      await addDoc(
-        collection(db, COLLECTIONS.inventoryMovements),
-        sanitizeFirestoreData({
+      await commitStockMovement({
+        movementId: `in-${current.id}-${line.key}`,
+        productId: line.productId!,
+        deltaBase: qtyBase,
+        fallbackAvailable: before,
+        payload: {
           productId: line.productId,
           type: "PURCHASE_IN",
           quantity: line.quantity,
@@ -719,14 +789,12 @@ export async function transferInvoiceLinesToStock(
           unitCostNet: unitCostFromPackage(net || 0, line.quantity!, line.unit!),
           unitCostGross: unitCostFromPackage(gross || 0, line.quantity!, line.unit!),
           vatRate: line.vatRate,
-          quantityBefore: before,
           quantityIn: qtyBase,
-          quantityAfter: before + qtyBase,
           invoiceDate: current.invoiceDate,
           receivedAt: current.receivedAt,
           createdAt: now,
-        })
-      );
+        },
+      });
       await updateDoc(doc(db, COLLECTIONS.ingredients, line.productId!), {
         purchasePrice: gross || net,
         purchaseQuantity: line.quantity,
@@ -762,6 +830,8 @@ export async function transferInvoiceLinesToStock(
             supplierProductName: line.rawName,
             supplierSku: line.sku,
             inventoryProductId: line.productId!,
+            purchaseUnit: line.unit ?? undefined,
+            packageQuantity: line.quantity ?? undefined,
             conversion: line.conversionFactor ?? undefined,
           });
         }
@@ -872,20 +942,28 @@ export async function approvePosImport(input: {
       const delta = (row?.quantityBase ?? 0) - (prev?.quantityBase ?? 0);
       if (Math.abs(delta) < 0.0001) continue;
       const signed = -delta;
-      await addDoc(
-        collection(getDb(), COLLECTIONS.inventoryMovements),
-        sanitizeFirestoreData({
+      const live = await getDocs(query(collection(getDb(), COLLECTIONS.inventoryMovements), where("productId", "==", productId)));
+      const fallback = currentStockBase(
+        live.docs.map((item) => mapMovement(item.id, item.data() as Record<string, unknown>)),
+        productId
+      );
+      await commitStockMovement({
+        movementId: `pos-${input.draft.id}-${productId}`,
+        productId,
+        deltaBase: signed,
+        fallbackAvailable: fallback,
+        payload: {
           productId,
           type: signed < 0 ? "SALE_OUT" : "REVERSAL",
           quantity: Math.abs(delta),
           unit: row?.unit ?? prev?.unit ?? "g",
-          quantityBase: signed,
+          quantityBase: Math.abs(delta),
           posImportId: input.draft.id,
           receivedAt: new Date().toISOString(),
           createdAt: now,
           note: "POS theoretical consumption",
-        })
-      );
+        },
+      });
     }
     await updateDoc(doc(getDb(), COLLECTIONS.posImports, input.draft.id), {
       status: "approved",
@@ -895,6 +973,108 @@ export async function approvePosImport(input: {
     return success(undefined);
   } catch (error) {
     return failure(error, "Failed to approve POS import");
+  }
+}
+
+export async function issueInventory(input: {
+  lines: IssueDraftLine[];
+  ingredients: CostingIngredient[];
+  reason: InventoryIssueReason;
+  note?: string;
+  receivedAt: string;
+  actor?: string;
+  recipeId?: string;
+  menuProductId?: string;
+  dishCount?: number;
+  idempotencyKey: string;
+}): Promise<ServiceResult<{ movementIds: string[]; reused?: boolean }>> {
+  try {
+    const key = input.idempotencyKey.trim();
+    if (!key) return failure(new Error("IDEMPOTENCY_REQUIRED"), "IDEMPOTENCY_REQUIRED");
+    const live = await getDocs(collection(getDb(), COLLECTIONS.inventoryMovements));
+    const movements = live.docs.map((item) => mapMovement(item.id, item.data() as Record<string, unknown>));
+    const already = movements.filter((row) => row.idempotencyKey === key);
+    if (already.length) return success({ movementIds: already.map((row) => row.id), reused: true });
+    const checked = validateIssueLines(input.lines, input.ingredients, movements);
+    if (!checked.ok) return failure(new Error(checked.error), checked.error);
+    const now = nowTimestamp();
+    const movementIds: string[] = [];
+    let reused = false;
+    for (const line of checked.lines) {
+      const result = await commitStockMovement({
+        movementId: `issue-${key}-${line.productId}`,
+        productId: line.productId,
+        deltaBase: -line.quantityBase,
+        fallbackAvailable: currentStockBase(movements, line.productId),
+        requireNonNegative: true,
+        payload: {
+          productId: line.productId,
+          type: "ISSUE_OUT",
+          quantity: line.quantity,
+          unit: line.unit,
+          quantityBase: line.quantityBase,
+          reason: input.reason,
+          actor: input.actor || null,
+          note: input.note || null,
+          recipeId: input.recipeId || null,
+          menuProductId: input.menuProductId || null,
+          dishCount: input.dishCount ?? null,
+          issueBatchId: key,
+          idempotencyKey: key,
+          quantityIn: -line.quantityBase,
+          receivedAt: input.receivedAt,
+          createdAt: now,
+        },
+      });
+      movementIds.push(result.id);
+      reused = reused || result.reused;
+    }
+    return success({ movementIds, reused });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "overStock" ? "overStock" : "Failed to issue inventory";
+    return failure(error, message);
+  }
+}
+
+export async function reverseInventoryMovement(movementId: string, actor?: string): Promise<ServiceResult<string>> {
+  try {
+    const live = await getDocs(collection(getDb(), COLLECTIONS.inventoryMovements));
+    const movements = live.docs.map((item) => mapMovement(item.id, item.data() as Record<string, unknown>));
+    const existing = movements.find((row) => row.reversesId === movementId);
+    if (existing) return success(existing.id);
+    const source = live.docs.find((item) => item.id === movementId);
+    if (!source) return failure(new Error("NOT_FOUND"), "NOT_FOUND");
+    const data = source.data();
+    if (data.type === "REVERSAL") return failure(new Error("CANNOT_REVERSE"), "CANNOT_REVERSE");
+    const productId = String(data.productId ?? "");
+    const restore = -movementSignedBase({
+      type: data.type as InventoryMovement["type"],
+      quantityBase: asNumber(data.quantityBase),
+    });
+    const result = await commitStockMovement({
+      movementId: `rev-${movementId}`,
+      productId,
+      deltaBase: restore,
+      fallbackAvailable: currentStockBase(movements, productId),
+      payload: {
+        productId,
+        type: "REVERSAL",
+        quantity: Math.abs(asNumber(data.quantity)),
+        unit: data.unit,
+        quantityBase: restore,
+        reversesId: movementId,
+        actor: actor || null,
+        note: `Reverse ${movementId}`,
+        invoiceId: data.invoiceId || null,
+        recipeId: data.recipeId || null,
+        menuProductId: data.menuProductId || null,
+        receivedAt: new Date().toISOString(),
+        createdAt: nowTimestamp(),
+      },
+    });
+    return success(result.id);
+  } catch (error) {
+    return failure(error, "Failed to reverse movement");
   }
 }
 
