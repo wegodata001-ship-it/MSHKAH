@@ -17,6 +17,7 @@ If a field is not visible, use null. Do not use 0, "", or 18% as a guess.
 0 is allowed only when the document actually prints 0.
 
 invoiceNumber / documentNumber must be the printed document number (example: 01/002182).
+invoiceDate is תאריך חשבונית / תאריך. dueDate is מועד תשלום / לתשלום עד / תאריך פירעון.
 subtotal is סה"כ לפני מע"מ. vatTotal is מע"מ ₪. grandTotal is סה"כ לתשלום / כולל מע"מ.
 vatRate is the printed rate (18 or 0.18). Keep thousand separators out of JSON numbers.
 
@@ -318,8 +319,14 @@ export function parseInvoiceExtractionResult(text: string): {
       supplierPhone: field(json.supplierPhone, str),
       supplierAddress: field(json.supplierAddress, str),
       invoiceNumber,
-      invoiceDate: field(json.invoiceDate, (v) => toDateOnly(str(v) ?? unwrap(v))),
-      dueDate: field(json.dueDate, (v) => toDateOnly(str(v) ?? unwrap(v))),
+      invoiceDate: field(
+        json.invoiceDate ?? json.documentDate ?? json.issueDate ?? json.taxInvoiceDate ?? json.date,
+        (v) => toDateOnly(str(v) ?? unwrap(v))
+      ),
+      dueDate: field(
+        json.dueDate ?? json.paymentDueDate ?? json.paymentDate ?? json.due,
+        (v) => toDateOnly(str(v) ?? unwrap(v))
+      ),
       currency: field(json.currency, str),
       documentType: field(json.documentType, (v) => {
         const value = str(v);

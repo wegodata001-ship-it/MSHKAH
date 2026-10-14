@@ -77,6 +77,7 @@ export type Supplier = {
   contactName?: string;
   paymentTerms?: string;
   notes?: string;
+  aliases?: string[];
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -310,7 +311,22 @@ export type PurchaseInvoice = {
   aiProvider?: string;
   aiModel?: string;
   audit?: InvoiceAuditEvent[];
+  sourceNet?: number | null;
+  sourceVat?: number | null;
+  sourceGross?: number | null;
+  computedNet?: number | null;
+  computedVat?: number | null;
+  computedGross?: number | null;
   duplicateOf?: string;
+  duplicateSnapshot?: {
+    id: string;
+    invoiceNumber?: string;
+    supplierName?: string;
+    invoiceDate?: string;
+    status?: PurchaseInvoiceStatus;
+    stockStatus?: InvoiceStockStatus;
+    posted?: boolean;
+  };
   createdAt: string;
   createdBy?: string;
   uploadedAt?: string;

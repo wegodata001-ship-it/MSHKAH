@@ -67,18 +67,28 @@ export function toJsDate(value: unknown): Date | null {
   return null;
 }
 
-/** Israeli invoices print DD/MM/YYYY. ISO dates stay YYYY-MM-DD. */
-export function parseDateOnlyParts(value: string): string | null {
-  const trimmed = value.trim();
-  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const dmy = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
-  if (!dmy) return null;
-  const day = Number(dmy[1]);
-  const month = Number(dmy[2]);
-  const year = Number(dmy[3]);
+function expandYear(year: number): number {
+  if (year >= 100) return year;
+  return year >= 70 ? 1900 + year : 2000 + year;
+}
+
+function ymd(year: number, month: number, day: number): string | null {
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** Israeli invoices print DD/MM/YYYY. ISO dates stay YYYY-MM-DD. */
+export function parseDateOnlyParts(value: string): string | null {
+  const trimmed = value
+    .trim()
+    .replace(/^(?:תאריך(?:\s*חשבונית)?|date|invoice\s*date|issued?)\s*[:\-]?\s*/i, "")
+    .replace(/\s+[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/i, "")
+    .trim();
+  const iso = trimmed.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/);
+  if (iso) return ymd(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  const dmy = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/);
+  if (!dmy) return null;
+  return ymd(expandYear(Number(dmy[3])), Number(dmy[2]), Number(dmy[1]));
 }
 
 function dateOnlyFromObject(value: object): string | null {

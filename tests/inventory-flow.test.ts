@@ -199,6 +199,13 @@ describe("smart invoice matching", () => {
         { supplierId: "a", invoiceNumber: "100", invoiceDate: "2026-10-07" }
       )
     ).toBe("old");
+    expect(
+      findDuplicateInvoice(
+        [{ id: "old", invoiceNumber: "10275", invoiceDate: "2026-10-05", status: "draft" }],
+        { invoiceNumber: "10275", invoiceDate: "2026-10-05" }
+      )
+    ).toBe("old");
+    expect(matchSupplier("BRIOCHE", null, [{ ...suppliers[0], name: "בריאוש", aliases: ["BRIOCHE"] }]).kind).toBe("exact");
   });
 
   it("suggests fuzzy inventory matches from 60% without auto-confirming them", () => {
@@ -468,6 +475,37 @@ describe("manual supplier invoice", () => {
     const summary = invoiceSummary([emptyInvoiceLine(0.18)], 0.18);
     expect(summary.itemCount).toBe(0);
     expect(summary.includingVat).toBe(0);
+  });
+
+  it("sums extracted line amounts even when a product match is missing", () => {
+    const line = finalizeInvoiceLine({
+      ...emptyInvoiceLine(0.18),
+      rawName: "לחם",
+      quantity: 2,
+      unit: null,
+      unitPrice: null,
+      lineNet: 100,
+      lineGross: 118,
+      vatAmount: 18,
+      vatType: "unknown",
+    }, 0.18);
+    expect(line.unitPrice).toBe(50);
+    const summary = invoiceSummary([line], 0.18);
+    expect(summary.itemCount).toBe(1);
+    expect(summary.beforeVat).toBe(100);
+    expect(summary.includingVat).toBe(118);
+
+    const pricedOnly = finalizeInvoiceLine({
+      ...emptyInvoiceLine(null),
+      rawName: "קרואסון",
+      quantity: 12,
+      unit: null,
+      unitPrice: 14,
+      vatType: "unknown",
+    }, 0.18);
+    expect(pricedOnly.netAmount).toBe(168);
+    expect(pricedOnly.vatAmount).toBeCloseTo(30.24, 2);
+    expect(invoiceSummary([pricedOnly], 0.18).includingVat).toBeCloseTo(198.24, 2);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   geminiModelsToTry,
   isGeminiConfigured,
 } from "@/lib/ai/gemini-config";
+import { classifyProviderLimit, parseRetryAfterSeconds } from "@/lib/ai/gemini-limits";
 
 type GeminiGateway = "generativelanguage" | "aiplatform";
 
@@ -75,6 +76,7 @@ type ProviderAttempt = {
   text: string;
   reason: string | null;
   model: string;
+  retryAfterSeconds: number | null;
 };
 
 async function postGemini(input: {
@@ -91,6 +93,7 @@ async function postGemini(input: {
     text: "",
     reason: "UNREACHABLE",
     model: input.model,
+    retryAfterSeconds: null,
   };
   let preferredFailure: ProviderAttempt | null = null;
   for (const target of gateways(input.model)) {
@@ -126,10 +129,15 @@ async function postGemini(input: {
       text,
       reason: response.ok ? (text ? null : emptyReason) : readReason(payload),
       model: input.model,
+      retryAfterSeconds: parseRetryAfterSeconds({
+        header: response.headers.get("retry-after"),
+        payload,
+      }),
     };
     if (last.ok) return last;
     if (target.gateway === "generativelanguage") preferredFailure = last;
-    if (response.status === 503 || response.status === 429) {
+    if (response.status === 429) return last;
+    if (response.status === 503) {
       await new Promise((resolve) => setTimeout(resolve, 800));
       continue;
     }
@@ -141,11 +149,19 @@ async function postGemini(input: {
 function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
   const auth = attempt.status === 401 || attempt.status === 403;
   const emptyOk = attempt.status === 200 && !attempt.text;
+  const limitCode =
+    attempt.status === 429
+      ? classifyProviderLimit({
+          status: attempt.status,
+          reason: attempt.reason,
+          retryAfterSeconds: attempt.retryAfterSeconds,
+        })
+      : null;
   throw new GeminiRequestError({
     code: !attempt.status
       ? "SCAN_FAILED"
-      : attempt.status === 429
-        ? "QUOTA_EXCEEDED"
+      : limitCode
+        ? limitCode
         : attempt.status === 401
           ? "INVALID_API_KEY"
           : attempt.status === 403
@@ -155,13 +171,16 @@ function throwFromAttempt(attempt: ProviderAttempt, requestId: string): never {
               : "SCAN_FAILED",
     message: auth
       ? "Invoice scanning could not authenticate with the AI provider"
-      : attempt.status === 429
-        ? "Invoice scanning is rate limited"
-        : "Invoice scanning failed",
+      : limitCode === "QUOTA_EXCEEDED"
+        ? "Invoice scanning quota was exceeded"
+        : limitCode === "PROVIDER_RATE_LIMIT"
+          ? "Invoice scanning is rate limited"
+          : "Invoice scanning failed",
     providerStatus: attempt.status || null,
     providerError: attempt.reason,
     model: attempt.model,
     requestId,
+    retryAfterSeconds: attempt.retryAfterSeconds,
   });
 }
 
@@ -207,6 +226,10 @@ export async function geminiGenerateJson(input: {
         requestId,
       };
     }
+    if (last.status === 429) {
+      console.info("[invoice-extract]", { event: "MODEL_RATE_LIMITED", model, requestId, next: true });
+      continue;
+    }
     if (last.status && last.status !== 403 && last.status !== 404 && last.status !== 503) {
       throwFromAttempt(last, requestId);
     }
@@ -218,6 +241,7 @@ export async function geminiGenerateJson(input: {
     text: "",
     reason: "UNREACHABLE",
     model: geminiModel(),
+    retryAfterSeconds: null,
   }, requestId);
 }
 
@@ -236,28 +260,25 @@ export async function pingGemini(force = false): Promise<GeminiHealth> {
   if (!configured) return base;
   if (!force && healthCache && Date.now() - healthCache.at < HEALTH_TTL_MS) return healthCache.value;
   try {
-    const result = await geminiGenerateJson({
-      parts: [{ text: 'Reply with JSON {"ok":true} only.' }],
-      temperature: 0,
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", {
+      headers: { "x-goog-api-key": geminiApiKey() },
     });
+    const reachable = response.ok;
     const value: GeminiHealth = {
       ...base,
-      model: result.model,
-      reachable: true,
-      httpStatus: result.httpStatus,
-      reason: null,
-      gateway: result.gateway,
+      reachable,
+      httpStatus: response.status,
+      reason: reachable ? null : `HEALTH_${response.status}`,
+      gateway: "generativelanguage",
     };
     healthCache = { at: Date.now(), value };
     return value;
-  } catch (error) {
-    const failed = error instanceof GeminiRequestError ? error : null;
+  } catch {
     const value: GeminiHealth = {
       ...base,
-      model: failed?.model ?? model,
       reachable: false,
-      httpStatus: failed?.providerStatus ?? null,
-      reason: failed?.providerError ?? failed?.code ?? "UNREACHABLE",
+      httpStatus: null,
+      reason: "UNREACHABLE",
       gateway: null,
     };
     healthCache = { at: Date.now(), value };

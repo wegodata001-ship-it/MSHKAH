@@ -1,5 +1,6 @@
 import { roundMoney } from "@/lib/costing/money";
 import { toDateOnly } from "@/lib/dates/normalize";
+import { lineHasAmount } from "@/lib/inventory/invoice-lines";
 import type {
   InvoiceScanStatus,
   InvoiceSourceKind,
@@ -147,7 +148,7 @@ export function publicScanErrorCode(code?: string | null, providerStatus?: numbe
   if (code === "AI_NOT_CONFIGURED") return "PROVIDER_NOT_CONFIGURED";
   if (code === "INVALID_FILE") return providerStatus === 413 ? "FILE_TOO_LARGE" : "UNSUPPORTED_FILE";
   if (code === "PROVIDER_AUTH_ERROR") return providerStatus === 403 ? "PROVIDER_FORBIDDEN" : "INVALID_API_KEY";
-  if (code === "PROVIDER_RATE_LIMIT") return "QUOTA_EXCEEDED";
+  if (code === "PROVIDER_RATE_LIMIT") return "PROVIDER_RATE_LIMIT";
   if (code && SCAN_ERROR_CODES.includes(code as ScanErrorCode)) return code as ScanErrorCode;
   if (providerStatus === 402 || providerStatus === 403) return "STORAGE_FAILED";
   return "SCAN_FAILED";
@@ -191,7 +192,11 @@ export function missingInvoiceFields(invoice: PurchaseInvoice): InvoiceMissingFi
 }
 
 export function incompleteInvoiceLineCount(lines: PurchaseInvoiceLine[]): number {
-  return lines.filter((line) => !line.rawName?.trim() || line.quantity == null || line.unitPrice == null || (line.lineTotal == null && line.lineNet == null && line.lineGross == null)).length;
+  return lines.filter((line) => {
+    const named = Boolean(line.rawName?.trim());
+    const hasQtyPrice = line.quantity != null && line.unitPrice != null;
+    return !named || (!hasQtyPrice && !lineHasAmount(line));
+  }).length;
 }
 
 export function mergeScannedInvoice(

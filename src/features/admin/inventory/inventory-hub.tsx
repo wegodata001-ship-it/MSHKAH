@@ -439,9 +439,11 @@ function InvoicesPane(props: InventoryHubProps) {
       <SmartInvoiceFlow
         ingredients={props.ingredients}
         suppliers={props.suppliers}
+        invoices={props.invoices}
         vatRate={props.settingsVatRate}
         initialInvoice={smartInvoice}
         onToast={props.onToast}
+        onOpenExisting={(invoice) => setSmartInvoice(invoice)}
         onClose={() => {
           setSmart(false);
           setSmartInvoice(null);
@@ -494,7 +496,14 @@ function InvoicesPane(props: InventoryHubProps) {
       <AdminCard title={t("admin.inventory.archive.title")}>
         <InvoiceArchivePanel
           invoices={props.invoices}
-          onOpen={(invoice) => setDraft(invoice)}
+          onOpen={(invoice) => {
+            if (invoice.sourceFile || invoice.scanStatus || invoice.aiProvider) {
+              setSmartInvoice(invoice);
+              setSmart(true);
+              return;
+            }
+            setDraft(invoice);
+          }}
           onRescan={(invoice) => {
             setSmartInvoice(invoice);
             setSmart(true);

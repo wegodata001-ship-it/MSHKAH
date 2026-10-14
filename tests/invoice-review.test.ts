@@ -126,4 +126,32 @@ describe("invoice review mapping", () => {
     expect(merged.receivedAt).toBe("2026-10-12");
     expect(merged.lines.some((line) => line.rawName === "ידני")).toBe(true);
   });
+
+  it("reads invoice and due dates from alternate keys and keeps line totals without a product match", () => {
+    const invoice = reviewedFrom({
+      supplierName: "BRIOCHE",
+      documentNumber: "10275",
+      documentDate: "05/10/2026",
+      paymentDueDate: "31/10/2026",
+      currency: "ILS",
+      subtotal: 2814.92,
+      vatTotal: 506.69,
+      grandTotal: 3321.61,
+      lines: Array.from({ length: 10 }, (_, index) => ({
+        description: `פריט ${index + 1}`,
+        quantity: 1,
+        lineTotalBeforeVat: 281.49,
+        lineTotalIncludingVat: 332.16,
+      })),
+    });
+    expect(invoice.invoiceNumber).toBe("10275");
+    expect(invoice.invoiceDate).toBe("2026-10-05");
+    expect(invoice.dueDate).toBe("2026-10-31");
+    expect(invoice.lines).toHaveLength(10);
+    expect(invoice.lines[0]?.unit).toBeNull();
+    expect(invoice.lines[0]?.productId).toBeUndefined();
+    expect(invoice.computedGross).toBeGreaterThan(0);
+    expect(invoice.computedNet).toBeGreaterThan(0);
+    expect(invoice.sourceGross).toBe(3321.61);
+  });
 });

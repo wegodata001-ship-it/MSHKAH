@@ -1,3 +1,4 @@
+import { roundMoney } from "@/lib/costing/money";
 import type { PurchaseUnit } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE, splitVat } from "@/lib/inventory/vat";
 import type { PurchaseInvoiceLine, VatType } from "@/lib/inventory/types";
@@ -31,7 +32,29 @@ export function lineNetAmount(line: Pick<PurchaseInvoiceLine, "quantity" | "unit
   const price = Number(line.unitPrice);
   const discount = Number(line.discount) || 0;
   if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) return 0;
-  return Math.max(0, qty * price - discount);
+  return roundMoney(Math.max(0, qty * price - discount));
+}
+
+export function lineDocumentAmount(line: PurchaseInvoiceLine): number {
+  const computed = lineNetAmount(line);
+  if (computed > 0) return computed;
+  const candidates = [
+    line.netAmount,
+    line.lineNet,
+    line.priceBeforeVat,
+    line.grossAmount,
+    line.lineGross,
+    line.priceIncludingVat,
+    line.lineTotal,
+  ];
+  for (const value of candidates) {
+    if (value != null && Number.isFinite(value) && value !== 0) return roundMoney(value);
+  }
+  return 0;
+}
+
+export function lineHasAmount(line: PurchaseInvoiceLine): boolean {
+  return lineDocumentAmount(line) > 0;
 }
 
 export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
@@ -39,28 +62,42 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
   const qty = Number(line.quantity);
   const hasQty = Number.isFinite(qty) && qty > 0;
   const computedNet = lineNetAmount(line);
-  const amount = computedNet > 0 ? computedNet : (line.lineTotal ?? line.lineNet ?? line.lineGross ?? 0);
+  const scannedAmount = line.lineTotal ?? line.lineNet ?? line.lineGross ?? line.netAmount ?? line.grossAmount ?? 0;
+  const amount = computedNet > 0 ? computedNet : scannedAmount;
+  const derivedUnitPrice =
+    line.unitPrice == null && hasQty && amount
+      ? roundMoney(amount / qty)
+      : line.unitPrice;
 
   if (taxMode === "unknown") {
-    const net = line.netAmount ?? line.lineNet ?? line.priceBeforeVat;
+    const net = line.netAmount ?? line.lineNet ?? line.priceBeforeVat ?? (computedNet > 0 ? computedNet : null);
     const gross = line.grossAmount ?? line.lineGross ?? line.priceIncludingVat;
-    const vatAmount = line.vatAmount ?? (net != null && gross != null ? roundSafe(gross - net) : null);
+    const rate = line.vatRate ?? vatRate;
+    const vatAmount =
+      line.vatAmount ??
+      (net != null && gross != null
+        ? roundMoney(gross - net)
+        : net != null && rate != null && rate > 0
+          ? roundMoney(net * (rate > 1 ? rate / 100 : rate))
+          : null);
+    const resolvedGross = gross ?? (net != null && vatAmount != null ? roundMoney(net + vatAmount) : null);
     return {
       ...line,
+      unitPrice: derivedUnitPrice,
       vatType: "unknown",
       vatMode: "unknown",
       taxMode: "unknown",
       vatRate: line.vatRate ?? null,
-      lineTotal: computedNet > 0 ? computedNet : line.lineTotal,
+      lineTotal: computedNet > 0 ? computedNet : (line.lineTotal ?? amount ?? null),
       priceBeforeVat: net ?? null,
       vatAmount,
-      priceIncludingVat: gross ?? null,
+      priceIncludingVat: resolvedGross,
       netAmount: net ?? null,
-      grossAmount: gross ?? null,
+      grossAmount: resolvedGross,
       lineNet: net ?? null,
-      lineGross: gross ?? null,
-      unitPriceNet: hasQty && net != null ? net / qty : line.unitPriceNet ?? null,
-      unitPriceGross: hasQty && gross != null ? gross / qty : line.unitPriceGross ?? null,
+      lineGross: resolvedGross,
+      unitPriceNet: hasQty && net != null ? roundMoney(net / qty) : line.unitPriceNet ?? null,
+      unitPriceGross: hasQty && gross != null ? roundMoney(gross / qty) : line.unitPriceGross ?? null,
     };
   }
 
@@ -69,6 +106,7 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
   const vat = splitVat({ amount, vatType, vatRate: rate });
   return {
     ...line,
+    unitPrice: derivedUnitPrice,
     vatType,
     vatMode: vatType,
     taxMode: vatType,
@@ -79,23 +117,19 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
     grossAmount: vat.priceIncludingVat,
     lineNet: vat.priceBeforeVat,
     lineGross: vat.priceIncludingVat,
-    unitPriceNet: hasQty ? vat.priceBeforeVat / qty : null,
-    unitPriceGross: hasQty ? vat.priceIncludingVat / qty : null,
+    unitPriceNet: hasQty ? roundMoney(vat.priceBeforeVat / qty) : null,
+    unitPriceGross: hasQty ? roundMoney(vat.priceIncludingVat / qty) : null,
   };
-}
-
-function roundSafe(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 export function invoiceFinanceTotals(lines: PurchaseInvoiceLine[], vatRate = DEFAULT_VAT_RATE) {
   const finalized = lines.map((line) => finalizeInvoiceLine(line, vatRate));
-  const usable = finalized.filter((line) => lineNetAmount(line) > 0);
+  const usable = finalized.filter(lineHasAmount);
   return {
     lines: finalized,
-    net: usable.reduce((sum, line) => sum + (line.netAmount ?? line.priceBeforeVat ?? 0), 0),
-    vat: usable.reduce((sum, line) => sum + (line.vatAmount ?? 0), 0),
-    gross: usable.reduce((sum, line) => sum + (line.grossAmount ?? line.priceIncludingVat ?? 0), 0),
+    net: roundMoney(usable.reduce((sum, line) => sum + (line.netAmount ?? line.priceBeforeVat ?? lineDocumentAmount(line)), 0)),
+    vat: roundMoney(usable.reduce((sum, line) => sum + (line.vatAmount ?? 0), 0)),
+    gross: roundMoney(usable.reduce((sum, line) => sum + (line.grossAmount ?? line.priceIncludingVat ?? lineDocumentAmount(line)), 0)),
     itemCount: usable.length,
   };
 }

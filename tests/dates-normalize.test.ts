@@ -16,6 +16,9 @@ describe("date normalization", () => {
     expect(toDateOnly("")).toBeNull();
     expect(toDateOnly("not-a-date")).toBeNull();
     expect(toDateOnly("32/13/2026")).toBeNull();
+    expect(toDateOnly("2026/10/05")).toBe("2026-10-05");
+    expect(toDateOnly("05/10/26")).toBe("2026-10-05");
+    expect(toDateOnly("תאריך: 05/10/2026")).toBe("2026-10-05");
   });
 
   it("calls toDate only when it is a function and never crashes on ISO strings", () => {

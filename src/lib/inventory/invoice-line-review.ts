@@ -3,7 +3,7 @@ import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { isSafeInvoiceMatch } from "@/lib/inventory/product-match";
 import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 
-export type InvoiceReviewFilter = "all" | "review" | "unmapped" | "new" | "confirmed";
+export type InvoiceReviewFilter = "all" | "needs" | "review" | "unmapped" | "new" | "confirmed";
 export type InvoiceMatchStatus = "confirmed" | "possible" | "none" | "new";
 
 export function isConfirmedInvoiceMatch(line: PurchaseInvoiceLine): boolean {
@@ -48,6 +48,9 @@ export function invoiceLineMatchesFilter(
   }
   if (filter === "all") return true;
   const status = invoiceLineMatchStatus(line);
+  if (filter === "needs") {
+    return status !== "confirmed" || !line.unit || (line.quantity == null && line.unitPrice == null && line.lineTotal == null && line.netAmount == null && line.grossAmount == null);
+  }
   if (filter === "confirmed") return status === "confirmed";
   if (filter === "new") return status === "new";
   if (filter === "unmapped") return status === "none";

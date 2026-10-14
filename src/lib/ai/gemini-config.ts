@@ -1,5 +1,5 @@
 export const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
-export const GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.8-flash"];
+export const GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite"];
 
 export function geminiApiKey(): string {
   return process.env.GEMINI_API_KEY?.trim() || "";
@@ -41,6 +41,7 @@ export class GeminiRequestError extends Error {
   readonly providerError: string | null;
   readonly model: string | null;
   readonly requestId: string;
+  readonly retryAfterSeconds: number | null;
 
   constructor(input: {
     code: InvoiceAiCode;
@@ -49,6 +50,7 @@ export class GeminiRequestError extends Error {
     providerError?: string | null;
     model?: string | null;
     requestId: string;
+    retryAfterSeconds?: number | null;
   }) {
     super(input.message);
     this.name = "GeminiRequestError";
@@ -57,6 +59,7 @@ export class GeminiRequestError extends Error {
     this.providerError = input.providerError ?? null;
     this.model = input.model ?? null;
     this.requestId = input.requestId;
+    this.retryAfterSeconds = input.retryAfterSeconds ?? null;
   }
 }
 

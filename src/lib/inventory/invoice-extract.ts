@@ -84,6 +84,8 @@ export type InvoiceExtractResponse = {
   persistWarning?: boolean;
   error?: string;
   errorCode?: string;
+  retryAfterSeconds?: number | null;
+  duplicateInvoice?: PurchaseInvoice["duplicateSnapshot"];
 };
 
 export function needsReview(confidence: number | null | undefined): boolean {

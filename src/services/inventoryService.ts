@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -58,6 +59,7 @@ function mapSupplier(id: string, data: Record<string, unknown>): Supplier {
     contactName: data.contactName ? String(data.contactName) : undefined,
     paymentTerms: data.paymentTerms ? String(data.paymentTerms) : undefined,
     notes: data.notes ? String(data.notes) : undefined,
+    aliases: Array.isArray(data.aliases) ? data.aliases.map((item) => String(item)).filter(Boolean) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
@@ -315,6 +317,24 @@ export function subscribeToPosProductMaps(onData: (items: PosProductMap[]) => vo
   );
 }
 
+export async function rememberSupplierAlias(supplierId: string, scannedName: string): Promise<ServiceResult<void>> {
+  try {
+    const alias = scannedName.trim();
+    if (!alias) return success(undefined);
+    const ref = doc(getDb(), COLLECTIONS.suppliers, supplierId);
+    const snap = await getDoc(ref);
+    const current = ((snap.data()?.aliases as string[] | undefined) ?? []).map((item) => String(item));
+    const name = String(snap.data()?.name ?? "");
+    if (!alias || alias === name || current.some((item) => item.toLowerCase() === alias.toLowerCase())) {
+      return success(undefined);
+    }
+    await updateDoc(ref, { aliases: [...current, alias], updatedAt: nowTimestamp() });
+    return success(undefined);
+  } catch (error) {
+    return failure(error, "Failed to remember supplier alias");
+  }
+}
+
 export async function saveSupplier(input: {
   id?: string;
   name: string;
@@ -326,6 +346,7 @@ export async function saveSupplier(input: {
   contactName?: string;
   paymentTerms?: string;
   notes?: string;
+  aliases?: string[];
 }): Promise<ServiceResult<Supplier>> {
   try {
     const now = nowTimestamp();
@@ -339,6 +360,7 @@ export async function saveSupplier(input: {
       contactName: input.contactName?.trim() || null,
       paymentTerms: input.paymentTerms?.trim() || null,
       notes: input.notes?.trim() || null,
+      aliases: input.aliases?.map((item) => item.trim()).filter(Boolean) || null,
       active: true,
       updatedAt: now,
     });

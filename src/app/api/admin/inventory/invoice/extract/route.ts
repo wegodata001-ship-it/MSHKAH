@@ -11,10 +11,10 @@ import {
 import { extractInvoiceWithGemini } from "@/lib/ai/gemini-invoice";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { COLLECTIONS } from "@/lib/firebase/collections";
-import { publicScanErrorCode } from "@/lib/inventory/invoice-archive";
+import { mergeScannedInvoice, publicScanErrorCode } from "@/lib/inventory/invoice-archive";
 import { findUndefinedPaths, sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { readInvoiceSourceBytes, saveInvoiceSourceFile } from "@/lib/inventory/invoice-source-store";
-import { buildReviewedInvoice, findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
+import { buildReviewedInvoice, findExistingInvoice, isEditableInvoice, isPostedInvoice } from "@/lib/inventory/invoice-smart-match";
 import type { CostingIngredient } from "@/lib/costing/types";
 import type { InvoiceScanAttempt, PurchaseInvoice, PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 
@@ -32,6 +32,8 @@ function mimeFor(file: File): string | null {
   return null;
 }
 
+const inflightScans = new Map<string, string>();
+
 function fail(
   code: InvoiceAiCode,
   extra: {
@@ -43,9 +45,11 @@ function fail(
     fileType?: string | null;
     fileSize?: number;
     invoice?: PurchaseInvoice | null;
+    retryAfterSeconds?: number | null;
   }
 ) {
   const errorCode = publicScanErrorCode(code, extra.providerStatus);
+  const headers = extra.retryAfterSeconds ? { "Retry-After": String(extra.retryAfterSeconds) } : undefined;
   return Response.json(
     {
       ok: false,
@@ -60,9 +64,10 @@ function fail(
       providerStatus: extra.providerStatus ?? null,
       providerError: extra.providerError ?? null,
       error: errorCode,
+      retryAfterSeconds: extra.retryAfterSeconds ?? null,
       invoice: extra.invoice ?? undefined,
     },
-    { status: httpStatusForAiCode(code, extra.providerStatus) }
+    { status: httpStatusForAiCode(code, extra.providerStatus), headers }
   );
 }
 
@@ -202,7 +207,19 @@ export async function POST(request: NextRequest) {
     { merge: true }
   );
 
+  const scanKey = existingId || fileHash || invoiceRef.id;
+  if (inflightScans.has(scanKey)) {
+    return fail("PROVIDER_RATE_LIMIT", {
+      message: "A scan is already running for this document.",
+      requestId,
+      retryAfterSeconds: 15,
+      invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "scanning" } as PurchaseInvoice,
+    });
+  }
+  inflightScans.set(scanKey, requestId);
+
   if (!isGeminiConfigured()) {
+    inflightScans.delete(scanKey);
     await invoiceRef.set({ scanStatus: "failed", updatedAt: new Date().toISOString() }, { merge: true });
     return fail("PROVIDER_NOT_CONFIGURED", {
       message: "Invoice scanning is not configured. The original file was saved.",
@@ -252,12 +269,36 @@ export async function POST(request: NextRequest) {
     invoice.aiModel = model;
     invoice.createdBy = auth.email;
     invoice.uploadedAt = uploadedInvoice.uploadedAt;
-    invoice.duplicateOf = findDuplicateInvoice(
-      invoicesSnap.docs
-        .filter((doc) => doc.id !== invoiceRef.id)
-        .map((doc) => ({ id: doc.id, ...doc.data() }) as PurchaseInvoice),
-      invoice
-    );
+    const others = invoicesSnap.docs
+      .filter((doc) => doc.id !== invoiceRef.id)
+      .map((doc) => ({ id: doc.id, ...doc.data() }) as PurchaseInvoice);
+    const existingHit = findExistingInvoice(others, invoice);
+    if (existingHit && !existingId && isEditableInvoice(existingHit)) {
+      const reused = mergeScannedInvoice(existingHit, { ...invoice, id: existingHit.id }, []);
+      reused.id = existingHit.id;
+      reused.sourceFile = sourceFile ?? existingHit.sourceFile;
+      reused.duplicateOf = undefined;
+      reused.duplicateSnapshot = undefined;
+      invoiceRef = db.collection(COLLECTIONS.purchaseInvoices).doc(existingHit.id);
+      existing = existingHit;
+      Object.assign(invoice, reused);
+      try {
+        await db.collection(COLLECTIONS.purchaseInvoices).doc(uploadedInvoice.id as string).delete();
+      } catch {
+        /* stub leftover is harmless */
+      }
+    } else if (existingHit) {
+      invoice.duplicateOf = existingHit.id;
+      invoice.duplicateSnapshot = {
+        id: existingHit.id,
+        invoiceNumber: existingHit.invoiceNumber,
+        supplierName: existingHit.supplierName,
+        invoiceDate: existingHit.invoiceDate,
+        status: existingHit.status,
+        stockStatus: existingHit.stockStatus,
+        posted: isPostedInvoice(existingHit),
+      };
+    }
     const attempt: InvoiceScanAttempt = {
       id: requestId,
       provider: "gemini",
@@ -341,7 +382,16 @@ export async function POST(request: NextRequest) {
         model: error.model,
         fileType: mimeType,
         fileSize: bytes.length,
-        invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "failed" } as PurchaseInvoice,
+        retryAfterSeconds: error.retryAfterSeconds,
+        invoice: {
+          ...uploadedInvoice,
+          ...existing,
+          id: invoiceRef.id,
+          sourceFile,
+          fileName,
+          fileHash,
+          scanStatus: "failed",
+        } as PurchaseInvoice,
       });
     }
     logExtract({
@@ -356,8 +406,18 @@ export async function POST(request: NextRequest) {
       requestId,
       fileType: mimeType,
       fileSize: bytes.length,
-      invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "failed" } as PurchaseInvoice,
+      invoice: {
+        ...uploadedInvoice,
+        ...existing,
+        id: invoiceRef.id,
+        sourceFile,
+        fileName,
+        fileHash,
+        scanStatus: "failed",
+      } as PurchaseInvoice,
     });
+  } finally {
+    inflightScans.delete(scanKey);
   }
 }
 

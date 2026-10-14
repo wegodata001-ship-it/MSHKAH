@@ -6,7 +6,7 @@ import { asVatType, guessUnit, needsReview, PRICE_ANOMALY_RATIO, type ExtractedI
 import { validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
 import { cheapestOffer, offerNormalizedCost, unitCostFromPackage } from "@/lib/inventory/stock";
 import { detectedVatRate, splitVat } from "@/lib/inventory/vat";
-import { finalizeInvoiceLine, newInvoiceLineKey } from "@/lib/inventory/invoice-lines";
+import { finalizeInvoiceLine, invoiceFinanceTotals, newInvoiceLineKey } from "@/lib/inventory/invoice-lines";
 import { toDateOnly } from "@/lib/dates/normalize";
 import type {
   PurchaseInvoice,
@@ -16,6 +16,10 @@ import type {
   SupplierItemMap,
   SupplierOffer,
 } from "@/lib/inventory/types";
+
+function supplierNames(item: Supplier): string[] {
+  return [item.name, item.companyName, ...(item.aliases ?? [])].filter((value): value is string => Boolean(value?.trim()));
+}
 
 export function matchSupplier(
   name: string | null | undefined,
@@ -37,13 +41,15 @@ export function matchSupplier(
   }
   const target = normalizeIngredientName(name || "");
   if (!target) return { alternatives: [], kind: "new" };
-  const exact = suppliers.filter((item) => normalizeIngredientName(item.name) === target);
+  const exact = suppliers.filter((item) => supplierNames(item).some((label) => normalizeIngredientName(label) === target));
   if (exact.length === 1) return { supplier: exact[0], alternatives: [], kind: "exact" };
   if (exact.length > 1) return { alternatives: exact, kind: "suggest" };
-  const fuzzy = suppliers.filter((item) => {
-    const n = normalizeIngredientName(item.name);
-    return n.length >= 3 && target.length >= 3 && (n.includes(target) || target.includes(n));
-  });
+  const fuzzy = suppliers.filter((item) =>
+    supplierNames(item).some((label) => {
+      const n = normalizeIngredientName(label);
+      return n.length >= 3 && target.length >= 3 && (n.includes(target) || target.includes(n));
+    })
+  );
   if (fuzzy.length === 1) return { supplier: fuzzy[0], alternatives: [], kind: "suggest" };
   if (fuzzy.length > 1) return { alternatives: fuzzy, kind: "suggest" };
   return { alternatives: [], kind: "new" };
@@ -125,7 +131,9 @@ export function buildReviewedInvoice(input: {
     const detectedVat = asVatType(line.vatType);
     const vatType = detectedVat ?? "unknown";
     const amount = line.lineNet ?? line.lineGross ?? line.lineTotal ?? (qty && unitPrice != null ? qty * unitPrice - (line.discount || 0) : null);
-    const lineVatRate = detectedVatRate(line.vatRate) ?? (vatType === "unknown" ? null : vatRate);
+    const detectedLineRate = detectedVatRate(line.vatRate);
+    const storedVatRate = detectedLineRate ?? (vatType === "unknown" ? null : vatRate);
+    const computeVatRate = detectedLineRate ?? vatRate;
     const matchConfidence =
       match.kind === "mapped" || match.kind === "exact"
         ? 0.99
@@ -137,7 +145,7 @@ export function buildReviewedInvoice(input: {
             vatAmount: line.vatAmount,
             priceIncludingVat: line.lineGross ?? line.priceIncludingVat,
           }
-        : splitVat({ amount: amount || 0, vatType, vatRate: lineVatRate });
+        : splitVat({ amount: amount || 0, vatType, vatRate: computeVatRate });
     const normalized =
       qty && unit && (vat.priceIncludingVat ?? vat.priceBeforeVat)
         ? unitCostFromPackage(
@@ -188,7 +196,7 @@ export function buildReviewedInvoice(input: {
         lineGross: line.lineGross ?? vat.priceIncludingVat,
         vatType,
         taxMode: vatType,
-        vatRate: lineVatRate,
+        vatRate: storedVatRate,
         priceBeforeVat: line.priceBeforeVat ?? vat.priceBeforeVat ?? null,
         vatAmount: line.vatAmount ?? vat.vatAmount ?? null,
         priceIncludingVat: line.priceIncludingVat ?? vat.priceIncludingVat ?? null,
@@ -216,7 +224,7 @@ export function buildReviewedInvoice(input: {
         rawText: line.rawText,
         skipInventory: Boolean(line.lineType && line.lineType !== "INVENTORY_ITEM" && line.lineType !== "UNKNOWN"),
       },
-      lineVatRate
+      computeVatRate
     );
   });
 
@@ -227,6 +235,7 @@ export function buildReviewedInvoice(input: {
     supplierGuess.kind !== "exact" ||
     lines.some((line) => line.needsReview);
 
+  const computed = invoiceFinanceTotals(lines, vatRate ?? undefined);
   const validation = validateInvoiceTotals({
     lines,
     headerNet: input.extraction.subtotal.value,
@@ -259,6 +268,12 @@ export function buildReviewedInvoice(input: {
     netAmount: input.extraction.subtotal.value,
     vatAmount: input.extraction.vatTotal.value,
     grossAmount: input.extraction.grandTotal.value,
+    sourceNet: input.extraction.subtotal.value,
+    sourceVat: input.extraction.vatTotal.value,
+    sourceGross: input.extraction.grandTotal.value,
+    computedNet: computed.net,
+    computedVat: computed.vat,
+    computedGross: computed.gross,
     subtotal: input.extraction.subtotal.value,
     vatTotal: input.extraction.vatTotal.value,
     grandTotal: input.extraction.grandTotal.value,
@@ -298,24 +313,36 @@ export function buildReviewedInvoice(input: {
   };
 }
 
-export function findDuplicateInvoice(
-  invoices: Pick<PurchaseInvoice, "id" | "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "fileHash" | "status">[],
-  candidate: Pick<PurchaseInvoice, "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "fileHash">
-): PurchaseInvoice["id"] | undefined {
-  const hit = invoices.find((item) => {
+export function isPostedInvoice(invoice: Pick<PurchaseInvoice, "status" | "stockStatus" | "inventoryPostedAt">): boolean {
+  return invoice.stockStatus === "posted" || invoice.status === "approved" || Boolean(invoice.inventoryPostedAt);
+}
+
+export function isEditableInvoice(invoice: Pick<PurchaseInvoice, "status" | "stockStatus" | "inventoryPostedAt">): boolean {
+  return !isPostedInvoice(invoice) && invoice.status !== "rejected";
+}
+
+export function findExistingInvoice<T extends Pick<PurchaseInvoice, "id" | "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "fileHash" | "status" | "grossAmount">>(
+  invoices: T[],
+  candidate: Pick<PurchaseInvoice, "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "grossAmount" | "fileHash">
+): T | undefined {
+  const number = candidate.invoiceNumber?.trim();
+  const date = toDateOnly(candidate.invoiceDate) || candidate.invoiceDate;
+  const total = candidate.grandTotal ?? candidate.grossAmount;
+  return invoices.find((item) => {
     if (item.status === "rejected") return false;
     if (candidate.fileHash && item.fileHash && item.fileHash === candidate.fileHash) return true;
-    const sameIdentity = Boolean(
-      candidate.supplierId &&
-        item.supplierId === candidate.supplierId &&
-        candidate.invoiceNumber &&
-        item.invoiceNumber === candidate.invoiceNumber &&
-        candidate.invoiceDate &&
-        item.invoiceDate === candidate.invoiceDate
-    );
-    if (!sameIdentity) return false;
-    if (candidate.grandTotal != null && item.grandTotal != null) return candidate.grandTotal === item.grandTotal;
-    return true;
+    if (!number || item.invoiceNumber !== number) return false;
+    const sameDate = Boolean(date && item.invoiceDate && (toDateOnly(item.invoiceDate) || item.invoiceDate) === date);
+    const sameSupplier = !candidate.supplierId || !item.supplierId || item.supplierId === candidate.supplierId;
+    const itemTotal = item.grandTotal ?? item.grossAmount;
+    const sameTotal = total == null || itemTotal == null || Math.abs(total - itemTotal) <= 0.05;
+    return sameSupplier && (sameDate || sameTotal);
   });
-  return hit?.id;
+}
+
+export function findDuplicateInvoice(
+  invoices: Pick<PurchaseInvoice, "id" | "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "fileHash" | "status" | "grossAmount">[],
+  candidate: Pick<PurchaseInvoice, "supplierId" | "invoiceNumber" | "invoiceDate" | "grandTotal" | "grossAmount" | "fileHash">
+): PurchaseInvoice["id"] | undefined {
+  return findExistingInvoice(invoices, candidate)?.id;
 }
