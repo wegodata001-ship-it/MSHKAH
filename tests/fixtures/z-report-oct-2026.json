@@ -1,0 +1,30 @@
+{
+  "reportType": "דוח Z",
+  "businessName": null,
+  "reportNumber": null,
+  "registerId": null,
+  "cashier": null,
+  "periodFrom": "01/10/2026",
+  "periodTo": "31/10/2026",
+  "printedAt": "08/10/2026 14:30",
+  "businessDate": null,
+  "salesBeforeVat": 13468.22,
+  "vatTotal": 2424.28,
+  "vatRate": 18,
+  "salesIncludingVat": 15892.5,
+  "salesTotal": 15892.5,
+  "receiptsTotal": 15892.5,
+  "receiptsCount": 209,
+  "returnsTotal": null,
+  "discountsTotal": null,
+  "payments": [
+    { "method": "אשראי", "sourceLabel": "אשראי", "amount": 5375.6, "count": 71, "role": "tender" },
+    { "method": "אשראי ידני", "sourceLabel": "אשראי ידני", "amount": 100, "count": 1, "role": "tender" },
+    { "method": "מזומן", "sourceLabel": "מזומן", "amount": 10416.9, "count": 137, "role": "tender" },
+    { "method": "סיכום אשראי", "sourceLabel": "סיכום אשראי", "amount": 5475.6, "count": 72, "role": "tender-summary" }
+  ],
+  "extraAmounts": [
+    { "sourceLabel": "דמי מחזור", "amount": 2064, "role": "extra" },
+    { "sourceLabel": "מצטבר כללי", "amount": 131063.4, "role": "extra" }
+  ]
+}

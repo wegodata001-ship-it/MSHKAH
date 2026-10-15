@@ -159,6 +159,10 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /productCostLinks/{id} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
     match /ingredientPriceHistory/{id} {
       allow read, create: if isAdmin();
       allow update, delete: if false;
@@ -233,7 +237,11 @@ service cloud.firestore {
     }
 
     match /posImports/{id} {
-      allow read, create, update: if isAdmin();
+      allow read: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.kind == 'excel-info'
+        && request.resource.data.infoOnly == true
+        && request.resource.data.financeStatus == 'none';
       allow delete: if false;
     }
 
@@ -242,7 +250,29 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /posColumnMaps/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /posZReports/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && request.resource.data.status == 'draft';
+      allow update: if isAdmin() && resource.data.status == 'draft' && request.resource.data.status == 'draft';
+      allow delete: if false;
+    }
+
+    match /posFinanceEntries/{id} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
     match /stockCounts/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /stockCountSessions/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();
     }

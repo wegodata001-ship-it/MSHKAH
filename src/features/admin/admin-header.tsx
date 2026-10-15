@@ -184,7 +184,10 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
                   {t("admin.profile")}
                 </Link>
                 <button
-                  onClick={() => logout()}
+                  onClick={async () => {
+                    await logout();
+                    window.location.assign(adminPath("login"));
+                  }}
                   className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
                 >
                   <LogOut className="h-4 w-4" />

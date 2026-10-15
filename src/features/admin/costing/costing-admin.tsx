@@ -84,8 +84,10 @@ import { BreakEvenPanel } from "@/features/admin/breakeven/breakeven-panel";
 import { productContribution } from "@/lib/breakeven/compute";
 import {
   subscribeToInventoryMovements,
+  subscribeToPosFinanceEntries,
   subscribeToPosImports,
   subscribeToPosProductMaps,
+  subscribeToPosZReports,
   subscribeToPurchaseInvoices,
   subscribeToPurchasePriceRecords,
   subscribeToSupplierItemMaps,
@@ -95,8 +97,10 @@ import {
 } from "@/services/inventoryService";
 import type {
   InventoryMovement,
+  PosFinanceEntry,
   PosImport,
   PosProductMap,
+  PosZReport,
   PurchaseInvoice,
   PurchasePriceRecord,
   Supplier,
@@ -108,7 +112,7 @@ import { currentStockBase } from "@/lib/inventory/stock";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
-type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "suppliers" | "compare" | "pos-upload" | "pos-maps" | "pos-history";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -127,6 +131,8 @@ export function CostingAdmin() {
   const [priceRecords, setPriceRecords] = useState<PurchasePriceRecord[]>([]);
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [posImports, setPosImports] = useState<PosImport[]>([]);
+  const [posZReports, setPosZReports] = useState<PosZReport[]>([]);
+  const [posFinanceEntries, setPosFinanceEntries] = useState<PosFinanceEntry[]>([]);
   const [posMaps, setPosMaps] = useState<PosProductMap[]>([]);
   const [itemMaps, setItemMaps] = useState<SupplierItemMap[]>([]);
   const [recipes, setRecipes] = useState<DishRecipe[]>([]);
@@ -182,6 +188,8 @@ export function CostingAdmin() {
       subscribeToPurchasePriceRecords(setPriceRecords),
       subscribeToPurchaseInvoices(setInvoices),
       subscribeToPosImports(setPosImports),
+      subscribeToPosZReports(setPosZReports),
+      subscribeToPosFinanceEntries(setPosFinanceEntries),
       subscribeToPosProductMaps(setPosMaps),
       subscribeToSupplierItemMaps(setItemMaps),
     ];
@@ -432,9 +440,9 @@ export function CostingAdmin() {
       id: "pos",
       label: t("admin.inventory.posHub"),
       tabs: [
-        { id: "pos-upload", label: t("admin.inventory.tab.posUpload") },
-        { id: "pos-maps", label: t("admin.inventory.tab.posMaps") },
-        { id: "pos-history", label: t("admin.inventory.tab.posHistory") },
+        { id: "pos-excel", label: t("admin.pos.excelTab") },
+        { id: "pos-z", label: t("admin.pos.zTab") },
+        { id: "pos-history", label: t("admin.pos.historyTab") },
       ],
     },
   ];
@@ -449,6 +457,8 @@ export function CostingAdmin() {
     records: priceRecords,
     invoices,
     posImports,
+    zReports: posZReports,
+    financeEntries: posFinanceEntries,
     maps: posMaps,
     recipes,
     products,
@@ -521,11 +531,14 @@ export function CostingAdmin() {
           products={products}
           vatRate={settings.vatRate ?? 0.18}
           costingVatMode={settings.foodCostVatMode ?? "before"}
+          zReports={posZReports}
+          financeEntries={posFinanceEntries}
+          posImports={posImports}
         />
       )}
 
-      {(tab === "pos-upload" || tab === "pos-maps" || tab === "pos-history") && (
-        <PosSection {...hubProps} pane={tab === "pos-upload" ? "upload" : tab === "pos-maps" ? "maps" : "history"} />
+      {(tab === "pos-excel" || tab === "pos-z" || tab === "pos-history") && (
+        <PosSection {...hubProps} pane={tab === "pos-excel" ? "excel" : tab === "pos-z" ? "z" : "history"} />
       )}
 
       {tab === "dashboard" && (
@@ -832,12 +845,12 @@ function DashboardTab({
                 [selected.recipe],
                 ingredients
               );
-              if (!cm) return null;
+              if (cm.costMissing) return null;
               return (
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                  <Kpi label={t("admin.breakeven.foodCost")} value={formatIls(cm.foodCost)} />
-                  <Kpi label={t("admin.breakeven.extraVariable")} value={formatIls(cm.extraVariable)} />
-                  <Kpi label={t("admin.breakeven.contribution")} value={formatIls(cm.contribution)} />
+                  <Kpi label={t("admin.breakeven.foodCost")} value={cm.foodCost == null ? "—" : formatIls(cm.foodCost)} />
+                  <Kpi label={t("admin.breakeven.extraVariable")} value={cm.extraVariable == null ? "—" : formatIls(cm.extraVariable)} />
+                  <Kpi label={t("admin.breakeven.contribution")} value={cm.contribution == null ? "—" : formatIls(cm.contribution)} />
                   <Kpi label={t("admin.breakeven.cmRatio")} value={cm.contributionRatio == null ? "—" : `${(cm.contributionRatio * 100).toFixed(1)}%`} />
                 </div>
               );

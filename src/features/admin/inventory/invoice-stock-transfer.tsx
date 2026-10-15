@@ -8,6 +8,7 @@ import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-creat
 import { useT } from "@/components/providers/locale-provider";
 import type { CostingIngredient } from "@/lib/costing/types";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
+import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
 import { invoiceStockStatus } from "@/lib/inventory/invoice-finance";
 import { transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
@@ -18,11 +19,13 @@ export function InvoiceStockTransfer({
   onClose,
   onToast,
   skipSupplierWarning,
+  skipFinanceSave,
 }: {
   invoice: PurchaseInvoice;
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
   skipSupplierWarning?: boolean;
+  skipFinanceSave?: boolean;
   onClose: () => void;
   onToast: (message: string, variant?: "success" | "error") => void;
 }) {
@@ -40,7 +43,9 @@ export function InvoiceStockTransfer({
 
   const postStock = async () => {
     setSaving(true);
-    const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys);
+    const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys, {
+      skipFinanceSave,
+    });
     setSaving(false);
     if (!result.success) {
       onToast(result.error === "NO_STOCK_LINES" ? t("admin.finance.noStockLines") : result.error, "error");
@@ -82,6 +87,7 @@ export function InvoiceStockTransfer({
                 <p className="text-sm text-coffee/60">
                   {t("admin.inventory.smart.suggestedMatch")}: {ingredients.find((item) => item.id === line.productId)?.name}
                   {line.matchConfidence != null ? ` · ${Math.round(line.matchConfidence * 100)}%` : ""}
+                  {invoiceLineQuantityBase(line) != null ? ` · ${t("admin.inventory.smart.addBaseQty")}: ${invoiceLineQuantityBase(line)}` : ""}
                 </p>
               ) : (
                 <p className="text-sm text-amber-700">{t("admin.inventory.smart.missingInventory")}</p>

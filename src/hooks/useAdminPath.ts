@@ -3,13 +3,13 @@
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 import {
+  adminExternalHref,
   adminPath,
   getAdminSurface,
-  isLocalDevHost,
+  isLocalAdminHost,
   isMenuHost,
   isPortalHost,
   isViewOnlyMenuSurface,
-  portalUrl,
   shouldHideCustomerChrome,
   type AdminSurface,
 } from "@/lib/domains/host-routing";
@@ -17,6 +17,7 @@ import {
 export function useAdminSurface(): AdminSurface {
   return useMemo(() => {
     if (typeof window === "undefined") return "dev";
+    if (isLocalAdminHost(window.location.hostname)) return "dev";
     return getAdminSurface(window.location.hostname);
   }, []);
 }
@@ -65,14 +66,10 @@ export function useHideCustomerChrome(): boolean {
   }, [pathname]);
 }
 
-/** Admin links from the public storefront (full portal URL in production). */
+/** Admin links from the public storefront. Local/dev stays same-origin `/admin`. */
 export function useAdminExternalHref() {
   return useMemo(() => {
-    return (segment: Parameters<typeof adminPath>[0]) => {
-      if (typeof window !== "undefined" && isLocalDevHost(window.location.hostname)) {
-        return adminPath(segment, "dev");
-      }
-      return portalUrl(adminPath(segment, "portal"));
-    };
+    return (segment: Parameters<typeof adminPath>[0]) =>
+      adminExternalHref(segment, typeof window !== "undefined" ? window.location.hostname : null);
   }, []);
 }

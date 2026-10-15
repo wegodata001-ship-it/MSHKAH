@@ -12,7 +12,7 @@ export const PORTAL_HOST =
 export const MENU_HOST =
   process.env.NEXT_PUBLIC_MENU_HOST?.trim().toLowerCase() || "menu.mishkatcafe.dev";
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
 
 /** Customer storefront paths — not served on admin portal */
 export const CUSTOMER_ONLY_PATH_PREFIXES = [
@@ -43,7 +43,21 @@ export function normalizeHostname(host: string | null | undefined): string {
 }
 
 export function isLocalDevHost(host: string | null | undefined): boolean {
-  return LOCAL_HOSTS.has(normalizeHostname(host));
+  const h = normalizeHostname(host);
+  if (!h) return false;
+  if (LOCAL_HOSTS.has(h)) return true;
+  if (h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^fe80:/i.test(h) || /^fd[0-9a-f]{2}:/i.test(h) || /^fc[0-9a-f]{2}:/i.test(h)) return true;
+  return false;
+}
+
+/** Same-origin /admin is allowed here. Never treat portal/menu production hosts as local. */
+export function isLocalAdminHost(host: string | null | undefined): boolean {
+  if (isPortalHost(host) || isMenuHost(host)) return false;
+  return isLocalDevHost(host);
 }
 
 export function isPortalHost(host: string | null | undefined): boolean {
@@ -68,6 +82,7 @@ export function isPublicProductionHost(host: string | null | undefined): boolean
 }
 
 export function shouldBlockAdminOnHost(host: string | null | undefined): boolean {
+  if (isLocalAdminHost(host)) return false;
   if (isMenuHost(host)) return true;
   return isPublicProductionHost(host);
 }
@@ -190,6 +205,37 @@ export function isViewOnlyMenuSurface(
 }
 
 export function safeAdminReturnPath(raw: string | null, fallback: string): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return fallback;
-  return raw;
+  if (!raw) return fallback;
+  let path = raw.trim();
+  try {
+    if (/^https?:\/\//i.test(path)) {
+      const url = new URL(path);
+      if (isLocalDevHost(url.hostname)) {
+        path = `${url.pathname}${url.search}`;
+      } else if (isPortalHost(url.hostname)) {
+        path = `${toInternalAdminPath(url.pathname)}${url.search}`;
+      } else {
+        return fallback;
+      }
+    }
+  } catch {
+    return fallback;
+  }
+  if (!path.startsWith("/") || path.startsWith("//")) return fallback;
+  return path;
+}
+
+/** Relative /admin href on local/dev; portal URL only on production storefront. */
+export function adminExternalHref(
+  segment: Parameters<typeof adminPath>[0],
+  host?: string | null
+): string {
+  const hostname = host ?? (typeof window !== "undefined" ? window.location.hostname : null);
+  if (isLocalAdminHost(hostname) || (hostname == null && process.env.NODE_ENV === "development")) {
+    return adminPath(segment, "dev");
+  }
+  if (isPortalHost(hostname)) {
+    return adminPath(segment, "portal");
+  }
+  return portalUrl(adminPath(segment, "portal"));
 }

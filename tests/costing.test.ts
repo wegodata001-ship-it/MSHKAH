@@ -92,6 +92,8 @@ describe("recipe line cost", () => {
 describe("ingredient name duplicates", () => {
   it("normalizes spacing and case before matching", () => {
     expect(normalizeIngredientName("  بطاطا  ")).toBe("بطاطا");
+    expect(normalizeIngredientName(undefined)).toBe("");
+    expect(normalizeIngredientName(null)).toBe("");
     const existing = [
       {
         id: "1",

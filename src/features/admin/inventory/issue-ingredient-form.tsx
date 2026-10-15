@@ -16,7 +16,7 @@ import { currentStockBase } from "@/lib/inventory/stock";
 import type { InventoryIssueReason, InventoryMovement } from "@/lib/inventory/types";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Product } from "@/types";
-import { issueInventory } from "@/services/inventoryService";
+import { issueInventory, recordManualStockIn } from "@/services/inventoryService";
 
 function newLine(productId = ""): IssueDraftLine {
   return { key: `issue-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, productId, quantity: null, unit: "unit" };
@@ -45,7 +45,7 @@ export function IssueIngredientForm({
   const { locale } = useLocale();
   const { user } = useAuth();
   const idempotencyKey = useRef(crypto.randomUUID());
-  const [mode, setMode] = useState<"manual" | "recipe">(initialProductId ? "manual" : "manual");
+  const [mode, setMode] = useState<"manual" | "recipe" | "in">(initialProductId ? "manual" : "manual");
   const [lines, setLines] = useState<IssueDraftLine[]>([newLine(initialProductId ?? "")]);
   const [reason, setReason] = useState<InventoryIssueReason>(initialProductId ? "kitchen" : "kitchen");
   const [note, setNote] = useState("");
@@ -59,17 +59,42 @@ export function IssueIngredientForm({
 
   const applyRecipe = () => {
     if (!recipe) return;
-    setLines(recipeIssueDraft(recipe, portions, ingredients));
+    setLines(recipeIssueDraft(recipe, portions, ingredients, recipes));
     setReason("recipe");
   };
 
   const submit = async () => {
     if (busy) return;
-    if (!preview.ok) {
+    if (mode !== "in" && !preview.ok) {
       onToast(t(`admin.inventory.err.${preview.error}`), "error");
       return;
     }
     setBusy(true);
+    if (mode === "in") {
+      const first = lines.find((line) => line.productId && line.quantity);
+      if (!first?.productId || !first.quantity) {
+        setBusy(false);
+        onToast(t("admin.inventory.err.zeroQty"), "error");
+        return;
+      }
+      const result = await recordManualStockIn({
+        productId: first.productId,
+        quantity: first.quantity,
+        unit: first.unit,
+        note: note.trim() || undefined,
+        actor: user?.email || undefined,
+        receivedAt,
+        idempotencyKey: idempotencyKey.current,
+      });
+      setBusy(false);
+      if (!result.success) {
+        onToast(result.error, "error");
+        return;
+      }
+      onToast(t("admin.inventory.stockInDone"));
+      onClose();
+      return;
+    }
     const result = await issueInventory({
       lines,
       ingredients,
@@ -104,6 +129,9 @@ export function IssueIngredientForm({
           </Button>
           <Button type="button" variant={mode === "recipe" ? "turquoise" : "outline"} className="h-8 text-xs" onClick={() => setMode("recipe")}>
             {t("admin.inventory.issueByRecipe")}
+          </Button>
+          <Button type="button" variant={mode === "in" ? "turquoise" : "outline"} className="h-8 text-xs" onClick={() => setMode("in")}>
+            {t("admin.inventory.manualIn")}
           </Button>
         </div>
 

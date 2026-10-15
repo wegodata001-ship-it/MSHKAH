@@ -18,6 +18,8 @@ import {
   subscribeToBreakEvenSettings,
   subscribeToBreakEvenVariableCosts,
 } from "@/services/breakevenService";
+import { subscribeToPosFinanceEntries, subscribeToPosZReports } from "@/services/inventoryService";
+import type { PosFinanceEntry, PosZReport } from "@/lib/inventory/types";
 import { cn } from "@/lib/utils";
 
 export function BreakEvenDashboardWidget() {
@@ -29,6 +31,8 @@ export function BreakEvenDashboardWidget() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [recipes, setRecipes] = useState<DishRecipe[]>([]);
   const [ingredients, setIngredients] = useState<CostingIngredient[]>([]);
+  const [zReports, setZReports] = useState<PosZReport[]>([]);
+  const [financeEntries, setFinanceEntries] = useState<PosFinanceEntry[]>([]);
 
   useEffect(() => {
     const unsubs = [
@@ -38,6 +42,8 @@ export function BreakEvenDashboardWidget() {
       subscribeToOrders({ status: "all" }, setOrders, () => undefined),
       subscribeToDishRecipes(setRecipes),
       subscribeToIngredients(setIngredients),
+      subscribeToPosZReports(setZReports),
+      subscribeToPosFinanceEntries(setFinanceEntries),
     ];
     return () => unsubs.forEach((unsub) => unsub());
   }, []);
@@ -52,14 +58,17 @@ export function BreakEvenDashboardWidget() {
         orders,
         recipes,
         ingredients,
+        financeEntries,
+        zReports,
         from: month.from,
         to: month.to,
       }),
-    [settings, fixed, variable, orders, recipes, ingredients, month]
+    [settings, fixed, variable, orders, recipes, ingredients, financeEntries, zReports, month]
   );
 
   const href = `${adminPath("costing")}?hub=finance&tab=breakeven`;
-  const progress = Math.round((result.progress ?? 0) * 100);
+  const progress = result.progress == null ? null : Math.round(result.progress * 100);
+  const bar = Math.min(100, Math.max(0, progress ?? 0));
 
   return (
     <AdminCard
@@ -81,13 +90,13 @@ export function BreakEvenDashboardWidget() {
       ) : (
         <div className="space-y-3">
           <div>
-            <p className="text-2xl font-semibold">{formatIls(result.breakEvenMonthly ?? 0)}</p>
+            <p className="text-2xl font-semibold">{result.breakEvenMonthly == null ? "—" : formatIls(result.breakEvenMonthly)}</p>
             <p className="text-xs text-coffee/55">{t("admin.breakeven.perMonth")}</p>
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-beige">
             <div
               className={cn("h-full rounded-full", result.achieved ? "bg-emerald-600" : "bg-turquoise")}
-              style={{ width: `${progress}%` }}
+              style={{ width: `${bar}%` }}
             />
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -98,7 +107,13 @@ export function BreakEvenDashboardWidget() {
             <Link href={href} className="rounded-xl bg-beige/40 px-3 py-2">
               <p className="text-xs text-coffee/55">{result.achieved ? t("admin.breakeven.above") : t("admin.breakeven.short")}</p>
               <p className="font-semibold">
-                {formatIls(result.achieved ? result.aboveBreakEven ?? 0 : result.gap ?? 0)}
+                {result.achieved
+                  ? result.aboveBreakEven == null
+                    ? "—"
+                    : formatIls(result.aboveBreakEven)
+                  : result.gap == null
+                    ? "—"
+                    : formatIls(result.gap)}
               </p>
             </Link>
             <Link href={href} className="rounded-xl bg-beige/40 px-3 py-2">

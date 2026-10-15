@@ -25,6 +25,7 @@ export const COLLECTIONS = {
   payments: "payments",
   ingredients: "ingredients",
   dishRecipes: "dishRecipes",
+  productCostLinks: "productCostLinks",
   ingredientPriceHistory: "ingredientPriceHistory",
   costingSettings: "costingSettings",
   costingSnapshots: "costingSnapshots",
@@ -42,7 +43,11 @@ export const COLLECTIONS = {
   inventoryBalances: "inventoryBalances",
   posImports: "posImports",
   posProductMaps: "posProductMaps",
+  posColumnMaps: "posColumnMaps",
+  posZReports: "posZReports",
+  posFinanceEntries: "posFinanceEntries",
   stockCounts: "stockCounts",
+  stockCountSessions: "stockCountSessions",
   reportRuns: "reportRuns",
 } as const;
 
@@ -56,5 +61,6 @@ export const STORAGE_PATHS = {
   modifiers: "modifiers",
   invoices: "purchase-invoices",
   invoiceFiles: "invoice-files",
+  posZReports: "pos-z-reports",
   test: "test",
 } as const;

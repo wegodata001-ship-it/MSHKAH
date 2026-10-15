@@ -1,4 +1,5 @@
 import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
+import { expandRecipeMaterials } from "@/lib/inventory/ingredient-core";
 import { asPurchaseUnit, purchaseQuantityInBase, unitsCompatible } from "@/lib/costing/units";
 import { currentStockBase } from "@/lib/inventory/stock";
 import type { InventoryIssueReason, InventoryMovement } from "@/lib/inventory/types";
@@ -70,23 +71,25 @@ export function validateIssueLines(
 export function recipeIssueDraft(
   recipe: DishRecipe,
   portions: number,
-  _ingredients: CostingIngredient[] = []
+  _ingredients: CostingIngredient[] = [],
+  recipes: DishRecipe[] = []
 ): IssueDraftLine[] {
   const count = Number(portions);
   if (!Number.isFinite(count) || count <= 0) return [];
-  return recipe.ingredients
-    .filter((line) => line.ingredientId && line.quantity > 0)
-    .map((line) => {
-      const unit = asPurchaseUnit(line.unit);
-      const raw = line.quantity * count;
-      const readable = raw >= 1000 && unit === "g" ? { quantity: raw / 1000, unit: "kg" as const } : raw >= 1000 && unit === "ml" ? { quantity: raw / 1000, unit: "liter" as const } : { quantity: raw, unit };
-      return {
-        key: `recipe-${line.ingredientId}`,
-        productId: line.ingredientId,
-        quantity: readable.quantity,
-        unit: readable.unit,
-      };
-    });
+  const materials = recipes.length ? expandRecipeMaterials(recipe, count, recipes) : recipe.ingredients
+    .filter((line) => line.ingredientId && !line.subRecipeId && line.quantity > 0)
+    .map((line) => ({ productId: line.ingredientId, quantity: line.quantity * count, unit: asPurchaseUnit(line.unit) }));
+  return materials.map((line) => {
+    const raw = line.quantity;
+    const unit = line.unit;
+    const readable = raw >= 1000 && unit === "g" ? { quantity: raw / 1000, unit: "kg" as const } : raw >= 1000 && unit === "ml" ? { quantity: raw / 1000, unit: "liter" as const } : { quantity: raw, unit };
+    return {
+      key: `recipe-${line.productId}`,
+      productId: line.productId,
+      quantity: readable.quantity,
+      unit: readable.unit,
+    };
+  });
 }
 
 export function movementAlreadyReversed(movements: InventoryMovement[], movementId: string): boolean {

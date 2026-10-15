@@ -21,6 +21,7 @@ import {
   type BreakEvenVariableCost,
   type BreakEvenVatMode,
   type CostFrequency,
+  type VariableAppliesTo,
   type VariableCostKind,
 } from "@/lib/breakeven/types";
 import { snapshotFromResult } from "@/lib/breakeven/compute";
@@ -42,7 +43,11 @@ function asVatMode(value: unknown): BreakEvenVatMode {
 }
 
 function asKind(value: unknown): VariableCostKind {
-  return value === "percent" || value === "per_order" ? value : "fixed";
+  return value === "percent" || value === "per_order" || value === "per_dish" ? value : "fixed";
+}
+
+function asAppliesTo(value: unknown): VariableAppliesTo | undefined {
+  return value === "card" || value === "all" ? value : undefined;
 }
 
 function mapFixed(id: string, data: Record<string, unknown>): BreakEvenFixedCost {
@@ -67,6 +72,7 @@ function mapVariable(id: string, data: Record<string, unknown>): BreakEvenVariab
     kind: asKind(data.kind),
     amount: asNumber(data.amount),
     frequency: data.frequency ? asFrequency(data.frequency) : undefined,
+    appliesTo: asAppliesTo(data.appliesTo),
     vatMode: asVatMode(data.vatMode),
     vatRate: data.vatRate == null ? null : asNumber(data.vatRate),
     active: data.active !== false,
@@ -139,6 +145,7 @@ export function subscribeToBreakEvenSnapshots(
         return {
           id: item.id,
           monthKey: String(data.monthKey ?? item.id),
+          kind: data.kind === "scenario" ? "scenario" : "saved",
           revenue: data.revenue == null ? null : asNumber(data.revenue),
           fixedCosts: data.fixedCosts == null ? null : asNumber(data.fixedCosts),
           variableCosts: data.variableCosts == null ? null : asNumber(data.variableCosts),
@@ -210,6 +217,7 @@ export async function saveVariableCost(
       kind: input.kind,
       amount: input.amount,
       frequency: input.frequency ?? "monthly",
+      appliesTo: input.appliesTo ?? null,
       vatMode: input.vatMode,
       vatRate: input.vatRate ?? null,
       active: input.active,
@@ -246,15 +254,17 @@ export async function deleteVariableCost(id: string): Promise<ServiceResult<void
 
 export async function saveBreakEvenSnapshot(
   monthKey: string,
-  result: BreakEvenResult
+  result: BreakEvenResult,
+  kind: "saved" | "scenario" = "saved"
 ): Promise<ServiceResult<string>> {
   try {
+    const id = kind === "scenario" ? `${monthKey}-scenario` : monthKey;
     const payload = sanitizeFirestoreData({
-      ...snapshotFromResult(monthKey, result),
+      ...snapshotFromResult(monthKey, result, kind),
       createdAt: nowTimestamp(),
     });
-    await setDoc(doc(getDb(), COLLECTIONS.breakEvenSnapshots, monthKey), payload, { merge: true });
-    return success(monthKey);
+    await setDoc(doc(getDb(), COLLECTIONS.breakEvenSnapshots, id), payload, { merge: true });
+    return success(id);
   } catch (error) {
     return writeFailure(error, "Failed to save snapshot");
   }

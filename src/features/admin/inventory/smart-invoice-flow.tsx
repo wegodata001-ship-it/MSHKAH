@@ -14,8 +14,8 @@ import type { CostingIngredient } from "@/lib/costing/types";
 import { finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
 import { invoiceCreateProductDraft, newInvoiceProductPatch } from "@/lib/inventory/invoice-line-review";
 import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
-import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
-import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
+import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
+import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
@@ -74,6 +74,8 @@ export function useSmartInvoiceEnabled() {
 export function SmartInvoiceFlow({
   ingredients,
   suppliers,
+  maps,
+  offers,
   invoices = [],
   vatRate,
   initialInvoice,
@@ -84,6 +86,8 @@ export function SmartInvoiceFlow({
 }: {
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
+  maps?: SupplierItemMap[];
+  offers?: SupplierOffer[];
   invoices?: PurchaseInvoice[];
   vatRate: number;
   initialInvoice?: PurchaseInvoice | null;
@@ -109,7 +113,6 @@ export function SmartInvoiceFlow({
   const [allowNoSupplier, setAllowNoSupplier] = useState(false);
   const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
   const [moreOpen, setMoreOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState<"source" | "lines">("lines");
   const [focusField, setFocusField] = useState<string | null>(null);
   const linesRef = useRef<InvoiceLinesReviewHandle>(null);
 
@@ -338,7 +341,7 @@ export function SmartInvoiceFlow({
     <div className="min-w-0 space-y-4 overflow-x-hidden">
       <AdminCard title={t("admin.inventory.smart.review")}>
         {existingDoc && (
-          <div className="mb-3 rounded-xl bg-amber-50 px-3 py-3 text-sm text-amber-950">
+          <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950">
             <p className="font-medium">{t("admin.inventory.smart.existingDoc")}</p>
             <p className="mt-1">
               {existingDoc.invoiceNumber || invoice.invoiceNumber || "—"}
@@ -370,26 +373,26 @@ export function SmartInvoiceFlow({
             </Button>
           </div>
         )}
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+        {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
         {retryAfterSeconds != null && (
-          <p className="mb-3 text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
+          <p className="mb-2 text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
         )}
         {reviewState === "incomplete" && (
-          <div className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800">
+          <div className="mb-2 rounded-xl bg-red-50 px-3 py-1.5 text-sm text-red-800">
             <p className="font-medium">{t("admin.inventory.smart.scanIncomplete")}</p>
           </div>
         )}
         {reviewState === "partial" && (
-          <div className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div className="mb-2 rounded-xl bg-amber-50 px-3 py-1.5 text-sm text-amber-900">
             <p className="font-medium">{t("admin.inventory.smart.partialScan")}</p>
           </div>
         )}
         {reviewState === "ready" && !error && (
-          <div className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <div className="mb-2 rounded-xl bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800">
             <p className="font-medium">{t("admin.inventory.smart.readyReview")}</p>
           </div>
         )}
-        <div className="mb-3 grid min-w-0 gap-3 lg:grid-cols-4">
+        <div className="mb-2 grid min-w-0 gap-2 lg:grid-cols-4">
           <Field label={t("admin.costing.supplier")} confidence={invoice.headerConfidence?.supplier}>
             <InvoiceSupplierField
               suppliers={suppliers}
@@ -439,9 +442,9 @@ export function SmartInvoiceFlow({
             <Input className="min-w-0" type="date" value={dueDate} disabled={locked} onChange={(e) => update({ dueDate: e.target.value || undefined })} />
           </Field>
         </div>
-        <details className="mb-3 rounded-2xl bg-beige/30 px-3 py-2" open={moreOpen} onToggle={(e) => setMoreOpen((e.target as HTMLDetailsElement).open)}>
+        <details className="mb-2 rounded-xl bg-beige/30 px-3 py-1.5" open={moreOpen} onToggle={(e) => setMoreOpen((e.target as HTMLDetailsElement).open)}>
           <summary className="cursor-pointer text-sm font-medium">{t("admin.inventory.smart.moreDetails")}</summary>
-          <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+          <div className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">
             <Field label={t("admin.inventory.receivedAt")}>
               <Input className="min-w-0" type="date" value={receivedAt} disabled={locked} onChange={(e) => update({ receivedAt: e.target.value })} />
             </Field>
@@ -468,52 +471,61 @@ export function SmartInvoiceFlow({
             </Button>
           </div>
         </details>
-        <div className="mb-3 flex gap-2 lg:hidden">
-          <FilterTab active={mobileTab === "source"} onClick={() => setMobileTab("source")}>{t("admin.inventory.smart.sourceTab")}</FilterTab>
-          <FilterTab active={mobileTab === "lines"} onClick={() => setMobileTab("lines")}>{t("admin.inventory.smart.linesTab")}</FilterTab>
-        </div>
-        <div className={cn("min-w-0 rounded-2xl bg-beige/30 p-3", mobileTab === "lines" && "hidden lg:block")}>
+        <div className="min-w-0">
           <InvoiceSourcePreview source={invoice.sourceFile} fallbackUrl={preview} fileName={invoice.fileName} />
         </div>
+        <div id="invoice-lines" className="mt-3 min-w-0">
+          <p className="mb-2 text-sm font-semibold text-dark-brown dark:text-warm-white">{t("admin.inventory.smart.lines")}</p>
+          <InvoiceLinesReview
+            ref={linesRef}
+            lines={invoice.lines}
+            ingredients={ingredients}
+            maps={maps}
+            offers={offers}
+            suppliers={suppliers}
+            supplierId={invoice.supplierId}
+            supplierName={invoice.supplierName}
+            vatRate={vatRate}
+            locked={locked || postedDuplicate}
+            onChangeLine={updateLine}
+            onChangeLines={(lines) => update({ lines: lines.map((line) => finalizeInvoiceLine(line, vatRate)) })}
+            onUpdateLine={async (line) => {
+              const next = applyComputedTotals({
+                ...invoice,
+                lines: invoice.lines.map((row) => (row.key === line.key ? finalizeInvoiceLine(line, vatRate) : row)),
+              });
+              setInvoice(next);
+              const saved = await persistDraft(next);
+              if (!saved.success) throw new Error(saved.error || t("admin.inventory.smart.lineUpdateFailed"));
+              setInvoice({ ...next, id: saved.data });
+              if (next.supplierId && line.productId && line.rawName) {
+                await saveSupplierItemMap({
+                  supplierId: next.supplierId,
+                  supplierProductName: line.rawName,
+                  supplierSku: line.sku,
+                  inventoryProductId: line.productId,
+                  purchaseUnit: line.unit ?? undefined,
+                  packageQuantity: line.quantity ?? undefined,
+                  conversion: line.conversionFactor ?? undefined,
+                });
+              }
+            }}
+          />
+          {summary && (
+            <div className="mt-3 grid gap-1 rounded-xl bg-beige/40 p-2.5 text-sm sm:grid-cols-2">
+              <p>{t("admin.inventory.smart.sourceAmounts")}: {formatIls(invoice.sourceNet ?? invoice.netAmount ?? 0)} / {formatIls(invoice.sourceVat ?? invoice.vatAmount ?? 0)} / {formatIls(invoice.sourceGross ?? invoice.grossAmount ?? 0)}</p>
+              <p>{t("admin.inventory.smart.computedAmounts")}: {formatIls(summary.beforeVat)} / {formatIls(summary.vat)} / {formatIls(summary.includingVat)}</p>
+              <p className="font-semibold">{t("admin.finance.linesGross")}: {formatIls(summary.includingVat)}</p>
+              <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
+              {(invoice.validation ?? mismatch).hasMismatch && (
+                <p className="sm:col-span-2 text-amber-800">
+                  {t("admin.inventory.smart.diff")}: {formatIls((invoice.validation?.grossDiff ?? mismatch.grossDiff) ?? (summary.includingVat - (invoice.sourceGross ?? invoice.grossAmount ?? 0)))}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </AdminCard>
-
-      <div className={cn(mobileTab === "source" && "hidden lg:block")}>
-      <AdminCard title={t("admin.inventory.smart.lines")}>
-        <InvoiceLinesReview
-          ref={linesRef}
-          lines={invoice.lines}
-          ingredients={ingredients}
-          supplierName={invoice.supplierName}
-          vatRate={vatRate}
-          locked={locked || postedDuplicate}
-          onChangeLine={updateLine}
-          onChangeLines={(lines) => update({ lines: lines.map((line) => finalizeInvoiceLine(line, vatRate)) })}
-          onUpdateLine={async (line) => {
-            const next = applyComputedTotals({
-              ...invoice,
-              lines: invoice.lines.map((row) => (row.key === line.key ? finalizeInvoiceLine(line, vatRate) : row)),
-            });
-            setInvoice(next);
-            const saved = await persistDraft(next);
-            if (!saved.success) throw new Error(saved.error || t("admin.inventory.smart.lineUpdateFailed"));
-            setInvoice({ ...next, id: saved.data });
-          }}
-        />
-        {summary && (
-          <div className="mt-4 grid gap-1 rounded-2xl bg-beige/40 p-3 text-sm sm:grid-cols-2">
-            <p>{t("admin.inventory.smart.sourceAmounts")}: {formatIls(invoice.sourceNet ?? invoice.netAmount ?? 0)} / {formatIls(invoice.sourceVat ?? invoice.vatAmount ?? 0)} / {formatIls(invoice.sourceGross ?? invoice.grossAmount ?? 0)}</p>
-            <p>{t("admin.inventory.smart.computedAmounts")}: {formatIls(summary.beforeVat)} / {formatIls(summary.vat)} / {formatIls(summary.includingVat)}</p>
-            <p className="font-semibold">{t("admin.finance.linesGross")}: {formatIls(summary.includingVat)}</p>
-            <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
-            {(invoice.validation ?? mismatch).hasMismatch && (
-              <p className="sm:col-span-2 text-amber-800">
-                {t("admin.inventory.smart.diff")}: {formatIls((invoice.validation?.grossDiff ?? mismatch.grossDiff) ?? (summary.includingVat - (invoice.sourceGross ?? invoice.grossAmount ?? 0)))}
-              </p>
-            )}
-          </div>
-        )}
-      </AdminCard>
-      </div>
 
       <div className="flex flex-wrap items-end justify-end gap-3">
         <Button type="button" variant="outline" onClick={() => {
@@ -559,7 +571,7 @@ export function SmartInvoiceFlow({
                   onClick={() => {
                     setFocusField(item.field ?? item.key);
                     if (item.field === "invoiceDate") document.getElementById("invoice-date")?.focus();
-                    if (item.field === "lines") setMobileTab("lines");
+                    if (item.field === "lines") document.getElementById("invoice-lines")?.scrollIntoView({ behavior: "smooth", block: "start" });
                   }}
                 >
                   {t(item.labelKey).replace("{count}", String(item.count ?? 0))}
@@ -691,12 +703,5 @@ function Field({
   );
 }
 
-function FilterTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} className={cn("h-8 rounded-full px-3 text-xs font-medium", active ? "bg-turquoise text-white" : "bg-beige/70 text-coffee/70")}>
-      {children}
-    </button>
-  );
-}
 
 

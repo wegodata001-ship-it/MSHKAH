@@ -20,6 +20,8 @@ export type CostingIngredient = {
   recommendedStock?: number;
   lastSupplierId?: string;
   lastReceivedAt?: string;
+  compareGroupId?: string;
+  compareGroupName?: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -27,6 +29,8 @@ export type CostingIngredient = {
 
 export type RecipeLine = {
   ingredientId: string;
+  /** Optional nested dish recipe. Empty ingredientId when this is a sub-recipe. */
+  subRecipeId?: string;
   quantity: number;
   /** Recipe quantity unit. Existing rows use base units (g / ml / unit). */
   unit: PurchaseUnit | BaseUnit;
@@ -53,6 +57,7 @@ export type DishRecipe = {
   productId: string;
   variantId?: string;
   ingredients: RecipeLine[];
+  yieldPortions?: number;
   overheadSettings?: OverheadSettings;
   targetFoodCostPercent?: number;
   createdAt: string;

@@ -29,7 +29,8 @@ import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
 import type { Product } from "@/types";
-import { reverseInventoryMovement } from "@/services/inventoryService";
+import { mergeIngredients, reverseInventoryMovement } from "@/services/inventoryService";
+import { planIngredientMerge } from "@/lib/inventory/ingredient-core";
 import { cn } from "@/lib/utils";
 
 type DetailTab = "info" | "suppliers" | "ledger" | "history";
@@ -43,6 +44,7 @@ export function InventoryProductDetails({
   recipes,
   products,
   itemMaps,
+  allIngredients,
   locale,
   onIssue,
   onEdit,
@@ -57,6 +59,7 @@ export function InventoryProductDetails({
   recipes: DishRecipe[];
   products: Product[];
   itemMaps: SupplierItemMap[];
+  allIngredients?: CostingIngredient[];
   locale: Locale;
   onIssue: () => void;
   onEdit: () => void;
@@ -67,6 +70,8 @@ export function InventoryProductDetails({
   const { user } = useAuth();
   const [tab, setTab] = useState<DetailTab>("suppliers");
   const [reversing, setReversing] = useState<string | null>(null);
+  const [mergeId, setMergeId] = useState("");
+  const [merging, setMerging] = useState(false);
   const stock = currentStockBase(movements, product.id);
   const displayStock = stockInDisplayUnit(stock, product);
   const productOffers = offers.filter((offer) => offer.productId === product.id && offer.active !== false);
@@ -129,6 +134,54 @@ export function InventoryProductDetails({
               )}
             </div>
             <Button type="button" variant="outline" onClick={onEdit}>{t("common.edit")}</Button>
+            {allIngredients && allIngredients.length > 1 && (
+              <div className="rounded-xl bg-beige/40 p-3">
+                <p className="mb-2 font-medium">{t("admin.inventory.mergeTitle")}</p>
+                <select className="h-9 w-full rounded-lg border px-2 text-sm" value={mergeId} onChange={(e) => setMergeId(e.target.value)}>
+                  <option value="">{t("admin.inventory.mergePick")}</option>
+                  {allIngredients.filter((item) => item.id !== product.id && item.active !== false).map((item) => (
+                    <option key={item.id} value={item.id}>{item.name} · {t(unitLabelKey(item.baseUnit))}</option>
+                  ))}
+                </select>
+                {mergeId && (() => {
+                  const loser = allIngredients.find((item) => item.id === mergeId);
+                  if (!loser) return null;
+                  const plan = planIngredientMerge({
+                    survivor: product,
+                    loser,
+                    survivorBalance: stock,
+                    loserBalance: currentStockBase(movements, loser.id),
+                  });
+                  if (!plan.ok) return <p className="mt-2 text-xs text-red-600">{t(`admin.inventory.merge.${plan.reason}`)}</p>;
+                  return (
+                    <div className="mt-2 space-y-1 text-xs">
+                      <p>{t("admin.inventory.mergeSurvivor")}: {product.name} · {plan.survivorBalance}</p>
+                      <p>{t("admin.inventory.mergeLoser")}: {loser.name} · {plan.loserBalance}</p>
+                      <p>{t("admin.inventory.mergeResult")}: {plan.mergedBalance}</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="mt-2 h-8 text-xs"
+                        disabled={merging}
+                        onClick={async () => {
+                          setMerging(true);
+                          const result = await mergeIngredients({ survivor: product, loser, actor: user?.email });
+                          setMerging(false);
+                          if (!result.success) {
+                            onToast(result.error, "error");
+                            return;
+                          }
+                          onToast(t("admin.inventory.mergeDone"));
+                          onClose();
+                        }}
+                      >
+                        {t("admin.inventory.mergeConfirm")}
+                      </Button>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
 

@@ -1,3 +1,4 @@
+import { ingredientHasCost, recipeIngredientCostReport } from "@/lib/inventory/ingredient-core";
 import { lineRecipeCost } from "@/lib/costing/units";
 import { roundMoney } from "@/lib/costing/money";
 import type {
@@ -14,12 +15,15 @@ export function recipeIngredientCost(
 ): number {
   let total = 0;
   for (const line of lines) {
+    if (line.subRecipeId) continue;
     const ingredient = ingredients.get(line.ingredientId);
-    if (!ingredient) continue;
+    if (!ingredient || !ingredientHasCost(ingredient)) continue;
     total += lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit);
   }
   return total;
 }
+
+export { ingredientHasCost, recipeIngredientCostReport };
 
 export function grossProfit(sellingPrice: number, ingredientCost: number): number | null {
   if (!Number.isFinite(sellingPrice) || !Number.isFinite(ingredientCost)) return null;

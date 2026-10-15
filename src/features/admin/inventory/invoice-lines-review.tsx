@@ -9,6 +9,11 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { formatIls } from "@/lib/costing/money";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import {
+  assignLinesToIngredient,
+  invoicePriceIncrease,
+  packNeedsCompletion,
+} from "@/lib/inventory/ingredient-core";
+import {
   clearInvoiceMatchPatch,
   confirmInvoiceMatchPatch,
   confirmSafeInvoiceMatches,
@@ -23,7 +28,8 @@ import {
 import { finalizeInvoiceLine, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
 import { invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
 import { inventoryCategories } from "@/lib/inventory/product-match";
-import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
+import type { PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
+import { MaterialGroupSuggest } from "@/features/admin/inventory/material-group-suggest";
 import { createIngredient } from "@/services/costingService";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +41,10 @@ export type InvoiceLinesReviewHandle = {
 export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   lines: PurchaseInvoiceLine[];
   ingredients: CostingIngredient[];
+  maps?: SupplierItemMap[];
+  offers?: SupplierOffer[];
+  suppliers?: Supplier[];
+  supplierId?: string;
   supplierName?: string;
   vatRate: number;
   locked?: boolean;
@@ -44,6 +54,10 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
 }>(function InvoiceLinesReview({
   lines,
   ingredients,
+  maps,
+  offers,
+  suppliers,
+  supplierId,
   supplierName,
   vatRate,
   locked,
@@ -62,6 +76,8 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkId, setBulkId] = useState("");
 
   useEffect(() => {
     setDrafts((current) => {
@@ -152,7 +168,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={query}
@@ -178,12 +194,38 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
             </div>
           )}
         </div>
+        {selected.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <select className="h-8 min-w-[10rem] rounded-lg border px-2 text-xs" value={bulkId} onChange={(e) => setBulkId(e.target.value)}>
+              <option value="">{t("admin.inventory.smart.bulkAssign")}</option>
+              {ingredients.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 text-xs"
+              disabled={locked || !bulkId}
+              onClick={() => {
+                const product = ingredients.find((item) => item.id === bulkId);
+                if (!product) return;
+                onChangeLines(assignLinesToIngredient(lines.map((line) => drafts[line.key] ?? line), selected, product));
+                setDrafts({});
+                setSelected([]);
+              }}
+            >
+              {t("admin.inventory.smart.applyBulk")} · {selected.length}
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/15 lg:block">
         <table className="w-full min-w-[1080px] border-collapse text-sm">
           <thead className="bg-beige/50 text-xs text-coffee/60">
-            <tr className="h-10">
+            <tr className="h-8">
+              <th className="w-8 px-2" />
               <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colInvoice")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colMatch")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.qty")}</th>
@@ -201,7 +243,13 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 <LineEditor
                   key={line.key}
                   line={line}
+                  selected={selected.includes(line.key)}
+                  onToggleSelect={() => setSelected((current) => current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key])}
                   ingredients={ingredients}
+                  maps={maps}
+                  offers={offers}
+                  suppliers={suppliers}
+                  supplierId={supplierId}
                   locked={locked}
                   saving={savingKey === line.key}
                   saved={savedKey === line.key}
@@ -223,10 +271,16 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
         {visible.map((base) => {
           const line = current(base.key)!;
           return (
-            <div key={line.key} className="rounded-2xl border border-beige-dark/15 p-3">
+            <div key={line.key} className="rounded-xl border border-beige-dark/15 p-2.5">
               <LineEditor
                 line={line}
+                selected={selected.includes(line.key)}
+                onToggleSelect={() => setSelected((current) => current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key])}
                 ingredients={ingredients}
+                maps={maps}
+                offers={offers}
+                suppliers={suppliers}
+                supplierId={supplierId}
                 locked={locked}
                 saving={savingKey === line.key}
                 saved={savedKey === line.key}
@@ -249,7 +303,13 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
 
 function LineEditor({
   line,
+  selected,
+  onToggleSelect,
   ingredients,
+  maps,
+  offers,
+  suppliers,
+  supplierId,
   locked,
   saving,
   saved,
@@ -263,7 +323,13 @@ function LineEditor({
   card,
 }: {
   line: PurchaseInvoiceLine;
+  selected?: boolean;
+  onToggleSelect?: () => void;
   ingredients: CostingIngredient[];
+  maps?: SupplierItemMap[];
+  offers?: SupplierOffer[];
+  suppliers?: Supplier[];
+  supplierId?: string;
   locked?: boolean;
   saving: boolean;
   saved: boolean;
@@ -282,6 +348,8 @@ function LineEditor({
   const [conversion, setConversion] = useState(false);
   const match = ingredients.find((item) => item.id === line.productId);
   const care = invoiceLineCareStatus(line);
+  const needsPack = packNeedsCompletion(line, match?.baseUnit);
+  const priceUp = invoicePriceIncrease(line);
   const categories = inventoryCategories(ingredients);
   const extras = (openCreate || conversion) && (
     <div className="mt-2 rounded-xl bg-beige/40 p-3">
@@ -311,10 +379,15 @@ function LineEditor({
     return (
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-2">
-          <p className="font-medium">{line.originalDescription || line.rawName}</p>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
+            <p className="font-medium">{line.originalDescription || line.rawName}</p>
+          </label>
           <CareBadge status={care} />
         </div>
-        <MatchSelect line={line} ingredients={ingredients} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
+        {priceUp && <p className="text-xs text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+        {needsPack && <p className="text-xs text-amber-800">{t("admin.inventory.smart.needPack")}</p>}
+        <MatchSelect line={line} ingredients={ingredients} maps={maps} offers={offers} suppliers={suppliers} supplierId={supplierId} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
             <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.qty")}</span>
@@ -345,31 +418,36 @@ function LineEditor({
 
   return (
     <>
-      <tr className="border-t border-beige-dark/10 align-top">
-        <td className="max-w-[12rem] px-2 py-2">
+      <tr className="border-t border-beige-dark/10 align-middle">
+        <td className="px-2 py-1.5">
+          <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
+        </td>
+        <td className="max-w-[12rem] px-2 py-1.5">
           <p className="font-medium leading-5">{line.originalDescription || line.rawName}</p>
           <CareBadge status={care} />
+          {priceUp && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+          {needsPack && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.needPack")}</p>}
         </td>
-        <td className="px-2 py-2">
-          <MatchSelect line={line} ingredients={ingredients} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
+        <td className="px-2 py-1.5">
+          <MatchSelect line={line} ingredients={ingredients} maps={maps} offers={offers} suppliers={suppliers} supplierId={supplierId} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
         </td>
-        <td className="px-2 py-2"><Input type="number" min="0" className="h-9" value={line.quantity ?? ""} disabled={locked} onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })} /></td>
-        <td className="px-2 py-2">
-          <select className="h-9 w-full rounded-xl border px-2 text-sm" value={line.unit ?? ""} disabled={locked} onChange={(e) => onEdit({ unit: (e.target.value || null) as PurchaseUnit | null })}>
+        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.quantity ?? ""} disabled={locked} onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })} /></td>
+        <td className="px-2 py-1.5">
+          <select className="h-8 w-full rounded-lg border px-2 text-sm" value={line.unit ?? ""} disabled={locked} onChange={(e) => onEdit({ unit: (e.target.value || null) as PurchaseUnit | null })}>
             <option value="">{t("admin.inventory.smart.unitPick")}</option>
             {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
           </select>
         </td>
-        <td className="px-2 py-2"><Input type="number" min="0" className="h-9" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })} /></td>
-        <td className="px-2 py-2"><Input type="number" min="0" className="h-9" value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""} disabled={locked} onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })} /></td>
-        <td className="px-2 py-2 tabular-nums leading-9">{line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</td>
-        <td className="px-2 py-2">
+        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })} /></td>
+        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""} disabled={locked} onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })} /></td>
+        <td className="px-2 py-1.5 tabular-nums leading-8">{line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</td>
+        <td className="px-2 py-1.5">
           <RowActions saving={saving} saved={saved} error={error} locked={locked} onUpdate={onUpdate} onToggleConversion={() => setConversion((value) => !value)} />
         </td>
       </tr>
       {(openCreate || conversion) && (
         <tr>
-          <td colSpan={8} className="px-2 pb-3">{extras}</td>
+          <td colSpan={9} className="px-2 pb-3">{extras}</td>
         </tr>
       )}
     </>
@@ -379,12 +457,20 @@ function LineEditor({
 function MatchSelect({
   line,
   ingredients,
+  maps,
+  offers,
+  suppliers,
+  supplierId,
   locked,
   onEdit,
   onCreate,
 }: {
   line: PurchaseInvoiceLine;
   ingredients: CostingIngredient[];
+  maps?: SupplierItemMap[];
+  offers?: SupplierOffer[];
+  suppliers?: Supplier[];
+  supplierId?: string;
   locked?: boolean;
   onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
   onCreate: () => void;
@@ -419,6 +505,35 @@ function MatchSelect({
         </button>
       ))}
       <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={onCreate}>+ {t("admin.inventory.smart.createInline")}</button>
+      <MaterialGroupSuggest
+        line={{
+          name: line.rawName,
+          sku: line.sku,
+          barcode: line.barcode,
+          productId: line.productId,
+          matchKind: line.matchKind,
+          matchConfirmed: line.matchConfirmed,
+          quantity: line.quantity,
+          unit: line.unit,
+          conversionFactor: line.conversionFactor,
+          lineNet: line.lineNet ?? line.netAmount,
+          lineGross: line.lineGross ?? line.grossAmount,
+          unitPrice: line.unitPrice,
+          vatType: line.vatType,
+        }}
+        ingredients={ingredients}
+        maps={maps}
+        offers={offers}
+        suppliers={suppliers}
+        supplierId={supplierId}
+        locked={locked}
+        onAssignSame={(item) => onEdit(confirmInvoiceMatchPatch(item))}
+        onCreateUnified={(name) => {
+          onEdit({ rawName: line.rawName, category: name });
+          onCreate();
+        }}
+        onKeepSeparate={() => onEdit({ matchKind: line.productId ? line.matchKind : "new", matchConfirmed: Boolean(line.productId) })}
+      />
     </div>
   );
 }

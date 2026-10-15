@@ -66,11 +66,11 @@ export function unrecognizedScannedSupplier(
 }
 
 export function matchInventoryProduct(
-  line: { name: string; sku?: string | null; barcode?: string | null },
+  line: { name: string; sku?: string | null; barcode?: string | null; unit?: string | null; conversionFactor?: number | null; quantity?: number | null },
   ingredients: CostingIngredient[],
   maps: SupplierItemMap[],
   supplierId?: string
-): { item?: CostingIngredient; kind: PurchaseInvoiceLine["matchKind"]; alternatives: CostingIngredient[] } {
+): { item?: CostingIngredient; kind: PurchaseInvoiceLine["matchKind"]; alternatives: CostingIngredient[]; packConflict?: boolean } {
   const mapped = maps.find((item) => {
     if (supplierId && item.supplierId !== supplierId) return false;
     if (line.sku && item.supplierSku && item.supplierSku === line.sku) return true;
@@ -78,7 +78,12 @@ export function matchInventoryProduct(
   });
   if (mapped) {
     const item = ingredients.find((row) => row.id === mapped.inventoryProductId);
-    if (item) return { item, kind: "mapped", alternatives: [] };
+    if (item) {
+      const packConflict =
+        (mapped.purchaseUnit && line.unit && mapped.purchaseUnit !== line.unit) ||
+        (mapped.conversion != null && line.conversionFactor != null && Math.abs(mapped.conversion - line.conversionFactor) > 0.0001);
+      return { item, kind: "mapped", alternatives: [], packConflict };
+    }
   }
   if (line.barcode) {
     const byBarcode = ingredients.filter((item) => item.barcode && item.barcode === line.barcode);
@@ -177,6 +182,7 @@ export function buildReviewedInvoice(input: {
     if (!match.item) rowStatus = match.kind === "new" ? "new" : "unmapped";
     else if (!confirmed) rowStatus = "review";
     else if (!unit || qty == null || unitPrice == null || !detectedVat) rowStatus = "review";
+    else if (match.packConflict) rowStatus = "review";
     else if (change != null && Math.abs(change) >= PRICE_ANOMALY_RATIO) rowStatus = "price-anomaly";
     else if (needsReview(confidence) || needsReview(matchConfidence)) rowStatus = "review";
     return finalizeInvoiceLine(
@@ -207,9 +213,9 @@ export function buildReviewedInvoice(input: {
         matchKind: match.kind,
         sku: line.sku ?? undefined,
         barcode: line.barcode ?? undefined,
-        conversionNote: line.conversionNote ?? undefined,
+        conversionNote: match.packConflict ? "pack-conflict" : line.conversionNote ?? undefined,
         conversionFactor: line.conversionFactor,
-        needsReview: rowStatus !== "matched" || vatType === "unknown",
+        needsReview: rowStatus !== "matched" || vatType === "unknown" || Boolean(match.packConflict),
         rowStatus: vatType === "unknown" && rowStatus === "matched" ? "review" : rowStatus,
         previousNormalized,
         newNormalized: normalized,

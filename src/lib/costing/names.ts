@@ -1,6 +1,7 @@
 import type { CostingIngredient } from "@/lib/costing/types";
 
-export function normalizeIngredientName(name: string): string {
+export function normalizeIngredientName(name: unknown): string {
+  if (typeof name !== "string") return "";
   return name
     .normalize("NFKC")
     .trim()

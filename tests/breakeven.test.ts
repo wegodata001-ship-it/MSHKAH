@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   amountOnVatBasis,
+  approvedPeriodSales,
   computeBreakEven,
   foodCostFromSales,
   monthlyEquivalent,
@@ -12,6 +13,7 @@ import {
   snapshotChange,
   snapshotFromResult,
 } from "@/lib/breakeven/compute";
+import type { PosFinanceEntry, PosImport, PosZReport } from "@/lib/inventory/types";
 import type { BreakEvenFixedCost, BreakEvenVariableCost } from "@/lib/breakeven/types";
 import { ADMIN_TRANSLATIONS } from "@/data/admin-translations";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
@@ -293,6 +295,10 @@ describe("i18n and wiring", () => {
     expect(ADMIN_TRANSLATIONS.he["admin.breakeven.cannot"]).toBeTruthy();
     expect(ADMIN_TRANSLATIONS.ar["admin.breakeven.cannot"]).toBeTruthy();
     expect(ADMIN_TRANSLATIONS.en["admin.breakeven.cannot"]).toBeTruthy();
+    expect(ADMIN_TRANSLATIONS.he["admin.breakeven.question"]).toContain("כמה צריך למכור");
+    expect(ADMIN_TRANSLATIONS.he["admin.breakeven.missing.mix"]).toBeTruthy();
+    expect(ADMIN_TRANSLATIONS.he["admin.breakeven.costMissing"]).toBe("עלות חסרה");
+    expect(ADMIN_TRANSLATIONS.he["admin.breakeven.whatIf"]).toBe("מה יקרה אם…");
   });
 
   it("adds the finance tab, dashboard widget, and PDF report type", () => {
@@ -304,5 +310,183 @@ describe("i18n and wiring", () => {
     expect(costing).toContain("productContribution");
     expect(dash).toContain("BreakEvenDashboardWidget");
     expect(types).toContain('"breakeven"');
+  });
+});
+
+describe("missing mix vs negative margin", () => {
+  it("does not claim there is no positive contribution when a dish has one but mix is missing", () => {
+    const result = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "including", vatRate: 0.18, alertGap: 500 },
+      fixed: [fixed(30000)],
+      variable: [],
+      orders: [],
+      recipes: [croissantRecipe],
+      ingredients: [flour],
+      products: [{ id: "croissant", name: "קרואסון", price: 39 }],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(result.missing).toContain("mix");
+    expect(result.missing).not.toContain("margin");
+    expect(result.mixSource).toBe("estimate");
+    expect(result.contributionRatio).toBeGreaterThan(0);
+    expect(result.breakEvenMonthly).not.toBeNull();
+    expect(result.breakEvenMonthly).not.toBe(0);
+  });
+});
+
+describe("approved zero vs missing", () => {
+  it("treats an active zero fixed cost as approved zero, not missing data", () => {
+    const result = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "including", vatRate: 0.18, alertGap: 500 },
+      fixed: [fixed(0)],
+      variable: [variable(0, "fixed")],
+      orders: [],
+      recipes: [],
+      ingredients: [],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(result.fixedMonthly).toBe(0);
+    expect(result.hasApprovedZeroFixed).toBe(true);
+    expect(result.missing).not.toContain("fixed");
+    expect(result.missing).toContain("sales");
+  });
+});
+
+describe("finance sales without overlap", () => {
+  it("does not add website sales and a posted Z amount for the same day", () => {
+    const sales = approvedPeriodSales({
+      orders: [order(1000, { createdAt: "2026-10-05T10:00:00.000Z", paidAt: "2026-10-05T10:00:00.000Z" })],
+      from: "2026-10-01",
+      to: "2026-10-31",
+      financeEntries: [
+        {
+          id: "fe1",
+          zReportId: "z1",
+          businessDate: "2026-10-05",
+          amount: 1000,
+          vatBasis: "including",
+          postedAt: "2026-10-05",
+        } satisfies PosFinanceEntry,
+      ],
+      zReports: [
+        {
+          id: "z1",
+          status: "posted",
+          businessDate: "2026-10-05",
+          periodFrom: "2026-10-05",
+          periodTo: "2026-10-05",
+          salesIncludingVat: 1000,
+          createdAt: "2026-10-05",
+        } as PosZReport,
+      ],
+    });
+    expect(sales.revenue).toBe(1000);
+    expect(sales.sources).toEqual(["z"]);
+  });
+
+  it("does not treat POS excel revenue as extra income", () => {
+    const result = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "including", vatRate: 0.18, alertGap: 500 },
+      fixed: [fixed(30000)],
+      variable: [variable(0.4, "percent")],
+      orders: [],
+      recipes: [croissantRecipe],
+      ingredients: [flour],
+      products: [{ id: "croissant", name: "קרואסון", price: 39 }],
+      posImports: [
+        {
+          id: "ex1",
+          kind: "excel-info",
+          fileName: "pos.xlsx",
+          fileHash: "x",
+          source: "pos-file",
+          period: "2026-10",
+          periodFrom: "2026-10-01",
+          periodTo: "2026-10-31",
+          status: "approved",
+          lines: [{ key: "1", posCode: "c", posName: "קרואסון", quantity: 10, menuProductId: "croissant", matchKind: "exact", reportedRevenue: 50000 }],
+          createdAt: "2026-10-05",
+        } as PosImport,
+      ],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(result.revenue).toBeNull();
+    expect(result.mixSource).toBe("approved");
+    expect(result.breakEvenMonthly).not.toBeNull();
+  });
+});
+
+describe("card fee applies only to card tenders", () => {
+  it("does not apply a card fee to all sales when the card share is unknown", () => {
+    const result = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "including", vatRate: 0.18, alertGap: 500 },
+      fixed: [fixed(30000)],
+      variable: [variable(10, "percent", { name: "עמלת אשראי %", appliesTo: "card" })],
+      orders: [order(1000, { createdAt: "2026-10-02T08:00:00.000Z" })],
+      recipes: [],
+      ingredients: [],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(result.variableTotal).toBeNull();
+    expect(result.cardFeeSkipped).toBe(true);
+  });
+
+  it("applies a card fee only to card revenue", () => {
+    const result = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "including", vatRate: 0.18, alertGap: 500 },
+      fixed: [fixed(30000)],
+      variable: [variable(10, "percent", { name: "עמלת אשראי %", appliesTo: "card" })],
+      orders: [
+        order(800, { id: "cash", createdAt: "2026-10-02T08:00:00.000Z", paymentMethod: "מזומן" }),
+        order(200, { id: "card", createdAt: "2026-10-02T09:00:00.000Z", paymentMethod: "אשראי" }),
+      ],
+      recipes: [],
+      ingredients: [],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(result.revenue).toBe(1000);
+    expect(result.variableTotal).toBeCloseTo(20, 6);
+    expect(result.cardFeeSkipped).toBe(false);
+  });
+});
+
+describe("missing dish cost", () => {
+  it("marks a dish without a recipe as cost missing, not zero", () => {
+    const row = productContribution("soup", "מרק", 42, [], []);
+    expect(row.costMissing).toBe(true);
+    expect(row.foodCost).toBeNull();
+    expect(row.contribution).toBeNull();
+  });
+});
+
+describe("recipe consumption is not a second purchase cost", () => {
+  it("counts only recipe usage on sold items", () => {
+    const sale = order(39, {
+      items: [{ productId: "croissant", productName: "קרואסון", quantity: 2, price: 39 }],
+    });
+    expect(foodCostFromSales([sale], [croissantRecipe], [flour])).toBeCloseTo(22.4, 8);
+  });
+});
+
+describe("empty result is never a computed zero", () => {
+  it("leaves the break-even target null when nothing was entered", () => {
+    const empty = computeBreakEven({
+      settings: { operatingDays: 26, vatBasis: "before", vatRate: 0.18, alertGap: 500 },
+      fixed: [],
+      variable: [],
+      orders: [],
+      recipes: [],
+      ingredients: [],
+      from: "2026-10-01",
+      to: "2026-10-31",
+    });
+    expect(empty.breakEvenMonthly).toBeNull();
+    expect(empty.revenue).toBeNull();
+    expect(empty.missing).not.toContain("margin");
   });
 });

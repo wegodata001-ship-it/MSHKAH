@@ -30,6 +30,9 @@ const GROUPS: string[][] = [
   ["bread", "לחם", "خبز"],
   ["lettuce", "חסה", "خس"],
   ["pickle", "מלפפון חמוץ", "خيار مخلل"],
+  ["nutella", "נוטלה", "نوتيلا", "نوتيلا"],
+  ["cola", "קולה", "كولا", "coca cola", "קוקה קולה"],
+  ["pan swiss", "פאן סוויס", "بان سويس"],
 ];
 
 const ALIAS_TO_GROUP = new Map<string, number>();

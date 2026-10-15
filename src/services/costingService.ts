@@ -29,6 +29,7 @@ import {
   type PurchaseUnit,
   type RecipeLine,
 } from "@/lib/costing/types";
+import type { ProductCostKind, ProductCostLink } from "@/lib/breakeven/types";
 
 const SETTINGS_DOC = "default";
 
@@ -57,6 +58,8 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
     recommendedStock: data.recommendedStock != null ? asNumber(data.recommendedStock) : undefined,
     lastSupplierId: data.lastSupplierId ? String(data.lastSupplierId) : undefined,
     lastReceivedAt: data.lastReceivedAt ? timestampToIso(data.lastReceivedAt as never) : undefined,
+    compareGroupId: data.compareGroupId ? String(data.compareGroupId) : undefined,
+    compareGroupName: data.compareGroupName ? String(data.compareGroupName) : undefined,
     active: data.active !== false,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
@@ -470,4 +473,125 @@ export async function writeIngredientImpactSnapshots(input: {
       });
     })
   );
+}
+
+function mapCostLink(id: string, data: Record<string, unknown>): ProductCostLink {
+  const kind = data.kind;
+  return {
+    id,
+    productId: String(data.productId ?? id),
+    kind: kind === "resale" || kind === "combo" || kind === "estimate" ? kind : "recipe",
+    recipeId: data.recipeId ? String(data.recipeId) : undefined,
+    ingredientId: data.ingredientId ? String(data.ingredientId) : undefined,
+    packQuantity: data.packQuantity == null ? null : asNumber(data.packQuantity),
+    packUnit: data.packUnit ? (data.packUnit as PurchaseUnit) : undefined,
+    estimateAmount: data.estimateAmount == null ? null : asNumber(data.estimateAmount),
+    estimateNote: data.estimateNote ? String(data.estimateNote) : undefined,
+    estimateAt: data.estimateAt ? String(data.estimateAt) : undefined,
+    updatedAt: timestampToIso(data.updatedAt as never),
+  };
+}
+
+export function subscribeToProductCostLinks(
+  onData: (items: ProductCostLink[]) => void,
+  onError?: (message: string) => void
+): Unsubscribe {
+  return onSnapshot(
+    collection(getDb(), COLLECTIONS.productCostLinks),
+    (snap) => onData(snap.docs.map((item) => mapCostLink(item.id, item.data() as Record<string, unknown>))),
+    (error) => onError?.(error.message)
+  );
+}
+
+export async function saveProductCostLink(
+  input: Omit<ProductCostLink, "id" | "updatedAt"> & { id?: string }
+): Promise<ServiceResult<ProductCostLink>> {
+  try {
+    const id = input.id || input.productId;
+    if (!id) return failure(new ServiceError("productId required", "VALIDATION"));
+    const now = nowTimestamp();
+    const payload = sanitizeFirestoreData({
+      productId: input.productId,
+      kind: input.kind,
+      recipeId: input.recipeId ?? null,
+      ingredientId: input.ingredientId ?? null,
+      packQuantity: input.packQuantity ?? null,
+      packUnit: input.packUnit ?? null,
+      estimateAmount: input.estimateAmount ?? null,
+      estimateNote: input.estimateNote ?? null,
+      estimateAt: input.estimateAt ?? null,
+      updatedAt: now,
+    });
+    await setDoc(doc(getDb(), COLLECTIONS.productCostLinks, id), payload, { merge: true });
+    return success(mapCostLink(id, { ...payload, updatedAt: now } as Record<string, unknown>));
+  } catch (error) {
+    return writeFailure(error, "Failed to save product cost link");
+  }
+}
+
+export async function completeProductCost(input: {
+  productId: string;
+  kind: ProductCostKind;
+  sellingPrice?: number;
+  ingredients: CostingIngredient[];
+  existingRecipeId?: string;
+  lines?: RecipeLine[];
+  ingredientId?: string;
+  packPrice?: number;
+  packQuantity?: number;
+  packUnit?: PurchaseUnit;
+  estimateAmount?: number;
+  estimateNote?: string;
+}): Promise<ServiceResult<{ recipeId?: string }>> {
+  try {
+    let recipeId = input.existingRecipeId;
+    if (input.kind !== "estimate") {
+      const lines = input.lines?.length
+        ? input.lines
+        : input.ingredientId
+          ? [{ ingredientId: input.ingredientId, quantity: 1, unit: input.packUnit ?? "unit" }]
+          : [];
+      if (!lines.length) return failure(new ServiceError("lines required", "VALIDATION"));
+      const saved = await saveDishRecipe(
+        { id: recipeId, productId: input.productId, ingredients: lines },
+        { sellingPrice: input.sellingPrice, ingredients: input.ingredients }
+      );
+      if (!saved.success) return saved;
+      recipeId = saved.data.id;
+    }
+    if (input.ingredientId && input.packQuantity && input.packPrice != null) {
+      const current = input.ingredients.find((item) => item.id === input.ingredientId);
+      if (current) {
+        await updateIngredient(input.ingredientId, {
+          name: current.name,
+          category: current.category,
+          purchasePrice: input.packPrice,
+          purchaseQuantity: input.packQuantity,
+          purchaseUnit: input.packUnit ?? current.purchaseUnit,
+          supplier: current.supplier,
+          notes: current.notes,
+          barcode: current.barcode,
+          minStock: current.minStock,
+          recommendedStock: current.recommendedStock,
+          active: current.active,
+        });
+      }
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const link = await saveProductCostLink({
+      productId: input.productId,
+      kind: input.kind,
+      recipeId,
+      ingredientId: input.ingredientId,
+      packQuantity: input.packQuantity,
+      packUnit: input.packUnit,
+      estimateAmount: input.kind === "estimate" ? input.estimateAmount : null,
+      estimateNote: input.kind === "estimate" ? input.estimateNote : undefined,
+      estimateAt: input.kind === "estimate" ? today : undefined,
+    });
+    if (!link.success) return link;
+    return success({ recipeId });
+  } catch (error) {
+    return writeFailure(error, "Failed to complete product cost");
+  }
 }

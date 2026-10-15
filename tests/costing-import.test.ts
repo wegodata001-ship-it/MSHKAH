@@ -167,6 +167,29 @@ describe("product matching", () => {
     const clone = { ...burger, id: "prod-2", name_en: "Crispy burger" };
     expect(matchProduct("", "Crispy burger", [burger, clone]).alternatives).toHaveLength(2);
   });
+
+  it("skips missing catalog names and does not treat two empty names as a match", () => {
+    const broken = {
+      ...burger,
+      id: "broken",
+      name_he: undefined as unknown as string,
+      name_ar: undefined as unknown as string,
+      name_en: "",
+    };
+    expect(matchProduct("", "ברגר", [broken]).kind).toBe("none");
+    expect(matchProduct("", undefined, [broken, burger]).kind).toBe("none");
+    expect(matchProduct("", "", [burger]).item).toBeUndefined();
+    expect(matchProduct("", "Crispy burger", [broken, burger]).item?.id).toBe("prod-burger");
+    expect(
+      matchProduct("", "חומוס", [{ id: "camel", nameHe: "חומוס", nameAr: "حمص", nameEn: "Hummus" } as unknown as typeof burger]).item?.id
+    ).toBe("camel");
+    expect(
+      matchProduct("", "כינוי", [
+        { ...burger, id: "aliased", aliases: [undefined, "", "כינוי"] } as unknown as typeof burger,
+      ]).item?.id
+    ).toBe("aliased");
+    expect(matchProduct("", "", [{ ...burger, aliases: ["", undefined] } as unknown as typeof burger]).kind).toBe("none");
+  });
 });
 
 describe("workbook and price protection", () => {

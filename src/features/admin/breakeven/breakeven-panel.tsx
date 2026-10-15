@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, Save, Target, Trash2 } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { CheckCircle2, ChevronDown, Pencil, Plus, Search, Target, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT, useLocale } from "@/components/providers/locale-provider";
 import { AdminCard } from "@/features/admin/components/admin-card";
-import { AdminEmptyState } from "@/features/admin/components/admin-empty-state";
+import { adminKpiCard, adminTableHeader, adminTableRow } from "@/features/admin/components/admin-styles";
 import { formatIls, formatPercent } from "@/lib/costing/money";
 import {
   computeBreakEven,
+  inferredAppliesTo,
   monthBounds,
   monthlyEquivalent,
   productContribution,
@@ -27,9 +28,11 @@ import {
   type BreakEvenVariableCost,
   type BreakEvenVatMode,
   type CostFrequency,
+  type VariableAppliesTo,
   type VariableCostKind,
 } from "@/lib/breakeven/types";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
+import type { PosFinanceEntry, PosImport, PosZReport } from "@/lib/inventory/types";
 import type { Order, Product } from "@/types";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import { subscribeToOrders } from "@/services/orderService";
@@ -45,9 +48,13 @@ import {
   subscribeToBreakEvenSnapshots,
   subscribeToBreakEvenVariableCosts,
 } from "@/services/breakevenService";
+import { subscribeToProductCostLinks } from "@/services/costingService";
+import type { ProductCostLink } from "@/lib/breakeven/types";
+import { CostCompletePanel } from "@/features/admin/breakeven/cost-complete-row";
 import { cn } from "@/lib/utils";
 
 type Period = "today" | "week" | "month" | "custom";
+type DishSort = "name" | "price" | "contribution" | "ratio";
 
 function rangeFor(period: Period, customFrom: string, customTo: string, now = new Date()) {
   if (period === "custom" && customFrom && customTo) return { from: customFrom, to: customTo };
@@ -71,18 +78,48 @@ function fill(template: string, vars: Record<string, string>) {
   return Object.entries(vars).reduce((text, [key, value]) => text.replaceAll(`{${key}}`, value), template);
 }
 
+function formatFullDate(iso: string, locale: string) {
+  const loc = locale === "ar" ? "ar" : locale === "en" ? "en-GB" : "he-IL";
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(loc, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function monthFromKey(key: string) {
+  const [year, month] = key.split("-").map(Number);
+  const y = year || new Date().getFullYear();
+  const m = month || 1;
+  const last = new Date(y, m, 0).getDate();
+  return {
+    from: `${y}-${String(m).padStart(2, "0")}-01`,
+    to: `${y}-${String(m).padStart(2, "0")}-${String(last).padStart(2, "0")}`,
+  };
+}
+
+function scrollToId(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 export function BreakEvenPanel({
   recipes,
   ingredients,
   products,
   vatRate,
   costingVatMode,
+  zReports = [],
+  financeEntries = [],
+  posImports = [],
 }: {
   recipes: DishRecipe[];
   ingredients: CostingIngredient[];
   products: Product[];
   vatRate: number;
   costingVatMode: "before" | "including";
+  zReports?: PosZReport[];
+  financeEntries?: PosFinanceEntry[];
+  posImports?: PosImport[];
 }) {
   const t = useT();
   const { locale } = useLocale();
@@ -94,20 +131,21 @@ export function BreakEvenPanel({
     vatRate,
   });
   const [snapshots, setSnapshots] = useState<BreakEvenSnapshot[]>([]);
+  const [costLinks, setCostLinks] = useState<ProductCostLink[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [period, setPeriod] = useState<Period>("month");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [simOpen, setSimOpen] = useState(false);
-  const [sim, setSim] = useState({
+  const [monthPick, setMonthPick] = useState(monthBounds().key);
+  const [simDraft, setSimDraft] = useState({
     sellingLift: 0,
     foodCostLift: 0,
     rent: 0,
     salaries: 0,
     cardPercent: 0,
-    operatingDays: settings.operatingDays,
-    averageOrderValue: 0,
+    operatingDays: DEFAULT_BREAK_EVEN_SETTINGS.operatingDays,
   });
+  const [scenario, setScenario] = useState<BreakEvenResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -121,19 +159,26 @@ export function BreakEvenPanel({
           vatRate: value.vatRate || vatRate,
           vatBasis: value.createdAt ? value.vatBasis : costingVatMode,
         });
-        setSim((current) => ({ ...current, operatingDays: value.operatingDays }));
+        setSimDraft((current) => ({ ...current, operatingDays: value.operatingDays }));
       }),
       subscribeToBreakEvenSnapshots(setSnapshots),
+      subscribeToProductCostLinks(setCostLinks),
       subscribeToOrders({ status: "all" }, setOrders, () => undefined),
     ];
     return () => unsubs.forEach((unsub) => unsub());
   }, [vatRate, costingVatMode]);
 
-  const bounds = useMemo(
-    () => rangeFor(period, customFrom, customTo),
-    [period, customFrom, customTo]
-  );
+  const bounds = useMemo(() => rangeFor(period, customFrom, customTo), [period, customFrom, customTo]);
   const month = useMemo(() => monthBounds(), []);
+  const catalog = useMemo(
+    () =>
+      products.map((product) => ({
+        id: product.id,
+        name: getProductDisplayName(product, locale),
+        price: product.price,
+      })),
+    [products, locale]
+  );
 
   const result = useMemo(
     () =>
@@ -144,328 +189,454 @@ export function BreakEvenPanel({
         orders,
         recipes,
         ingredients,
+        products: catalog,
+        financeEntries,
+        zReports,
+        posImports,
+        costLinks,
         from: bounds.from,
         to: bounds.to,
       }),
-    [settings, vatRate, fixed, variable, orders, recipes, ingredients, bounds]
+    [settings, vatRate, fixed, variable, orders, recipes, ingredients, catalog, financeEntries, zReports, posImports, costLinks, bounds]
   );
 
-  const simulated = useMemo(
-    () =>
-      simulateBreakEven(result, {
-        ...sim,
-        averageOrderValue: sim.averageOrderValue || result.averageOrderValue || undefined,
-      }),
-    [result, sim]
+  const costContext = useMemo(
+    () => ({ products: catalog, links: costLinks, posImports }),
+    [catalog, costLinks, posImports]
   );
-  const shown = simOpen ? simulated : result;
 
   const dishRows = useMemo(
     () =>
-      products
-        .map((product) =>
-          productContribution(product.id, getProductDisplayName(product, locale), product.price, recipes, ingredients)
-        )
-        .filter((row): row is NonNullable<typeof row> => row != null)
-        .sort((a, b) => (b.contributionRatio ?? 0) - (a.contributionRatio ?? 0)),
-    [products, recipes, ingredients, locale]
+      catalog.map((product) =>
+        productContribution(product.id, product.name, product.price, recipes, ingredients, costContext)
+      ),
+    [catalog, recipes, ingredients, costContext]
   );
 
-  const previous = snapshots.find((item) => item.monthKey < month.key);
-  const currentSnap = snapshots.find((item) => item.monthKey === month.key);
+  const previous = snapshots.find((item) => item.kind !== "scenario" && item.monthKey < month.key);
+  const currentSnap = snapshots.find((item) => item.kind !== "scenario" && item.monthKey === month.key);
 
   async function persistSettings(next: BreakEvenSettings) {
     setSettings(next);
     await saveBreakEvenSettings(next);
   }
 
-  async function persistSnapshot() {
+  async function persistSnapshot(kind: "saved" | "scenario" = "saved") {
     setSaving(true);
-    const saved = await saveBreakEvenSnapshot(month.key, result);
+    const source = kind === "scenario" ? scenario ?? result : result;
+    const saved = await saveBreakEvenSnapshot(month.key, source, kind);
     setSaving(false);
-    setMessage(saved.success ? t("admin.breakeven.snapshotSaved") : t("admin.breakeven.saveFailed"));
+    setMessage(
+      saved.success
+        ? kind === "scenario"
+          ? t("admin.breakeven.scenarioSaved")
+          : t("admin.breakeven.snapshotSaved")
+        : t("admin.breakeven.saveFailed")
+    );
   }
 
+  const missingActions = result.missing.filter((item) => {
+    if (item === "fixed" && result.hasApprovedZeroFixed) return false;
+    if (item === "variable" && result.hasApprovedZeroVariable) return false;
+    return item !== "margin" || result.contributionRatio != null;
+  });
+
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 className="text-lg font-semibold">{t("admin.breakeven.title")}</h2>
-          <p className="text-sm text-coffee/60">{t("admin.breakeven.subtitle")}</p>
+          <h2 className="text-xl font-semibold text-dark-brown md:text-2xl">{t("admin.breakeven.question")}</h2>
+          <p className="mt-1 text-xs text-coffee/60">
+            {formatFullDate(bounds.from, locale)} – {formatFullDate(bounds.to, locale)}
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {(["today", "week", "month", "custom"] as Period[]).map((item) => (
-            <Button key={item} size="sm" variant={period === item ? "turquoise" : "outline"} onClick={() => setPeriod(item)}>
-              {t(`admin.breakeven.period.${item}`)}
-            </Button>
-          ))}
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-2">
+            {(["today", "week", "month", "custom"] as Period[]).map((item) => (
+              <Button key={item} size="sm" variant={period === item ? "turquoise" : "outline"} onClick={() => setPeriod(item)}>
+                {t(`admin.breakeven.period.${item}`)}
+              </Button>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 text-xs text-coffee/65">
+            <span>{t("admin.breakeven.month")}</span>
+            <Input
+              type="month"
+              className="h-9 w-40"
+              value={monthPick}
+              onChange={(e) => {
+                const next = e.target.value;
+                setMonthPick(next);
+                const range = monthFromKey(next);
+                setCustomFrom(range.from);
+                setCustomTo(range.to);
+                setPeriod("custom");
+              }}
+            />
+          </label>
         </div>
       </div>
 
       {period === "custom" && (
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
           <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
         </div>
       )}
 
-      <SettingsBar settings={settings} onChange={persistSettings} />
+      <KpiRow result={result} />
 
-      {!shown.canCompute ? (
-        <AdminEmptyState
-          icon={AlertTriangle}
-          title={t("admin.breakeven.cannot")}
-          hint={shown.missing.map((item) => t(`admin.breakeven.missing.${item}`)).join(" · ")}
-        />
-      ) : (
-        <DashboardBlock result={shown} />
+      {missingActions.length > 0 && (
+        <AdminCard title={t("admin.breakeven.needData")}>
+          <ul className="space-y-2">
+            {missingActions.map((item) => (
+              <li key={item} className="flex flex-col gap-2 rounded-xl bg-beige/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-dark-brown">{t(`admin.breakeven.missing.${item}`)}</p>
+                {item !== "margin" && (
+                  <Button
+                    size="sm"
+                    variant="turquoise"
+                    onClick={() =>
+                      scrollToId(
+                        item === "fixed" ? "be-fixed" : item === "variable" ? "be-variable" : item === "mix" ? "be-dishes" : "be-history"
+                      )
+                    }
+                  >
+                    {t(`admin.breakeven.action.${item === "sales" ? "sales" : item}`)}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {result.canCompute && <p className="mt-3 text-xs text-coffee/60">{t("admin.breakeven.partial")}</p>}
+          {!result.canCompute && result.breakEvenMonthly == null && (
+            <p className="mt-3 text-xs text-coffee/60">{t("admin.breakeven.noComputedZero")}</p>
+          )}
+        </AdminCard>
       )}
 
-      {shown.canCompute && <ForecastBlock result={shown} />}
-      {shown.canCompute && <BreakEvenChart result={shown} />}
-      {shown.alerts.length > 0 && <AlertsBlock result={shown} />}
+      {result.mixSource === "estimate" && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {t("admin.breakeven.mixEstimate")}
+          {result.mixAssumptions.includes("equalDishWeight") && ` · ${t("admin.breakeven.assumeEqual")}`}
+          {result.mixAssumptions.includes("knownCostDishesOnly") && ` · ${t("admin.breakeven.assumeKnownOnly")}`}
+        </p>
+      )}
+      {result.mixSource === "approved" && (
+        <p className="text-xs text-coffee/60">{t("admin.breakeven.mixApproved")}</p>
+      )}
+      {result.mixSource === "actual" && <p className="text-xs text-coffee/60">{t("admin.breakeven.mixActual")}</p>}
+      {result.cardFeeSkipped && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">{t("admin.breakeven.cardFeeSkipped")}</p>
+      )}
+      {result.mixCostIncomplete && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">{t("admin.breakeven.mixPartialCost")}</p>
+      )}
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      {result.canCompute && (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <MiniStat label={t("admin.breakeven.elapsed")} value={String(result.elapsedDays)} />
+          <MiniStat label={t("admin.breakeven.remaining")} value={String(result.remainingDays)} />
+          <MiniStat label={t("admin.breakeven.forecast")} value={money(result.forecast)} />
+          <MiniStat label={t("admin.breakeven.requiredFromNow")} value={money(result.requiredDailyFromNow)} />
+        </div>
+      )}
+
+      <div id="be-fixed">
         <FixedCostsCard items={fixed} operatingDays={settings.operatingDays} />
+      </div>
+      <div id="be-variable">
         <VariableCostsCard items={variable} />
       </div>
 
-      <SimulatorCard
-        open={simOpen}
-        onToggle={() => setSimOpen((value) => !value)}
-        sim={sim}
-        onChange={setSim}
-        result={simulated}
-        onSave={async () => {
-          setSaving(true);
-          await persistSettings({ ...settings, operatingDays: sim.operatingDays || settings.operatingDays });
-          if (sim.rent) {
-            await saveFixedCost({
-              name: t("admin.breakeven.fixed.rent"),
-              amount: sim.rent,
-              frequency: "monthly",
-              category: "rent",
-              vatMode: settings.vatBasis,
-              vatRate: settings.vatRate,
-              active: true,
-            });
-          }
-          if (sim.salaries) {
-            await saveFixedCost({
-              name: t("admin.breakeven.fixed.salaries"),
-              amount: sim.salaries,
-              frequency: "monthly",
-              category: "salaries",
-              vatMode: settings.vatBasis,
-              vatRate: settings.vatRate,
-              active: true,
-            });
-          }
-          if (sim.cardPercent) {
-            await saveVariableCost({
-              name: t("admin.breakeven.variable.cardPercent"),
-              kind: "percent",
-              amount: sim.cardPercent,
-              vatMode: "exempt",
-              active: true,
-            });
-          }
-          setSimOpen(false);
-          setSaving(false);
-          setMessage(t("admin.breakeven.saved"));
-        }}
-        saving={saving}
-      />
+      <Collapsible title={t("admin.breakeven.settings")}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-sm">
+            <span className="text-coffee/65">{t("admin.breakeven.operatingDays")}</span>
+            <Input
+              type="number"
+              min={1}
+              max={31}
+              value={settings.operatingDays}
+              onChange={(e) => persistSettings({ ...settings, operatingDays: Math.max(1, Number(e.target.value) || 1) })}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-coffee/65">{t("admin.breakeven.vatBasis")}</span>
+            <select
+              className="h-10 w-full rounded-xl border border-beige-dark/40 bg-warm-white px-3 text-sm"
+              value={settings.vatBasis}
+              onChange={(e) => persistSettings({ ...settings, vatBasis: e.target.value as "before" | "including" })}
+            >
+              <option value="before">{t("admin.breakeven.vatBefore")}</option>
+              <option value="including">{t("admin.breakeven.vatIncluding")}</option>
+            </select>
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-coffee/55">{t("admin.breakeven.vatHint")}</p>
+      </Collapsible>
 
-      <ProductMarginCard rows={dishRows} />
+      <Collapsible title={t("admin.breakeven.whatIf")}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <NumField label={t("admin.breakeven.sim.price")} value={simDraft.sellingLift * 100} onChange={(value) => setSimDraft({ ...simDraft, sellingLift: value / 100 })} />
+          <NumField label={t("admin.breakeven.sim.rent")} value={simDraft.rent} onChange={(value) => setSimDraft({ ...simDraft, rent: value })} />
+          <NumField label={t("admin.breakeven.sim.food")} value={simDraft.foodCostLift * 100} onChange={(value) => setSimDraft({ ...simDraft, foodCostLift: value / 100 })} />
+          <NumField label={t("admin.breakeven.operatingDays")} value={simDraft.operatingDays} onChange={(value) => setSimDraft({ ...simDraft, operatingDays: Math.max(1, value) })} />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            variant="turquoise"
+            onClick={() =>
+              setScenario(
+                simulateBreakEven(result, {
+                  ...simDraft,
+                  cardPercent: simDraft.cardPercent || undefined,
+                })
+              )
+            }
+          >
+            {t("admin.breakeven.computeScenario")}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={saving || !scenario}
+            onClick={() => persistSnapshot("scenario")}
+          >
+            {t("admin.breakeven.saveScenario")}
+          </Button>
+        </div>
+        {scenario && (
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <MiniStat label={t("admin.breakeven.currentState")} value={money(result.breakEvenMonthly)} />
+            <MiniStat label={t("admin.breakeven.scenarioState")} value={money(scenario.breakEvenMonthly)} />
+            <MiniStat
+              label={t("admin.breakeven.targetDelta")}
+              value={
+                result.breakEvenMonthly == null || scenario.breakEvenMonthly == null
+                  ? "—"
+                  : money(scenario.breakEvenMonthly - result.breakEvenMonthly)
+              }
+            />
+          </div>
+        )}
+        <p className="mt-2 text-xs text-coffee/55">{t("admin.breakeven.simHint")}</p>
+      </Collapsible>
 
-      <HistoryCard
-        snapshots={snapshots}
-        previous={previous}
-        current={currentSnap}
-        onSave={persistSnapshot}
-        saving={saving}
-        monthKey={month.key}
-      />
+      <div id="be-dishes">
+        <ProductMarginCard
+          rows={dishRows}
+          products={products}
+          recipes={recipes}
+          ingredients={ingredients}
+          onSaved={setMessage}
+        />
+      </div>
+
+      <div id="be-history">
+        <Collapsible title={t("admin.breakeven.history")} defaultOpen={false}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-coffee/60">
+              {t("admin.breakeven.liveCalc")}: {money(result.breakEvenMonthly)}
+            </p>
+            <Button size="sm" variant="outline" disabled={saving} onClick={() => persistSnapshot("saved")}>
+              {t("admin.breakeven.saveSnapshot")} {month.key}
+            </Button>
+          </div>
+          {currentSnap && previous && snapshotChange(currentSnap.breakEvenRevenue, previous.breakEvenRevenue) != null && (
+            <p className="mb-2 text-sm">
+              {t("admin.breakeven.change")}: {formatPercent(snapshotChange(currentSnap.breakEvenRevenue, previous.breakEvenRevenue)! * 100)}
+            </p>
+          )}
+          {!snapshots.length ? (
+            <p className="text-sm text-coffee/55">{t("admin.breakeven.noHistory")}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className={adminTableHeader}>
+                  <tr className="text-start">
+                    <th className="p-2">{t("admin.breakeven.month")}</th>
+                    <th className="p-2">{t("admin.breakeven.savedAt")}</th>
+                    <th className="p-2">{t("admin.breakeven.sold")}</th>
+                    <th className="p-2">{t("admin.breakeven.target")}</th>
+                    <th className="p-2">{t("admin.breakeven.contribution")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshots.map((item) => (
+                    <tr key={item.id} className={adminTableRow}>
+                      <td className="p-2">{item.monthKey}</td>
+                      <td className="p-2 text-xs text-coffee/60">
+                        {item.createdAt ? formatFullDate(item.createdAt.slice(0, 10), locale) : "—"}
+                        <span className="ms-2">
+                          {item.kind === "scenario" ? t("admin.breakeven.scenarioSnap") : t("admin.breakeven.savedSnap")}
+                        </span>
+                      </td>
+                      <td className="p-2">{money(item.revenue)}</td>
+                      <td className="p-2">{money(item.breakEvenRevenue)}</td>
+                      <td className="p-2">{money(item.contributionMargin)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Collapsible>
+      </div>
 
       {message && <p className="text-sm text-turquoise">{message}</p>}
     </div>
   );
 }
 
-function SettingsBar({
-  settings,
-  onChange,
-}: {
-  settings: BreakEvenSettings;
-  onChange: (next: BreakEvenSettings) => void;
-}) {
+function KpiRow({ result }: { result: BreakEvenResult }) {
   const t = useT();
+  const pct = result.progress == null ? null : Math.round(result.progress * 100);
+  const bar = Math.min(100, Math.max(0, pct ?? 0));
   return (
-    <AdminCard title={t("admin.breakeven.settings")}>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="space-y-1 text-sm">
-          <span className="text-coffee/60">{t("admin.breakeven.operatingDays")}</span>
-          <Input
-            type="number"
-            min={1}
-            max={31}
-            value={settings.operatingDays}
-            onChange={(e) => onChange({ ...settings, operatingDays: Math.max(1, Number(e.target.value) || 1) })}
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-coffee/60">{t("admin.breakeven.vatBasis")}</span>
-          <select
-            className="h-10 w-full rounded-xl border border-beige-dark/40 bg-warm-white px-3 text-sm"
-            value={settings.vatBasis}
-            onChange={(e) => onChange({ ...settings, vatBasis: e.target.value as "before" | "including" })}
-          >
-            <option value="before">{t("admin.breakeven.vatBefore")}</option>
-            <option value="including">{t("admin.breakeven.vatIncluding")}</option>
-          </select>
-        </label>
-        <p className="self-end text-xs text-coffee/55">{t("admin.breakeven.vatHint")}</p>
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <KpiCard label={t("admin.breakeven.target")} value={money(result.breakEvenMonthly)} hint={t(`admin.breakeven.vatNote.${result.vatBasis}`)} />
+        <KpiCard label={t("admin.breakeven.sold")} value={money(result.revenue)} hint={t(`admin.breakeven.vatNote.${result.vatBasis}`)} />
+        <KpiCard
+          label={result.achieved ? t("admin.breakeven.above") : t("admin.breakeven.short")}
+          value={money(result.achieved ? result.aboveBreakEven : result.gap)}
+          hint={result.achieved ? t("admin.breakeven.notNetProfit") : t(`admin.breakeven.vatNote.${result.vatBasis}`)}
+          tone={result.achieved ? "ok" : undefined}
+        />
+        <KpiCard label={t("admin.breakeven.dailyTarget")} value={money(result.breakEvenDaily)} hint={t("admin.breakeven.perMonth")} />
       </div>
-    </AdminCard>
-  );
-}
-
-function DashboardBlock({ result }: { result: BreakEvenResult }) {
-  const t = useT();
-  const progress = Math.round((result.progress ?? 0) * 100);
-  return (
-    <AdminCard title={t("admin.breakeven.title")} icon={<Target className="h-4 w-4 text-turquoise" />}>
-      <div className="space-y-4">
-        <div>
-          <p className="text-3xl font-semibold">{money(result.breakEvenMonthly)}</p>
-          <p className="text-sm text-coffee/55">{t("admin.breakeven.perMonth")}</p>
+      <div className="rounded-2xl border border-beige-dark/15 bg-warm-white px-4 py-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className={cn("text-sm font-medium", result.achieved ? "text-emerald-700" : "text-dark-brown")}>
+            {pct == null ? t("admin.breakeven.progress") : fill(t("admin.breakeven.achievedPct"), { pct: String(pct) })}
+          </p>
+          {result.achieved && (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {t("admin.breakeven.achieved")}
+            </span>
+          )}
         </div>
-        <div className="h-3 overflow-hidden rounded-full bg-beige">
+        <div className="h-2.5 overflow-hidden rounded-full bg-beige">
           <div
             className={cn("h-full rounded-full", result.achieved ? "bg-emerald-600" : "bg-turquoise")}
-            style={{ width: `${progress}%` }}
+            style={{ width: `${bar}%` }}
           />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Stat label={t("admin.breakeven.sold")} value={money(result.revenue)} />
-          <Stat
-            label={result.achieved ? t("admin.breakeven.above") : t("admin.breakeven.short")}
-            value={money(result.achieved ? result.aboveBreakEven : result.gap)}
-          />
-          <Stat label={t("admin.breakeven.progress")} value={`${progress}%`} />
-        </div>
-        {result.achieved && (
-          <p className="flex items-center gap-2 text-sm font-medium text-emerald-700">
-            <CheckCircle2 className="h-4 w-4" />
-            {t("admin.breakeven.achieved")}
-          </p>
-        )}
-        <p className="text-xs text-coffee/50">{t("admin.breakeven.notNetProfit")}</p>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Stat label={t("admin.breakeven.dailyTarget")} value={money(result.breakEvenDaily)} />
-          <Stat label={t("admin.breakeven.actualDaily")} value={money(result.dailyAverage)} />
-          <Stat
-            label={t("admin.breakeven.dailyGap")}
-            value={
-              result.breakEvenDaily != null && result.dailyAverage != null
-                ? money(result.dailyAverage - result.breakEvenDaily)
-                : "—"
-            }
-          />
-          <Stat
-            label={t("admin.breakeven.ordersNeeded")}
-            value={result.ordersRequiredDaily == null ? "—" : String(Math.ceil(result.ordersRequiredDaily))}
-          />
-          <Stat label={t("admin.breakeven.aov")} value={money(result.averageOrderValue)} />
         </div>
       </div>
-    </AdminCard>
+    </div>
   );
 }
 
-function ForecastBlock({ result }: { result: BreakEvenResult }) {
-  const t = useT();
+function KpiCard({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "ok";
+}) {
   return (
-    <AdminCard title={t("admin.breakeven.forecastTitle")}>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t("admin.breakeven.elapsed")} value={String(result.elapsedDays)} />
-        <Stat label={t("admin.breakeven.remaining")} value={String(result.remainingDays)} />
-        <Stat label={t("admin.breakeven.forecast")} value={money(result.forecast)} />
-        <Stat label={t("admin.breakeven.requiredFromNow")} value={money(result.requiredDailyFromNow)} />
-      </div>
-      <p className="mt-3 text-sm">
-        {result.forecastGap != null && result.forecastGap >= 0
-          ? t("admin.breakeven.forecastPass")
-          : fill(t("admin.breakeven.forecastFail"), {
-              amount: money(result.forecastGap != null ? Math.abs(result.forecastGap) : null),
-            })}
+    <div className={cn(adminKpiCard, "p-3 md:p-4")}>
+      <p className="text-[11px] leading-4 text-coffee/60">{label}</p>
+      <p className={cn("mt-1 text-2xl font-semibold tabular-nums md:text-3xl", tone === "ok" ? "text-emerald-700" : "text-dark-brown")}>
+        {value}
       </p>
-      {result.requiredDailyFromNow != null && result.remainingDays > 0 && (
-        <p className="mt-1 text-sm text-coffee/70">
-          {fill(t("admin.breakeven.needPerDay"), { amount: money(result.requiredDailyFromNow) })}
-        </p>
-      )}
-    </AdminCard>
+      {hint && <p className="mt-1 text-[11px] leading-4 text-coffee/50">{hint}</p>}
+    </div>
   );
 }
 
-function AlertsBlock({ result }: { result: BreakEvenResult }) {
-  const t = useT();
+function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="space-y-2">
-      {result.alerts.includes("achieved") && (
-        <Alert tone="ok">{t("admin.breakeven.alert.achieved")}</Alert>
-      )}
-      {result.alerts.includes("weekLeft") && (
-        <Alert tone="warn">
-          {fill(t("admin.breakeven.alert.weekLeft"), {
-            days: String(result.remainingDays),
-            amount: money(result.gap),
-          })}
-        </Alert>
-      )}
-      {result.alerts.includes("requiredDaily") && (
-        <Alert tone="warn">
-          {fill(t("admin.breakeven.alert.requiredDaily"), { amount: money(result.requiredDailyFromNow) })}
-        </Alert>
+    <div className="rounded-xl bg-beige/35 px-3 py-2">
+      <p className="text-[11px] text-coffee/55">{label}</p>
+      <p className="text-sm font-semibold text-dark-brown">{value}</p>
+    </div>
+  );
+}
+
+function Collapsible({
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details
+      className="rounded-2xl border border-beige-dark/15 bg-warm-white px-4 py-3 shadow-soft"
+      open={defaultOpen || undefined}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-semibold text-dark-brown">
+        <span>{title}</span>
+        <ChevronDown className="h-4 w-4 text-coffee/50" />
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
+function CategorySelect({
+  presets,
+  prefix,
+  value,
+  onChange,
+}: {
+  presets: readonly string[];
+  prefix: string;
+  value: string;
+  onChange: (value: string, label: string) => void;
+}) {
+  const t = useT();
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const options = presets.filter((item) => {
+    const label = t(`${prefix}.${item}`);
+    return !query || label.includes(query) || item.includes(query.toLowerCase());
+  });
+  return (
+    <div className="relative">
+      <Input
+        value={query || (value ? t(`${prefix}.${value}`) : "")}
+        placeholder={t("admin.breakeven.searchCategory")}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 max-h-44 w-full overflow-auto rounded-xl border border-beige-dark/20 bg-warm-white shadow-soft">
+          {options.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className="block w-full px-3 py-1.5 text-start text-sm hover:bg-beige/40"
+              onClick={() => {
+                onChange(item, t(`${prefix}.${item}`));
+                setQuery("");
+                setOpen(false);
+              }}
+            >
+              {t(`${prefix}.${item}`)}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function BreakEvenChart({ result }: { result: BreakEvenResult }) {
-  const t = useT();
-  const points = result.daily;
-  if (!points.length || result.breakEvenMonthly == null) return null;
-  const maxY = Math.max(result.breakEvenMonthly, ...points.map((point) => point.cumulative), 1);
-  const w = 640;
-  const h = 180;
-  const x = (index: number) => (points.length <= 1 ? 0 : (index / (points.length - 1)) * (w - 24) + 12);
-  const y = (value: number) => h - 16 - (value / maxY) * (h - 28);
-  const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${x(index)},${y(point.cumulative)}`).join(" ");
-  const target = `M12,${y(result.breakEvenMonthly)} L${w - 12},${y(result.breakEvenMonthly)}`;
-  const crossIndex = result.crossedOn ? points.findIndex((point) => point.date === result.crossedOn) : -1;
-  return (
-    <AdminCard title={t("admin.breakeven.chart")}>
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-48 w-full" role="img">
-        <path d={target} stroke="#c4b5a0" strokeDasharray="6 4" fill="none" />
-        <path d={line} stroke="#0f766e" strokeWidth="2.5" fill="none" />
-        {crossIndex >= 0 && (
-          <circle cx={x(crossIndex)} cy={y(points[crossIndex]!.cumulative)} r="5" fill="#059669" />
-        )}
-      </svg>
-      <div className="mt-2 flex flex-wrap gap-4 text-xs text-coffee/60">
-        <span>{t("admin.breakeven.cumulative")}</span>
-        <span>{t("admin.breakeven.targetLine")}</span>
-        {result.crossedOn && <span>{t("admin.breakeven.crossedOn")}: {result.crossedOn}</span>}
-      </div>
-    </AdminCard>
-  );
-}
-
 function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[]; operatingDays: number }) {
   const t = useT();
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     name: "",
     amount: "",
@@ -473,193 +644,444 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
     category: "other",
     vatMode: "before" as BreakEvenVatMode,
   });
+  const total = items
+    .filter((item) => item.active)
+    .reduce((sum, item) => sum + monthlyEquivalent(item.amount, item.frequency, operatingDays), 0);
+
+  async function submit(id?: string) {
+    if (!draft.name.trim()) return;
+    const amount = Number(draft.amount);
+    if (!Number.isFinite(amount) || amount < 0) return;
+    await saveFixedCost({
+      id,
+      name: draft.name,
+      amount,
+      frequency: draft.frequency,
+      category: draft.category,
+      vatMode: draft.vatMode,
+      active: true,
+    });
+    setDraft({ name: "", amount: "", frequency: "monthly", category: "other", vatMode: "before" });
+    setAdding(false);
+    setEditingId(null);
+  }
+
   return (
-    <AdminCard title={t("admin.breakeven.fixedTitle")}>
-      <div className="mb-3 flex flex-wrap gap-1">
-        {FIXED_COST_PRESETS.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            className="rounded-full bg-beige/50 px-2 py-1 text-xs"
-            onClick={() => setDraft((current) => ({ ...current, name: t(`admin.breakeven.fixed.${preset}`), category: preset }))}
-          >
-            {t(`admin.breakeven.fixed.${preset}`)}
-          </button>
-        ))}
-      </div>
-      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
-        <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("admin.breakeven.name")} />
-        <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} placeholder="₪" />
-        <select className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm" value={draft.frequency} onChange={(e) => setDraft({ ...draft, frequency: e.target.value as CostFrequency })}>
-          <option value="daily">{t("admin.breakeven.freq.daily")}</option>
-          <option value="weekly">{t("admin.breakeven.freq.weekly")}</option>
-          <option value="monthly">{t("admin.breakeven.freq.monthly")}</option>
-          <option value="yearly">{t("admin.breakeven.freq.yearly")}</option>
-        </select>
-        <VatSelect value={draft.vatMode} onChange={(vatMode) => setDraft({ ...draft, vatMode })} />
-        <Button
-          size="sm"
-          onClick={async () => {
-            if (!draft.name || !(Number(draft.amount) > 0)) return;
-            await saveFixedCost({ ...draft, amount: Number(draft.amount), active: true });
-            setDraft({ name: "", amount: "", frequency: "monthly", category: "other", vatMode: "before" });
-          }}
-        >
+    <AdminCard
+      title={t("admin.breakeven.fixedTitle")}
+      icon={<Target className="h-4 w-4 text-turquoise" />}
+      action={
+        <Button size="sm" variant="turquoise" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" />
+          {t("admin.breakeven.addFixed")}
         </Button>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className={adminTableHeader}>
+            <tr className="text-start">
+              <th className="p-2">{t("admin.breakeven.name")}</th>
+              <th className="p-2">{t("admin.breakeven.amount")}</th>
+              <th className="p-2">{t("admin.breakeven.basis")}</th>
+              <th className="p-2">{t("admin.breakeven.periodCol")}</th>
+              <th className="p-2">{t("admin.breakeven.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {adding && (
+              <tr className="bg-beige/25">
+                <td className="p-2" colSpan={5}>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.name")}</span>
+                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.amount")}</span>
+                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.category")}</span>
+                      <CategorySelect
+                        presets={FIXED_COST_PRESETS}
+                        prefix="admin.breakeven.fixed"
+                        value={draft.category}
+                        onChange={(category, label) => setDraft({ ...draft, category, name: draft.name || label })}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.periodCol")}</span>
+                      <FreqSelect value={draft.frequency} onChange={(frequency) => setDraft({ ...draft, frequency })} />
+                    </label>
+                    <div className="flex items-end gap-2">
+                      <Button size="sm" variant="turquoise" onClick={() => submit()}>
+                        {t("admin.breakeven.add")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setAdding(false)}>
+                        {t("admin.breakeven.cancel")}
+                      </Button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )}
+            {items.map((item) =>
+              editingId === item.id ? (
+                <tr key={item.id} className="bg-beige/25">
+                  <td className="p-2" colSpan={5}>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
+                      <FreqSelect value={draft.frequency} onChange={(frequency) => setDraft({ ...draft, frequency })} />
+                      <VatSelect value={draft.vatMode} onChange={(vatMode) => setDraft({ ...draft, vatMode })} />
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="turquoise" onClick={() => submit(item.id)}>
+                          {t("admin.breakeven.add")}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>
+                          {t("admin.breakeven.cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={item.id} className={adminTableRow}>
+                  <td className="p-2 font-medium">{item.name}</td>
+                  <td className="p-2">{formatIls(item.amount)}</td>
+                  <td className="p-2 text-xs text-coffee/60">{item.category ? t(`admin.breakeven.fixed.${item.category}`) : "—"}</td>
+                  <td className="p-2 text-xs">{t(`admin.breakeven.freq.${item.frequency}`)}</td>
+                  <td className="p-2">
+                    <div className="flex gap-1">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setDraft({
+                            name: item.name,
+                            amount: String(item.amount),
+                            frequency: item.frequency,
+                            category: item.category ?? "other",
+                            vatMode: item.vatMode,
+                          });
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon-sm" variant="ghost" onClick={() => deleteFixedCost(item.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            )}
+            {!items.length && !adding && (
+              <tr>
+                <td colSpan={5} className="p-3 text-sm text-coffee/55">
+                  {t("admin.breakeven.noFixed")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-beige-dark/20 font-medium">
+              <td className="p-2">{t("admin.breakeven.total")}</td>
+              <td className="p-2">{items.length ? formatIls(total) : "—"}</td>
+              <td colSpan={3} />
+            </tr>
+          </tfoot>
+        </table>
       </div>
-      <CostList
-        rows={items.map((item) => ({
-          id: item.id,
-          title: item.name,
-          meta: `${t(`admin.breakeven.freq.${item.frequency}`)} · ${money(monthlyEquivalent(item.amount, item.frequency, operatingDays))}`,
-          active: item.active,
-          onToggle: () => saveFixedCost({ ...item, active: !item.active }),
-          onDelete: () => deleteFixedCost(item.id),
-        }))}
-        empty={t("admin.breakeven.noFixed")}
-      />
     </AdminCard>
   );
 }
 
 function VariableCostsCard({ items }: { items: BreakEvenVariableCost[] }) {
   const t = useT();
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     name: "",
     amount: "",
     kind: "percent" as VariableCostKind,
+    appliesTo: "all" as VariableAppliesTo,
     vatMode: "exempt" as BreakEvenVatMode,
   });
-  return (
-    <AdminCard title={t("admin.breakeven.variableTitle")}>
-      <div className="mb-3 flex flex-wrap gap-1">
-        {VARIABLE_COST_PRESETS.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            className="rounded-full bg-beige/50 px-2 py-1 text-xs"
-            onClick={() =>
-              setDraft((current) => ({
-                ...current,
-                name: t(`admin.breakeven.variable.${preset}`),
-                kind: preset === "cardPercent" || preset === "platform" ? "percent" : "per_order",
-              }))
-            }
-          >
-            {t(`admin.breakeven.variable.${preset}`)}
-          </button>
-        ))}
-      </div>
-      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
-        <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("admin.breakeven.name")} />
-        <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
-        <select className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as VariableCostKind })}>
-          <option value="percent">{t("admin.breakeven.kind.percent")}</option>
-          <option value="per_order">{t("admin.breakeven.kind.perOrder")}</option>
-          <option value="fixed">{t("admin.breakeven.kind.fixed")}</option>
-        </select>
-        <VatSelect value={draft.vatMode} onChange={(vatMode) => setDraft({ ...draft, vatMode })} />
-        <Button
-          size="sm"
-          onClick={async () => {
-            if (!draft.name || !(Number(draft.amount) > 0)) return;
-            await saveVariableCost({ ...draft, amount: Number(draft.amount), active: true });
-            setDraft({ name: "", amount: "", kind: "percent", vatMode: "exempt" });
-          }}
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
-      <CostList
-        rows={items.map((item) => ({
-          id: item.id,
-          title: item.name,
-          meta: item.kind === "percent" ? `${item.amount}%` : item.kind === "per_order" ? `${formatIls(item.amount)} / ${t("admin.breakeven.order")}` : formatIls(item.amount),
-          active: item.active,
-          onToggle: () => saveVariableCost({ ...item, active: !item.active }),
-          onDelete: () => deleteVariableCost(item.id),
-        }))}
-        empty={t("admin.breakeven.noVariable")}
-      />
-    </AdminCard>
-  );
-}
 
-function SimulatorCard({
-  open,
-  onToggle,
-  sim,
-  onChange,
-  result,
-  onSave,
-  saving,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  sim: {
-    sellingLift: number;
-    foodCostLift: number;
-    rent: number;
-    salaries: number;
-    cardPercent: number;
-    operatingDays: number;
-    averageOrderValue: number;
-  };
-  onChange: (next: typeof sim) => void;
-  result: BreakEvenResult;
-  onSave: () => void;
-  saving: boolean;
-}) {
-  const t = useT();
+  async function submit(id?: string) {
+    if (!draft.name.trim()) return;
+    const amount = Number(draft.amount);
+    if (!Number.isFinite(amount) || amount < 0) return;
+    await saveVariableCost({
+      id,
+      name: draft.name,
+      kind: draft.kind,
+      amount,
+      appliesTo: draft.kind === "percent" ? draft.appliesTo : "all",
+      vatMode: draft.vatMode,
+      active: true,
+    });
+    setDraft({ name: "", amount: "", kind: "percent", appliesTo: "all", vatMode: "exempt" });
+    setAdding(false);
+    setEditingId(null);
+  }
+
+  function basisLabel(item: BreakEvenVariableCost) {
+    if (item.kind === "percent") {
+      return `${t("admin.breakeven.kind.percent")} · ${
+        inferredAppliesTo(item) === "card" ? t("admin.breakeven.appliesCard") : t("admin.breakeven.appliesAll")
+      }`;
+    }
+    if (item.kind === "per_dish") return t("admin.breakeven.kind.perDish");
+    if (item.kind === "per_order") return t("admin.breakeven.kind.perOrder");
+    return t("admin.breakeven.kind.fixed");
+  }
+
   return (
     <AdminCard
-      title={t("admin.breakeven.simulator")}
+      title={t("admin.breakeven.variableTitle")}
       action={
-        <Button size="sm" variant="outline" onClick={onToggle}>
-          {open ? t("admin.breakeven.simOff") : t("admin.breakeven.simOn")}
+        <Button size="sm" variant="turquoise" onClick={() => setAdding(true)}>
+          <Plus className="h-4 w-4" />
+          {t("admin.breakeven.addVariable")}
         </Button>
       }
     >
-      <p className="mb-3 text-xs text-coffee/55">{t("admin.breakeven.simHint")}</p>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <NumField label={t("admin.breakeven.sim.price")} value={sim.sellingLift * 100} onChange={(value) => onChange({ ...sim, sellingLift: value / 100 })} />
-        <NumField label={t("admin.breakeven.sim.food")} value={sim.foodCostLift * 100} onChange={(value) => onChange({ ...sim, foodCostLift: value / 100 })} />
-        <NumField label={t("admin.breakeven.sim.rent")} value={sim.rent} onChange={(value) => onChange({ ...sim, rent: value })} />
-        <NumField label={t("admin.breakeven.sim.salaries")} value={sim.salaries} onChange={(value) => onChange({ ...sim, salaries: value })} />
-        <NumField label={t("admin.breakeven.sim.card")} value={sim.cardPercent} onChange={(value) => onChange({ ...sim, cardPercent: value })} />
-        <NumField label={t("admin.breakeven.operatingDays")} value={sim.operatingDays} onChange={(value) => onChange({ ...sim, operatingDays: Math.max(1, value) })} />
-        <NumField label={t("admin.breakeven.aov")} value={sim.averageOrderValue} onChange={(value) => onChange({ ...sim, averageOrderValue: value })} />
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className={adminTableHeader}>
+            <tr className="text-start">
+              <th className="p-2">{t("admin.breakeven.name")}</th>
+              <th className="p-2">{t("admin.breakeven.amount")}</th>
+              <th className="p-2">{t("admin.breakeven.basis")}</th>
+              <th className="p-2">{t("admin.breakeven.periodCol")}</th>
+              <th className="p-2">{t("admin.breakeven.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {adding && (
+              <tr className="bg-beige/25">
+                <td className="p-2" colSpan={5}>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.name")}</span>
+                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.amount")}</span>
+                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.category")}</span>
+                      <CategorySelect
+                        presets={VARIABLE_COST_PRESETS}
+                        prefix="admin.breakeven.variable"
+                        value=""
+                        onChange={(_, label) =>
+                          setDraft({
+                            ...draft,
+                            name: draft.name || label,
+                            kind: label.includes("%") ? "percent" : draft.kind,
+                            appliesTo: /אשראי|card|بطاقة/i.test(label) ? "card" : draft.appliesTo,
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span>{t("admin.breakeven.basis")}</span>
+                      <select
+                        className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
+                        value={draft.kind}
+                        onChange={(e) => setDraft({ ...draft, kind: e.target.value as VariableCostKind })}
+                      >
+                        <option value="percent">{t("admin.breakeven.kind.percent")}</option>
+                        <option value="per_dish">{t("admin.breakeven.kind.perDish")}</option>
+                        <option value="per_order">{t("admin.breakeven.kind.perOrder")}</option>
+                        <option value="fixed">{t("admin.breakeven.kind.fixed")}</option>
+                      </select>
+                    </label>
+                    {draft.kind === "percent" && (
+                      <label className="space-y-1 text-xs">
+                        <span>{t("admin.breakeven.appliesTo")}</span>
+                        <select
+                          className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
+                          value={draft.appliesTo}
+                          onChange={(e) => setDraft({ ...draft, appliesTo: e.target.value as VariableAppliesTo })}
+                        >
+                          <option value="all">{t("admin.breakeven.appliesAll")}</option>
+                          <option value="card">{t("admin.breakeven.appliesCard")}</option>
+                        </select>
+                      </label>
+                    )}
+                    <div className="flex items-end gap-2">
+                      <Button size="sm" variant="turquoise" onClick={() => submit()}>
+                        {t("admin.breakeven.add")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setAdding(false)}>
+                        {t("admin.breakeven.cancel")}
+                      </Button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )}
+            {items.map((item) =>
+              editingId === item.id ? (
+                <tr key={item.id} className="bg-beige/25">
+                  <td className="p-2" colSpan={5}>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
+                      <select
+                        className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm"
+                        value={draft.kind}
+                        onChange={(e) => setDraft({ ...draft, kind: e.target.value as VariableCostKind })}
+                      >
+                        <option value="percent">{t("admin.breakeven.kind.percent")}</option>
+                        <option value="per_dish">{t("admin.breakeven.kind.perDish")}</option>
+                        <option value="per_order">{t("admin.breakeven.kind.perOrder")}</option>
+                        <option value="fixed">{t("admin.breakeven.kind.fixed")}</option>
+                      </select>
+                      {draft.kind === "percent" && (
+                        <select
+                          className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm"
+                          value={draft.appliesTo}
+                          onChange={(e) => setDraft({ ...draft, appliesTo: e.target.value as VariableAppliesTo })}
+                        >
+                          <option value="all">{t("admin.breakeven.appliesAll")}</option>
+                          <option value="card">{t("admin.breakeven.appliesCard")}</option>
+                        </select>
+                      )}
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="turquoise" onClick={() => submit(item.id)}>
+                          {t("admin.breakeven.add")}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>
+                          {t("admin.breakeven.cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={item.id} className={adminTableRow}>
+                  <td className="p-2 font-medium">{item.name}</td>
+                  <td className="p-2">{item.kind === "percent" ? `${item.amount}%` : formatIls(item.amount)}</td>
+                  <td className="p-2 text-xs text-coffee/60">{basisLabel(item)}</td>
+                  <td className="p-2 text-xs">{item.frequency ? t(`admin.breakeven.freq.${item.frequency}`) : "—"}</td>
+                  <td className="p-2">
+                    <div className="flex gap-1">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setDraft({
+                            name: item.name,
+                            amount: String(item.amount),
+                            kind: item.kind,
+                            appliesTo: inferredAppliesTo(item),
+                            vatMode: item.vatMode,
+                          });
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon-sm" variant="ghost" onClick={() => deleteVariableCost(item.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            )}
+            {!items.length && !adding && (
+              <tr>
+                <td colSpan={5} className="p-3 text-sm text-coffee/55">
+                  {t("admin.breakeven.noVariable")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-beige-dark/20 text-xs text-coffee/60">
+              <td className="p-2" colSpan={5}>
+                {t("admin.breakeven.total")}: {items.filter((item) => item.active).length}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
-      {open && (
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <Stat label={t("admin.breakeven.title")} value={money(result.breakEvenMonthly)} />
-          <Stat label={t("admin.breakeven.dailyTarget")} value={money(result.breakEvenDaily)} />
-          <Stat label={t("admin.breakeven.ordersNeeded")} value={result.ordersRequiredDaily == null ? "—" : String(Math.ceil(result.ordersRequiredDaily))} />
-        </div>
-      )}
-      <Button className="mt-4" variant="turquoise" disabled={saving} onClick={onSave}>
-        <Save className="h-4 w-4" /> {t("admin.breakeven.saveSim")}
-      </Button>
     </AdminCard>
   );
 }
 
 function ProductMarginCard({
   rows,
+  products,
+  recipes,
+  ingredients,
+  onSaved,
 }: {
-  rows: NonNullable<ReturnType<typeof productContribution>>[];
+  rows: ReturnType<typeof productContribution>[];
+  products: Product[];
+  recipes: DishRecipe[];
+  ingredients: CostingIngredient[];
+  onSaved: (message: string) => void;
 }) {
   const t = useT();
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<DishSort>("ratio");
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const done = rows.filter((row) => !row.costMissing).length;
+  const filtered = rows
+    .filter((row) => !query || row.name.includes(query))
+    .filter((row) => !missingOnly || row.costMissing)
+    .sort((a, b) => {
+      if (sort === "name") return a.name.localeCompare(b.name);
+      if (sort === "price") return b.sellingPrice - a.sellingPrice;
+      if (sort === "contribution") return (b.contribution ?? -Infinity) - (a.contribution ?? -Infinity);
+      return (b.contributionRatio ?? -Infinity) - (a.contributionRatio ?? -Infinity);
+    });
+
   return (
     <AdminCard title={t("admin.breakeven.productCm")}>
-      {!rows.length ? (
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-dark-brown">
+          {fill(t("admin.breakeven.costDone"), { done: String(done), total: String(rows.length) })}
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={missingOnly} onChange={(e) => setMissingOnly(e.target.checked)} />
+          {t("admin.breakeven.filterMissingCost")}
+        </label>
+      </div>
+      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <label className="relative">
+          <Search className="pointer-events-none absolute top-2.5 start-3 h-4 w-4 text-coffee/40" />
+          <Input className="ps-9" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("admin.breakeven.searchDish")} />
+        </label>
+        <select
+          className="h-10 rounded-xl border border-beige-dark/40 bg-warm-white px-3 text-sm"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as DishSort)}
+        >
+          <option value="ratio">{t("admin.breakeven.cmRatio")}</option>
+          <option value="contribution">{t("admin.breakeven.contribution")}</option>
+          <option value="price">{t("admin.costing.sellingPrice")}</option>
+          <option value="name">{t("admin.breakeven.dish")}</option>
+        </select>
+      </div>
+      {!filtered.length ? (
         <p className="text-sm text-coffee/55">{t("admin.breakeven.noRecipes")}</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-start text-coffee/55">
+            <thead className={adminTableHeader}>
+              <tr className="text-start">
                 <th className="p-2">{t("admin.breakeven.dish")}</th>
                 <th className="p-2">{t("admin.costing.sellingPrice")}</th>
                 <th className="p-2">{t("admin.breakeven.foodCost")}</th>
@@ -669,15 +1091,48 @@ function ProductMarginCard({
               </tr>
             </thead>
             <tbody>
-              {rows.slice(0, 40).map((row) => (
-                <tr key={row.productId} className="border-t border-beige-dark/15">
-                  <td className="p-2">{row.name}</td>
-                  <td className="p-2">{formatIls(row.sellingPrice)}</td>
-                  <td className="p-2">{formatIls(row.foodCost)}</td>
-                  <td className="p-2">{formatIls(row.extraVariable)}</td>
-                  <td className="p-2 font-medium">{formatIls(row.contribution)}</td>
-                  <td className="p-2">{formatPercent(row.contributionRatio == null ? null : row.contributionRatio * 100)}</td>
-                </tr>
+              {filtered.map((row) => (
+                <Fragment key={row.productId}>
+                  <tr className={adminTableRow}>
+                    <td className="p-2">{row.name}</td>
+                    <td className="p-2">{formatIls(row.sellingPrice)}</td>
+                    <td className="p-2">
+                      {row.costMissing ? (
+                        <Button size="sm" variant="turquoise" onClick={() => setOpenId(openId === row.productId ? null : row.productId)}>
+                          {t("admin.breakeven.completeCost")}
+                        </Button>
+                      ) : (
+                        <div>
+                          <p>{money(row.foodCost)}</p>
+                          {row.costBasis && (
+                            <p className="text-[11px] text-coffee/55">{t(`admin.breakeven.basis.${row.costBasis}`)}</p>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-2">{row.costMissing ? "—" : money(row.extraVariable)}</td>
+                    <td className="p-2 font-medium">{row.costMissing ? "—" : money(row.contribution)}</td>
+                    <td className="p-2">
+                      {row.costMissing ? "—" : formatPercent(row.contributionRatio == null ? null : row.contributionRatio * 100)}
+                    </td>
+                  </tr>
+                  {openId === row.productId && (
+                    <tr key={`${row.productId}-edit`}>
+                      <td colSpan={6} className="p-2">
+                        <CostCompletePanel
+                          row={row}
+                          products={products}
+                          recipes={recipes}
+                          ingredients={ingredients}
+                          onSaved={(message) => {
+                            setOpenId(null);
+                            onSaved(message);
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -687,91 +1142,19 @@ function ProductMarginCard({
   );
 }
 
-function HistoryCard({
-  snapshots,
-  previous,
-  current,
-  onSave,
-  saving,
-  monthKey,
-}: {
-  snapshots: BreakEvenSnapshot[];
-  previous?: BreakEvenSnapshot;
-  current?: BreakEvenSnapshot;
-  onSave: () => void;
-  saving: boolean;
-  monthKey: string;
-}) {
+function FreqSelect({ value, onChange }: { value: CostFrequency; onChange: (value: CostFrequency) => void }) {
   const t = useT();
-  const change = snapshotChange(current?.breakEvenRevenue, previous?.breakEvenRevenue);
   return (
-    <AdminCard
-      title={t("admin.breakeven.history")}
-      action={
-        <Button size="sm" variant="outline" disabled={saving} onClick={onSave}>
-          {t("admin.breakeven.saveSnapshot")} {monthKey}
-        </Button>
-      }
+    <select
+      className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
+      value={value}
+      onChange={(e) => onChange(e.target.value as CostFrequency)}
     >
-      {change != null && (
-        <p className="mb-3 text-sm">
-          {t("admin.breakeven.change")}: {formatPercent(change * 100)}
-        </p>
-      )}
-      {!snapshots.length ? (
-        <p className="text-sm text-coffee/55">{t("admin.breakeven.noHistory")}</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-coffee/55">
-                <th className="p-2">{t("admin.breakeven.month")}</th>
-                <th className="p-2">{t("admin.breakeven.sold")}</th>
-                <th className="p-2">{t("admin.breakeven.title")}</th>
-                <th className="p-2">{t("admin.breakeven.contribution")}</th>
-                <th className="p-2">{t("admin.breakeven.aov")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {snapshots.map((item) => (
-                <tr key={item.id} className="border-t border-beige-dark/15">
-                  <td className="p-2">{item.monthKey}</td>
-                  <td className="p-2">{money(item.revenue)}</td>
-                  <td className="p-2">{money(item.breakEvenRevenue)}</td>
-                  <td className="p-2">{money(item.contributionMargin)}</td>
-                  <td className="p-2">{money(item.averageOrderValue)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </AdminCard>
-  );
-}
-
-function CostList({
-  rows,
-  empty,
-}: {
-  rows: { id: string; title: string; meta: string; active: boolean; onToggle: () => void; onDelete: () => void }[];
-  empty: string;
-}) {
-  if (!rows.length) return <p className="text-sm text-coffee/55">{empty}</p>;
-  return (
-    <div className="space-y-2">
-      {rows.map((row) => (
-        <div key={row.id} className="flex items-center justify-between gap-2 rounded-xl bg-beige/30 px-3 py-2 text-sm">
-          <button type="button" className="min-w-0 text-start" onClick={row.onToggle}>
-            <p className={cn("truncate font-medium", !row.active && "opacity-50")}>{row.title}</p>
-            <p className="text-xs text-coffee/55">{row.meta}</p>
-          </button>
-          <Button size="icon-sm" variant="ghost" onClick={row.onDelete}>
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
-      ))}
-    </div>
+      <option value="daily">{t("admin.breakeven.freq.daily")}</option>
+      <option value="weekly">{t("admin.breakeven.freq.weekly")}</option>
+      <option value="monthly">{t("admin.breakeven.freq.monthly")}</option>
+      <option value="yearly">{t("admin.breakeven.freq.yearly")}</option>
+    </select>
   );
 }
 
@@ -786,28 +1169,11 @@ function VatSelect({ value, onChange }: { value: BreakEvenVatMode; onChange: (va
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-beige/40 px-3 py-2">
-      <p className="text-xs text-coffee/55">{label}</p>
-      <p className="text-base font-semibold">{value}</p>
-    </div>
-  );
-}
-
 function NumField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return (
     <label className="space-y-1 text-sm">
-      <span className="text-coffee/60">{label}</span>
+      <span className="text-coffee/65">{label}</span>
       <Input type="number" value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value) || 0)} />
     </label>
-  );
-}
-
-function Alert({ children, tone }: { children: React.ReactNode; tone: "ok" | "warn" }) {
-  return (
-    <div className={cn("rounded-xl px-3 py-2 text-sm", tone === "ok" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800")}>
-      {children}
-    </div>
   );
 }

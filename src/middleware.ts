@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   isCustomerOnlyPath,
+  isLocalAdminHost,
   isMenuBlockedApiPath,
   isMenuHost,
   isOrderingPath,
@@ -32,6 +33,11 @@ function redirectHome(request: NextRequest) {
 export function middleware(request: NextRequest) {
   const host = request.headers.get("host");
   const pathname = request.nextUrl.pathname;
+
+  // Local development stays on the current origin. Never send /admin to PORTAL.
+  if (isLocalAdminHost(host)) {
+    return NextResponse.next();
+  }
 
   // --- Digital menu host (VIEW ONLY) ---
   if (isMenuHost(host)) {

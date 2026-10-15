@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Upload } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
@@ -9,53 +9,64 @@ import { AdminCard } from "@/features/admin/components/admin-card";
 import { formatIls } from "@/lib/costing/money";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
-import { cheapestLastPurchase, cheapestOffer, currentStockBase, latestPurchase, movementSignedBase, offerNormalizedLastPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { filterUnifiedIngredients } from "@/lib/inventory/ingredient-core";
+import { ComparePane } from "@/features/admin/inventory/compare-pane";
+import { cheapestOffer, currentStockBase, latestPurchase, movementSignedBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import { IssueIngredientForm } from "@/features/admin/inventory/issue-ingredient-form";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
-import { theoreticalConsumption } from "@/lib/inventory/pos";
 import type {
   InventoryMovement,
+  PosFinanceEntry,
   PosImport,
   PosProductMap,
-  PosSaleLine,
+  PosZReport,
   PurchaseInvoice,
   PurchasePriceRecord,
   Supplier,
   SupplierOffer,
 } from "@/lib/inventory/types";
 import type { Product } from "@/types";
-import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
-import {
-  approvePosImport,
-  savePosDraft,
-  savePosProductMap,
-  saveSupplier,
-} from "@/services/inventoryService";
+import { saveSupplier } from "@/services/inventoryService";
 import { cn } from "@/lib/utils";
-import { useAuthFetch } from "@/lib/auth/auth-fetch";
+import { PosExcelPanel } from "@/features/admin/inventory/pos-excel-panel";
+import { PosHistoryPanel } from "@/features/admin/inventory/pos-history-panel";
+import { PosZPanel } from "@/features/admin/inventory/pos-z-panel";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
 import { InvoiceArchivePanel } from "@/features/admin/inventory/invoice-archive-panel";
 import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
+import { StockCountPanel } from "@/features/admin/inventory/stock-count-panel";
+import { PurchaseListPanel } from "@/features/admin/inventory/purchase-list-panel";
 
 type InventoryPane = "products" | "ledger" | "alerts";
 type PurchasePane = "invoices" | "suppliers" | "compare";
-type PosPane = "upload" | "maps" | "history";
+type PosPane = "excel" | "z" | "history";
 
 export function InventorySection(props: InventoryHubProps & { pane: InventoryPane }) {
   const t = useT();
   const [search, setSearch] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
+  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [category, setCategory] = useState("");
+  const [supplierId, setSupplierId] = useState("");
   const [ledgerId, setLedgerId] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [issueId, setIssueId] = useState<string | null | "all">(null);
-  const q = search.trim().toLowerCase();
+  const [purchaseImport, setPurchaseImport] = useState(false);
+  const categories = Array.from(new Set(props.ingredients.map((item) => item.category).filter(Boolean))) as string[];
 
-  const rows = props.ingredients
-    .filter((item) => item.active !== false)
-    .filter((item) => !q || item.name.toLowerCase().includes(q))
+  const rows = filterUnifiedIngredients({
+    ingredients: props.ingredients,
+    maps: props.itemMaps,
+    offers: props.offers,
+    movements: props.movements,
+    query: search,
+    category: category || undefined,
+    supplierId: supplierId || undefined,
+    lowStockOnly,
+  })
     .filter((item) => {
       if (!missingOnly) return true;
       return !props.offers.some((offer) => offer.productId === item.id && offer.active !== false);
@@ -85,17 +96,35 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("admin.inventory.search")} className="max-w-sm" />
+        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("admin.inventory.searchAlsoAlias")} className="max-w-sm" />
+        <select className="h-10 rounded-xl border px-2 text-sm" value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">{t("admin.costing.category")}</option>
+          {categories.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <select className="h-10 rounded-xl border px-2 text-sm" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+          <option value="">{t("admin.costing.supplier")}</option>
+          {props.suppliers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+        <Button type="button" variant={lowStockOnly ? "turquoise" : "outline"} onClick={() => setLowStockOnly((v) => !v)}>
+          {t("admin.inventory.belowMin")}
+        </Button>
         <Button type="button" variant={missingOnly ? "turquoise" : "outline"} onClick={() => setMissingOnly((v) => !v)}>
           {t("admin.inventory.filterMissingSupplier")}
         </Button>
         <Button type="button" variant="outline" onClick={() => setIssueId("all")}>
           {t("admin.inventory.issue")}
         </Button>
+        <StockCountPanel ingredients={props.ingredients} movements={props.movements} onToast={props.onToast} />
+        {props.pane === "products" && (
+          <Button type="button" variant="outline" onClick={() => setPurchaseImport((value) => !value)}>
+            {t("admin.purchaseList.open")}
+          </Button>
+        )}
         <Button type="button" variant="turquoise" onClick={props.onAddProduct}>
           <Plus className="h-4 w-4" /> {t("admin.inventory.newProduct")}
         </Button>
       </div>
+      {purchaseImport && props.pane === "products" && <PurchaseListPanel {...props} />}
 
       {props.pane === "alerts" && (
         <AdminCard title={t("admin.inventory.alerts")}>
@@ -218,6 +247,7 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             recipes={props.recipes}
             products={props.products}
             itemMaps={props.itemMaps ?? []}
+            allIngredients={props.ingredients}
             locale={props.locale}
             onIssue={() => setIssueId(product.id)}
             onEdit={() => {
@@ -351,69 +381,6 @@ function SuppliersPane({ suppliers, onToast }: InventoryHubProps) {
   );
 }
 
-function ComparePane({ ingredients, offers, records, movements, suppliers }: InventoryHubProps) {
-  const t = useT();
-  const [productId, setProductId] = useState(ingredients[0]?.id ?? "");
-  const [mode, setMode] = useState<"net" | "vat" | "gross">("net");
-  const item = ingredients.find((row) => row.id === productId);
-  const itemOffers = offers.filter((offer) => offer.productId === productId && offer.active !== false);
-  const cheap = item ? cheapestLastPurchase(itemOffers, mode === "gross" ? "gross" : "net", item.baseUnit) : cheapestLastPurchase(itemOffers, mode === "gross" ? "gross" : "net");
-  const last = latestPurchase(records, productId);
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <select className="h-10 rounded-xl border px-3 text-sm" value={productId} onChange={(e) => setProductId(e.target.value)}>
-          {ingredients.map((row) => (
-            <option key={row.id} value={row.id}>{row.name}</option>
-          ))}
-        </select>
-        <Button type="button" variant={mode === "net" ? "turquoise" : "outline"} onClick={() => setMode("net")}>{t("admin.finance.compareNet")}</Button>
-        <Button type="button" variant={mode === "vat" ? "turquoise" : "outline"} onClick={() => setMode("vat")}>{t("admin.inventory.vat")}</Button>
-        <Button type="button" variant={mode === "gross" ? "turquoise" : "outline"} onClick={() => setMode("gross")}>{t("admin.finance.compareGross")}</Button>
-      </div>
-      {item && (
-        <AdminCard title={item.name}>
-          <p className="mb-3 text-xs text-coffee/55">{t("admin.inventory.cheapestHint")}</p>
-          <div className="space-y-2 text-sm">
-            {itemOffers.map((offer) => {
-              const supplier = suppliers.find((s) => s.id === offer.supplierId);
-              const net = offerNormalizedNet(offer);
-              const gross = offerNormalizedLastPurchase(offer);
-              const vat = net != null && gross != null ? gross - net : null;
-              const cost = mode === "net" ? net : mode === "vat" ? vat : gross;
-              const cheapNet = cheap ? offerNormalizedNet(cheap) : undefined;
-              const cheapGross = cheap ? offerNormalizedLastPurchase(cheap) : undefined;
-              const cheapVat = cheapNet != null && cheapGross != null ? cheapGross - cheapNet : undefined;
-              const cheapCost = mode === "net" ? cheapNet : mode === "vat" ? cheapVat : cheapGross;
-              const gap = cost != null && cheapCost != null ? cost - cheapCost : 0;
-              return (
-                <div key={offer.id} className="rounded-xl bg-beige/30 px-3 py-2">
-                  <div className="flex items-center justify-between">
-                    <span>
-                      {supplier?.name ?? offer.supplierId}{" "}
-                      {cheap?.id === offer.id && <span className="text-emerald-700">🏆 {t("admin.inventory.cheapest")}</span>}
-                    </span>
-                    <span>{cost != null ? formatIls(cost, 4) : "—"}{cheap?.id !== offer.id && gap > 0 ? ` · +${formatIls(gap, 4)}` : ""}</span>
-                  </div>
-                  <p className="mt-1 text-xs text-coffee/55">
-                    {t("admin.finance.netTotal")}: {net != null ? formatIls(net, 4) : "—"}
-                    {" · "}
-                    {t("admin.inventory.vat")}: {vat != null ? formatIls(vat, 4) : "—"}
-                    {" · "}
-                    {t("admin.finance.grossTotal")}: {gross != null ? formatIls(gross, 4) : "—"}
-                    {" · "}
-                    {t("admin.inventory.lastPaid")}: {offer.lastPurchaseDate || last?.purchaseDate || "—"}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </AdminCard>
-      )}
-    </div>
-  );
-}
-
 function InvoicesPane(props: InventoryHubProps) {
   const t = useT();
   const ai = useSmartInvoiceEnabled();
@@ -439,6 +406,8 @@ function InvoicesPane(props: InventoryHubProps) {
       <SmartInvoiceFlow
         ingredients={props.ingredients}
         suppliers={props.suppliers}
+        maps={props.itemMaps}
+        offers={props.offers}
         invoices={props.invoices}
         vatRate={props.settingsVatRate}
         initialInvoice={smartInvoice}
@@ -472,6 +441,7 @@ function InvoicesPane(props: InventoryHubProps) {
 
   return (
     <div className="space-y-4">
+      <PurchaseListPanel {...props} />
       <AdminCard title={t("admin.finance.purchases")}>
         <p className="mb-3 text-sm text-coffee/60">{t("admin.finance.purchasesHint")}</p>
         <div className="flex flex-wrap gap-2">
@@ -516,212 +486,17 @@ function InvoicesPane(props: InventoryHubProps) {
 }
 
 export function PosSection(props: InventoryHubProps & { pane: PosPane }) {
-  if (props.pane === "maps") return <PosMapsPane {...props} />;
+  const [opened, setOpened] = useState<PosImport | null>(null);
+  if (props.pane === "z") return <PosZPanel {...props} />;
   if (props.pane === "history") {
     return (
-      <div className="space-y-2">
-        {props.posImports.map((item) => (
-          <div key={item.id} className="rounded-2xl border border-beige-dark/20 px-4 py-3 text-sm">
-            {item.fileName} · {item.period} · {item.status} · {item.lines.length}
-          </div>
-        ))}
+      <div className="space-y-4">
+        <PosHistoryPanel {...props} onOpenExcel={setOpened} />
+        {opened && <PosExcelPanel {...props} opened={opened} onCloseOpened={() => setOpened(null)} />}
       </div>
     );
   }
-  return <PosUploadPane {...props} />;
-}
-
-function PosMapsPane({ products, maps, locale, onToast }: InventoryHubProps) {
-  const t = useT();
-  const [posName, setPosName] = useState("");
-  const [posCode, setPosCode] = useState("");
-  const [menuProductId, setMenuProductId] = useState("");
-  return (
-    <div className="space-y-4">
-      <AdminCard title={t("admin.inventory.posMatch")}>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <Input value={posCode} onChange={(e) => setPosCode(e.target.value)} placeholder="POS code" />
-          <Input value={posName} onChange={(e) => setPosName(e.target.value)} placeholder="POS name" />
-          <select className="h-10 rounded-xl border px-3 text-sm" value={menuProductId} onChange={(e) => setMenuProductId(e.target.value)}>
-            <option value="">{t("admin.inventory.matchExisting")}</option>
-            {products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {getProductDisplayName(product, locale)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <Button
-          className="mt-3"
-          type="button"
-          variant="turquoise"
-          onClick={async () => {
-            if (!posName || !menuProductId) return;
-            const result = await savePosProductMap({ posCode, posName, menuProductId });
-            if (result.success) onToast(t("admin.inventory.mapSaved"));
-            else onToast(result.error, "error");
-          }}
-        >
-          {t("common.save")}
-        </Button>
-      </AdminCard>
-      {maps.map((item) => (
-        <p key={item.id} className="text-sm">
-          {item.posName} → {getProductDisplayName(products.find((p) => p.id === item.menuProductId) ?? products[0], locale)}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function PosUploadPane(props: InventoryHubProps) {
-  const t = useT();
-  const authFetch = useAuthFetch();
-  const [review, setReview] = useState<{
-    fileName: string;
-    fileHash: string;
-    period: string;
-    lines: PosSaleLine[];
-    previousImportId?: string;
-    delta?: { added: number; changed: number; removed: number; unchanged: number } | null;
-    draftId?: string;
-  } | null>(null);
-
-  const consumption = useMemo(
-    () => (review ? theoreticalConsumption(review.lines, props.recipes) : []),
-    [review, props.recipes]
-  );
-
-  return (
-    <div className="space-y-4">
-      <label className="flex cursor-pointer flex-col items-center rounded-3xl border border-dashed border-coffee/25 px-6 py-10">
-        <Upload className="h-8 w-8" />
-        <p className="mt-3 font-semibold">{t("admin.inventory.uploadPos")}</p>
-        <p className="text-sm text-coffee/55">XLSX / CSV</p>
-        <input
-          type="file"
-          accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-          className="hidden"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file) return;
-            const form = new FormData();
-            form.set("file", file);
-            const response = await authFetch("/api/admin/inventory/pos/parse", { method: "POST", body: form });
-            const json = await response.json();
-            if (json.duplicate) {
-              props.onToast(t("admin.inventory.duplicateFile"), "error");
-              return;
-            }
-            const saved = await savePosDraft({
-              fileName: json.fileName,
-              fileHash: json.fileHash,
-              source: "pos-file",
-              period: json.period,
-              status: "draft",
-              lines: json.lines,
-              previousImportId: json.previousImportId,
-            });
-            if (!saved.success) {
-              props.onToast(saved.error, "error");
-              return;
-            }
-            setReview({ ...json, draftId: saved.data });
-          }}
-        />
-      </label>
-
-      {review && (
-        <AdminCard title={t("admin.inventory.posReview")}>
-          <p>{t("admin.inventory.period")}: {review.period}</p>
-          <p>{t("admin.inventory.salesCount")}: {review.lines.length}</p>
-          <p>
-            {t("admin.inventory.matched")}: {review.lines.filter((line) => line.menuProductId).length} ·{" "}
-            {t("admin.inventory.unmatched")}: {review.lines.filter((line) => !line.menuProductId).length}
-          </p>
-          {review.delta && (
-            <p className="text-sm text-coffee/65">
-              +{review.delta.added} / ~{review.delta.changed} / -{review.delta.removed} / ={review.delta.unchanged}
-            </p>
-          )}
-          <div className="mt-3 space-y-1 text-sm">
-            {consumption.map((row) => {
-              const name = props.ingredients.find((item) => item.id === row.productId)?.name ?? row.productId;
-              return (
-                <p key={row.productId}>
-                  {name}: -{row.quantityBase.toFixed(1)} {row.unit}
-                </p>
-              );
-            })}
-          </div>
-          {review.lines
-            .filter((line) => !line.menuProductId)
-            .map((line) => (
-              <div key={line.key} className="mt-2 flex gap-2">
-                <span className="flex-1 text-sm">{line.posName}</span>
-                <select
-                  className="h-9 rounded-lg border px-2 text-sm"
-                  onChange={(e) => {
-                    const menuProductId = e.target.value;
-                    if (!menuProductId) return;
-                    void savePosProductMap({ posCode: line.posCode, posName: line.posName, menuProductId });
-                    setReview((current) =>
-                      current
-                        ? {
-                            ...current,
-                            lines: current.lines.map((item) =>
-                              item.key === line.key ? { ...item, menuProductId, matchKind: "exact" } : item
-                            ),
-                          }
-                        : current
-                    );
-                  }}
-                >
-                  <option value="">{t("admin.inventory.matchExisting")}</option>
-                  {props.products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {getProductDisplayName(product, props.locale)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          <Button
-            className="mt-4"
-            type="button"
-            variant="turquoise"
-            onClick={async () => {
-              if (!review.draftId) return;
-              const previous = props.posImports.find((item) => item.id === review.previousImportId);
-              const result = await approvePosImport({
-                draft: {
-                  id: review.draftId,
-                  fileName: review.fileName,
-                  fileHash: review.fileHash,
-                  source: "pos-file",
-                  period: review.period,
-                  status: "draft",
-                  lines: review.lines,
-                  createdAt: new Date().toISOString(),
-                },
-                recipes: props.recipes,
-                previous,
-              });
-              if (!result.success) {
-                props.onToast(result.error, "error");
-                return;
-              }
-              props.onToast(t("admin.inventory.posApproved"));
-              setReview(null);
-            }}
-          >
-            {t("admin.inventory.approvePos")}
-          </Button>
-        </AdminCard>
-      )}
-    </div>
-  );
+  return <PosExcelPanel {...props} opened={opened} onCloseOpened={() => setOpened(null)} />;
 }
 
 export type InventoryHubProps = {
@@ -732,6 +507,8 @@ export type InventoryHubProps = {
   records: PurchasePriceRecord[];
   invoices: PurchaseInvoice[];
   posImports: PosImport[];
+  zReports: PosZReport[];
+  financeEntries: PosFinanceEntry[];
   maps: PosProductMap[];
   recipes: DishRecipe[];
   products: Product[];

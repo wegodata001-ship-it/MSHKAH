@@ -158,6 +158,7 @@ export type InventoryMovement = {
   supplierId?: string;
   invoiceId?: string;
   posImportId?: string;
+  posSourceRow?: number;
   orderId?: string;
   recipeId?: string;
   menuProductId?: string;
@@ -204,6 +205,8 @@ export type SupplierItemMap = {
   purchaseUnit?: PurchaseUnit;
   packageQuantity?: number;
   conversion?: number;
+  compareGroupId?: string;
+  compareGroupName?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -338,31 +341,174 @@ export type PurchaseInvoice = {
   inventoryPostingId?: string;
 };
 
-export type PosImportStatus = "draft" | "approved" | "blocked-duplicate";
+export type PosImportStatus = "draft" | "saved" | "approved" | "blocked-duplicate";
+export type PosImportKind = "excel-info" | "z-report";
+export type PosFinanceStatus = "none" | "draft" | "posted";
 
 export type PosSaleLine = {
   key: string;
+  sourceRow?: number;
   posCode: string;
   posName: string;
   quantity: number;
   unitPrice?: number;
   netTotal?: number;
+  reportedRevenue?: number | null;
+  transactionCount?: number | null;
+  posCost?: number | null;
+  posProfit?: number | null;
   saleDate?: string;
   menuProductId?: string;
   matchKind: "exact" | "suggest" | "new" | "none";
+  reviewReason?: "missing-source-name" | "zero-quantity" | null;
+  computedUnitPrice?: number | null;
+  sourceUnitPrice?: number | null;
+  priceGap?: number | null;
+  lineKind?: "sale" | "return";
+  excluded?: boolean;
 };
 
 export type PosImport = {
   id: string;
+  kind?: PosImportKind;
   fileName: string;
   fileHash: string;
-  source: "pos-file";
+  source: "pos-file" | "z-scan";
   period: string;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+  sourcePeriodFrom?: string | null;
+  sourcePeriodTo?: string | null;
+  reportGeneratedAt?: string | null;
+  uploadedAt?: string;
+  periodNeedsReview?: boolean;
+  periodConfirmed?: boolean;
   status: PosImportStatus;
+  financeStatus?: PosFinanceStatus;
+  infoOnly?: boolean;
+  inventoryStatus?: "none" | "partial" | "posted";
+  applyProgress?: {
+    productsCreated?: string[];
+    pricesUpdated?: string[];
+    movementIds?: string[];
+    lastError?: string;
+  };
   lines: PosSaleLine[];
+  itemCount?: number;
+  quantitySum?: number;
+  reportedRevenueSum?: number | null;
+  sheetName?: string | null;
+  headerRow?: number | null;
+  sourceFile?: InvoiceSourceFile;
   previousImportId?: string;
+  excludedKeys?: string[];
+  sourceTotals?: { itemCount: number | null; quantitySum: number | null; reportedRevenueSum: number | null } | null;
   createdAt: string;
   approvedAt?: string;
+};
+
+export type PosColumnTemplate = {
+  id: string;
+  headers: string[];
+  columnMap: Partial<Record<string, number>>;
+  sheetName?: string | null;
+  headerRow?: number | null;
+  createdAt: string;
+};
+
+export type PosZPaymentRole = "tender" | "tender-summary";
+export type PosZScanStatus = "uploaded" | "scanning" | "ready" | "partial" | "failed";
+export type PosZFieldRole = "header" | "payment" | "payment-summary" | "sales" | "extra" | "other";
+
+export type PosZPayment = {
+  method: string;
+  sourceLabel?: string;
+  amount: number | null;
+  count?: number | null;
+  role?: PosZPaymentRole;
+};
+
+export type PosZExtraAmount = {
+  sourceLabel: string;
+  amount: number | null;
+  role: "extra";
+};
+
+export type PosZExtractedField = {
+  key: string;
+  sourceLabel: string;
+  value: string | number | null;
+  kind: "text" | "money" | "count" | "date" | "datetime";
+  role: PosZFieldRole;
+  needsReview: boolean;
+};
+
+export type PosZCheck = {
+  id: string;
+  label: string;
+  left: number | null;
+  right: number | null;
+  gap: number | null;
+  ok: boolean;
+};
+
+export type PosZReport = {
+  id: string;
+  reportNumber?: string | null;
+  reportType?: string | null;
+  registerId?: string | null;
+  cashier?: string | null;
+  branch?: string | null;
+  businessName?: string | null;
+  businessDate?: string | null;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+  printedAt?: string | null;
+  salesBeforeVat?: number | null;
+  salesTotal?: number | null;
+  salesIncludingVat?: number | null;
+  vatTotal?: number | null;
+  vatRate?: number | null;
+  receiptsTotal?: number | null;
+  receiptsCount?: number | null;
+  returnsTotal?: number | null;
+  discountsTotal?: number | null;
+  cashExpected?: number | null;
+  payments?: PosZPayment[];
+  extraAmounts?: PosZExtraAmount[];
+  fields?: PosZExtractedField[];
+  checks?: PosZCheck[];
+  periodConfirmed?: boolean;
+  scanStatus?: PosZScanStatus;
+  lastScanError?: string | null;
+  extractionModel?: string | null;
+  status: "draft" | "posted";
+  financeEntryId?: string | null;
+  sourceFiles?: InvoiceSourceFile[];
+  fileHash?: string;
+  duplicateOf?: string | null;
+  websiteOverlap?: { orderCount: number; amount: number } | null;
+  periodOverlapIds?: string[];
+  createdAt: string;
+  updatedAt?: string;
+  postedAt?: string;
+  postedBy?: string;
+};
+
+export type PosFinanceEntry = {
+  id: string;
+  zReportId: string;
+  kind?: "z-post" | "z-correction";
+  businessDate: string;
+  amount: number;
+  vatBasis: "before" | "including" | "unknown";
+  vatTotal?: number | null;
+  payments?: PosZPayment[];
+  sourceFilePaths?: string[];
+  postedAt: string;
+  postedBy?: string;
+  correctionOf?: string | null;
+  reason?: string | null;
 };
 
 export type PosProductMap = {

@@ -1,7 +1,10 @@
 export type CostFrequency = "daily" | "weekly" | "monthly" | "yearly";
 export type BreakEvenVatMode = "before" | "including" | "exempt";
 export type BreakEvenVatBasis = "before" | "including";
-export type VariableCostKind = "percent" | "per_order" | "fixed";
+export type VariableCostKind = "percent" | "per_order" | "per_dish" | "fixed";
+export type VariableAppliesTo = "all" | "card";
+export type BreakEvenMixSource = "approved" | "actual" | "estimate" | "none";
+export type BreakEvenSnapshotKind = "saved" | "scenario";
 
 export type BreakEvenFixedCost = {
   id: string;
@@ -22,6 +25,7 @@ export type BreakEvenVariableCost = {
   kind: VariableCostKind;
   amount: number;
   frequency?: CostFrequency;
+  appliesTo?: VariableAppliesTo;
   vatMode: BreakEvenVatMode;
   vatRate?: number | null;
   active: boolean;
@@ -41,6 +45,7 @@ export type BreakEvenSettings = {
 export type BreakEvenSnapshot = {
   id: string;
   monthKey: string;
+  kind?: BreakEvenSnapshotKind;
   revenue: number | null;
   fixedCosts: number | null;
   variableCosts: number | null;
@@ -53,7 +58,7 @@ export type BreakEvenSnapshot = {
   createdAt: string;
 };
 
-export type BreakEvenMissing = "fixed" | "variable" | "sales" | "margin";
+export type BreakEvenMissing = "fixed" | "variable" | "sales" | "margin" | "mix";
 
 export type DailyRevenuePoint = {
   date: string;
@@ -61,14 +66,64 @@ export type DailyRevenuePoint = {
   cumulative: number;
 };
 
+export type ProductCostKind = "recipe" | "resale" | "combo" | "estimate";
+export type ProductCostBasis = "latest" | "weighted" | "estimate";
+export type ProductCostGapCode =
+  | "no-link"
+  | "missing-purchase-price"
+  | "missing-pack-qty"
+  | "missing-recipe-qty"
+  | "incompatible-units"
+  | "partial-recipe";
+
+export type ProductCostGap = {
+  code: ProductCostGapCode;
+  ingredientId?: string;
+  name?: string;
+};
+
+export type ProductCostUnused = {
+  kind: "recipe" | "ingredient" | "purchase" | "pos-cost";
+  id: string;
+  name: string;
+  detail?: string;
+};
+
+export type ProductCostLink = {
+  id: string;
+  productId: string;
+  kind: ProductCostKind;
+  recipeId?: string;
+  ingredientId?: string;
+  packQuantity?: number | null;
+  packUnit?: import("@/lib/costing/types").PurchaseUnit;
+  estimateAmount?: number | null;
+  estimateNote?: string;
+  estimateAt?: string;
+  updatedAt: string;
+};
+
 export type ProductContribution = {
   productId: string;
   name: string;
   sellingPrice: number;
-  foodCost: number;
-  extraVariable: number;
-  contribution: number;
+  foodCost: number | null;
+  extraVariable: number | null;
+  contribution: number | null;
   contributionRatio: number | null;
+  costMissing: boolean;
+  costKind?: ProductCostKind | null;
+  costBasis?: ProductCostBasis | null;
+  costGaps?: ProductCostGap[];
+  unusedExisting?: ProductCostUnused[];
+  posCost?: number | null;
+  posProfit?: number | null;
+};
+
+export type BreakEvenCatalogProduct = {
+  id: string;
+  name: string;
+  price: number;
 };
 
 export type BreakEvenResult = {
@@ -82,11 +137,19 @@ export type BreakEvenResult = {
   orders: number | null;
   averageOrderValue: number | null;
   productsSold: number | null;
+  cardRevenue: number | null;
+  salesSources: Array<"website" | "z">;
   fixedMonthly: number | null;
   variableTotal: number | null;
   foodCost: number | null;
   contribution: number | null;
   contributionRatio: number | null;
+  mixSource: BreakEvenMixSource;
+  mixAssumptions: string[];
+  mixCostIncomplete: boolean;
+  cardFeeSkipped: boolean;
+  hasApprovedZeroFixed: boolean;
+  hasApprovedZeroVariable: boolean;
   breakEvenMonthly: number | null;
   breakEvenWeekly: number | null;
   breakEvenDaily: number | null;

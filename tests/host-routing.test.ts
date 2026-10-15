@@ -2,12 +2,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  adminExternalHref,
   adminPath,
+  isLocalAdminHost,
+  isLocalDevHost,
   isMenuBlockedApiPath,
   isMenuHost,
   isOrderingPath,
   isPortalHost,
   isViewOnlyMenuSurface,
+  safeAdminReturnPath,
   shouldBlockAdminOnHost,
   shouldHideCustomerChrome,
   toInternalAdminPath,
@@ -34,6 +38,32 @@ describe("host-routing", () => {
     expect(shouldBlockAdminOnHost("menu.mishkatcafe.dev")).toBe(true);
     expect(shouldBlockAdminOnHost("portal.mishkatcafe.dev")).toBe(false);
     expect(shouldBlockAdminOnHost("localhost:3000")).toBe(false);
+    expect(shouldBlockAdminOnHost("127.0.0.1:4000")).toBe(false);
+    expect(shouldBlockAdminOnHost("10.0.0.16:3000")).toBe(false);
+  });
+
+  it("keeps local and LAN hosts on same-origin /admin", () => {
+    expect(isLocalDevHost("localhost:3000")).toBe(true);
+    expect(isLocalDevHost("127.0.0.1")).toBe(true);
+    expect(isLocalDevHost("10.0.0.16")).toBe(true);
+    expect(isLocalDevHost("192.168.1.10")).toBe(true);
+    expect(isLocalAdminHost("localhost")).toBe(true);
+    expect(isLocalAdminHost("portal.mishkatcafe.dev")).toBe(false);
+    expect(isLocalAdminHost("menu.mishkatcafe.dev")).toBe(false);
+    expect(isLocalAdminHost("mishkatcafe.dev")).toBe(false);
+    expect(adminExternalHref("products", "localhost")).toBe("/admin/products");
+    expect(adminExternalHref("login", "127.0.0.1")).toBe("/admin/login");
+    expect(adminExternalHref("", "localhost")).toBe("/admin");
+    expect(adminExternalHref("products", "portal.mishkatcafe.dev")).toBe("/products");
+    expect(adminExternalHref("login", "mishkatcafe.dev")).toContain("portal.mishkatcafe.dev");
+    expect(adminExternalHref("login", "mishkatcafe.dev")).not.toContain("localhost");
+    expect(safeAdminReturnPath("/admin/costing", "/admin")).toBe("/admin/costing");
+    expect(safeAdminReturnPath("http://localhost:3000/admin/orders?tab=open", "/admin")).toBe(
+      "/admin/orders?tab=open"
+    );
+    expect(safeAdminReturnPath("https://portal.mishkatcafe.dev/orders", "/admin")).toBe("/admin/orders");
+    expect(safeAdminReturnPath("https://evil.example/admin", "/admin")).toBe("/admin");
+    expect(safeAdminReturnPath("//evil.example/admin", "/admin")).toBe("/admin");
   });
 
   it("maps portal paths to internal admin routes", () => {
@@ -114,5 +144,11 @@ describe("portal manifest", () => {
   it("lets /manifest.webmanifest reach Next.js instead of rewriting to /admin", () => {
     const source = readFileSync(resolve(process.cwd(), "src/middleware.ts"), "utf8");
     expect(source).toMatch(/isPortalHost[\s\S]*pathname === "\/manifest\.webmanifest"[\s\S]*NextResponse\.next\(\)/);
+  });
+
+  it("keeps local /admin on the current origin before portal rewrites", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/middleware.ts"), "utf8");
+    expect(source).toMatch(/isLocalAdminHost\(host\)[\s\S]*NextResponse\.next\(\)/);
+    expect(source.indexOf("isLocalAdminHost")).toBeLessThan(source.indexOf("isPortalHost(host)"));
   });
 });
