@@ -440,7 +440,7 @@ export function applyColumnMapToRows(
   headerIndex: number,
   products: Product[],
   maps: PosProductMap[]
-): { lines: PosSaleLine[]; sourceTotals: PosExcelSummary | null } {
+): { lines: PosSaleLine[]; sourceTotals: PosSourceTotals | null } {
   const lines: PosSaleLine[] = [];
   for (let i = headerIndex + 1; i < rows.length; i += 1) {
     const mapped = mapRow(fields, rows[i].cells, rows[i].excelRow);

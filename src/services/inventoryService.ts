@@ -56,6 +56,7 @@ import type {
   PosImport,
   PosProductMap,
   PurchaseInvoice,
+  PurchaseInvoiceLine,
   PurchaseInvoiceStatus,
   PurchasePriceRecord,
   Supplier,
@@ -1961,9 +1962,11 @@ export async function applyPurchaseList(input: {
       const existingInvoice = liveInvoices.find(
         (item) => item.supplierId === supplierId && item.invoiceNumber.trim() === group.invoiceNumber && item.status !== "rejected"
       );
-      const lines = group.rows.map((row) => {
+      const lines: PurchaseInvoiceLine[] = group.rows.map((row) => {
         const money = purchaseMoney(row);
         const productId = ingredientIds.get(row.canonicalName.trim());
+        const vatType: PurchaseInvoiceLine["vatType"] =
+          money.sourceGross != null && money.sourceNet == null ? "inclusive" : "exclusive";
         return {
           key: purchaseLineKey(row),
           rawName: row.sourceName,
@@ -1976,7 +1979,7 @@ export async function applyPurchaseList(input: {
           lineTotal: money.sourceNet ?? money.sourceGross,
           lineNet: money.sourceNet,
           lineGross: money.sourceGross,
-          vatType: money.sourceGross != null && money.sourceNet == null ? "inclusive" : "exclusive",
+          vatType,
           vatRate: 0.18,
           priceBeforeVat: money.sourceNet,
           vatAmount: money.sourceVat,

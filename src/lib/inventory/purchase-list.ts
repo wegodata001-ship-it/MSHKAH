@@ -164,7 +164,7 @@ function mapTable(table: { headers: string[]; rows: string[][] }, startRow: numb
   const fields = table.headers.map(fieldForHeader);
   if (!fields.includes("name")) return [];
   return table.rows
-    .map((cells, index) => {
+    .map((cells, index): PurchaseListLine | null => {
       const get = (field: PurchaseListField) => {
         const i = fields.indexOf(field);
         return i >= 0 ? cells[i] ?? "" : "";
@@ -191,9 +191,9 @@ function mapTable(table: { headers: string[]; rows: string[][] }, startRow: numb
         lineVat,
         lineGross,
         categoryHint: get("category") || undefined,
-      } satisfies PurchaseListLine;
+      };
     })
-    .filter((row): row is PurchaseListLine => Boolean(row));
+    .filter((row): row is PurchaseListLine => row != null);
 }
 
 export function canonicalPurchaseName(name: string): string {
