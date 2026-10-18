@@ -396,7 +396,7 @@ function appendMembersWithoutOffers(
     const ingredient = input.ingredients.find((item) => item.id === ingredientId);
     if (!ingredient) continue;
     const productRecords = (input.records ?? []).filter((row) => row.productId === ingredientId && row.supplierId);
-    const supplierIds = [...new Set(productRecords.map((row) => row.supplierId))];
+    const supplierIds = [...new Set(productRecords.map((row) => row.supplierId).filter((id): id is string => Boolean(id)))];
     if (supplierIds.length) {
       for (const supplierId of supplierIds) {
         const record = latestPurchaseForSupplier(productRecords, ingredientId, supplierId);

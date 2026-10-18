@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
         requestId,
         code: "SCAN_IN_PROGRESS",
         message: "סריקה כבר רצה לדוח זה",
-        report: current ? { id: ref.id, ...current } : { id: ref.id },
+        report: current ? { ...current, id: ref.id } : { id: ref.id },
       });
     }
     inflight.add(lockKey);
@@ -181,7 +181,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (!reuse && !attachments.length) {
-        return fail({ status: 400, requestId, code: "file-required", message: "חסר קובץ לסריקה", report: current ? { id: ref.id, ...current } : { id: ref.id } });
+        return fail({ status: 400, requestId, code: "file-required", message: "חסר קובץ לסריקה", report: current ? { ...current, id: ref.id } : { id: ref.id } });
       }
 
       let extractedReport: PosZReport;
@@ -239,7 +239,7 @@ export async function POST(request: NextRequest) {
               requestId,
               code: error.code,
               message,
-              report: { id: ref.id, ...current, ...failed },
+              report: { ...current, ...failed, id: ref.id },
             });
           }
           return fail({
@@ -247,7 +247,7 @@ export async function POST(request: NextRequest) {
             requestId,
             code: "scan-failed",
             message,
-            report: { id: ref.id, ...current, ...failed },
+            report: { ...current, ...failed, id: ref.id },
           });
         }
 
