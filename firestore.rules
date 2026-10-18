@@ -19,7 +19,7 @@ service cloud.firestore {
     }
 
     function isActiveUser() {
-      return userExists() && userDoc().data.active == true;
+      return userExists() && userDoc().data.get('active', true) != false;
     }
 
     function isStaff() {
@@ -150,6 +150,11 @@ service cloud.firestore {
     }
 
     match /ingredients/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /ingredientCategories/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();
     }

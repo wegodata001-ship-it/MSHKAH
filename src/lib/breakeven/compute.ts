@@ -1,6 +1,7 @@
 import { recipeIngredientCost, recipeIngredientCostReport } from "@/lib/costing/calc";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { recipeForProduct } from "@/lib/costing/model";
+import { firstBusinessDate } from "@/lib/dates/normalize";
 import { detectedVatRate } from "@/lib/inventory/vat";
 import type { Order } from "@/types";
 import type { PosFinanceEntry, PosImport, PosZReport } from "@/lib/inventory/types";
@@ -50,8 +51,10 @@ export function amountOnVatBasis(
   return amount;
 }
 
-export function orderBusinessDate(order: Order): string {
-  return (order.paidAt || order.completedAt || order.createdAt || "").slice(0, 10);
+export function orderBusinessDate(
+  order: Pick<Order, "paidAt" | "completedAt" | "createdAt"> | { paidAt?: unknown; completedAt?: unknown; createdAt?: unknown }
+): string | null {
+  return firstBusinessDate([order.paidAt, order.completedAt, order.createdAt]);
 }
 
 export function isCountableSale(order: Order): boolean {
@@ -65,7 +68,7 @@ export function salesInRange(orders: Order[], from: string, to: string) {
   const rows = orders.filter((order) => {
     if (!isCountableSale(order)) return false;
     const day = orderBusinessDate(order);
-    return day && day >= from && day <= to;
+    return Boolean(day && day >= from && day <= to);
   });
   const revenue = rows.reduce((sum, order) => sum + (Number(order.total) || 0), 0);
   const count = rows.length;
@@ -147,7 +150,10 @@ export function approvedPeriodSales(input: {
   const windows = postedZWindows(input.zReports);
   const overlappingWindows = windows.filter((window) => periodsOverlap(window.from, window.to, input.from, input.to));
   const website = salesInRange(input.orders, input.from, input.to);
-  const websiteRows = website.rows.filter((order) => !dayCoveredByZ(orderBusinessDate(order), overlappingWindows));
+  const websiteRows = website.rows.filter((order) => {
+    const day = orderBusinessDate(order);
+    return Boolean(day && !dayCoveredByZ(day, overlappingWindows));
+  });
   const websiteRevenue = websiteRows.reduce((sum, order) => sum + (Number(order.total) || 0), 0);
   const websiteOrders = websiteRows.length;
   const websiteProducts = websiteRows.reduce(
@@ -186,6 +192,7 @@ export function approvedPeriodSales(input: {
   const daily = new Map<string, number>();
   for (const order of websiteRows) {
     const day = orderBusinessDate(order);
+    if (!day) continue;
     daily.set(day, (daily.get(day) ?? 0) + (Number(order.total) || 0));
   }
   for (const entry of entries) {
@@ -314,6 +321,7 @@ export function dailyRevenueSeries(orders: Order[], from: string, to: string): D
   const map = new Map<string, number>();
   for (const order of salesInRange(orders, from, to).rows) {
     const day = orderBusinessDate(order);
+    if (!day) continue;
     map.set(day, (map.get(day) ?? 0) + (Number(order.total) || 0));
   }
   return seriesFromDailyMap(map, from, to);

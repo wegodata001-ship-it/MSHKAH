@@ -1,26 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { AdminCard } from "@/features/admin/components/admin-card";
+import { CompareDetailDialog } from "@/features/admin/inventory/compare-detail-dialog";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
-import { formatIls } from "@/lib/costing/money";
-import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
-import { PURCHASE_UNITS } from "@/lib/costing/units";
+import type { CostingIngredient } from "@/lib/costing/types";
+import { formatCompareMoney, formatComparePercent, sortCompareRows } from "@/lib/inventory/compare-display";
 import {
   buildGroupCompareRows,
+  compareCoverage,
   listCompareGroups,
   listCompareProductPicks,
-  partitionCompareRows,
   searchCompareProductPicks,
   similarMaterialCandidates,
   type CompareVatMode,
+  type IngredientCompareGroup,
   type MaterialCompareRow,
 } from "@/lib/inventory/material-group";
-import type { PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
-import { saveComparePack, saveIngredientCompareGroup } from "@/services/inventoryService";
+import type { PurchaseInvoice, PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
+import { saveIngredientCompareGroup } from "@/services/inventoryService";
+
+function rowKey(row: MaterialCompareRow): string {
+  return `${row.ingredientId}-${row.supplierId}-${row.offerId ?? ""}`;
+}
 
 const VAT_KEY = "mishkah-compare-vat";
 const GROUP_KEY = "mishkah-compare-group";
@@ -30,12 +35,24 @@ function loadVat(): CompareVatMode {
   return window.localStorage.getItem(VAT_KEY) === "gross" ? "gross" : "net";
 }
 
+function coverageLabel(suppliers: number, products: number, t: (key: string, fallback?: string) => string): string {
+  const supplierLabel =
+    suppliers === 0
+      ? t("admin.compare.supplierNone")
+      : suppliers === 1
+        ? t("admin.compare.supplierOne")
+        : t("admin.compare.supplierMany").replace("{count}", String(suppliers));
+  const productLabel = products === 1 ? t("admin.compare.productOne") : t("admin.compare.productMany").replace("{count}", String(products));
+  return `${supplierLabel} · ${productLabel}`;
+}
+
 export function ComparePane({
   ingredients,
   offers,
   records,
   suppliers,
   itemMaps,
+  invoices = [],
   onToast,
 }: {
   ingredients: CostingIngredient[];
@@ -43,27 +60,49 @@ export function ComparePane({
   records: PurchasePriceRecord[];
   suppliers: Supplier[];
   itemMaps?: SupplierItemMap[];
+  invoices?: PurchaseInvoice[];
   onToast: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
   const maps = itemMaps ?? [];
-  const groups = useMemo(() => listCompareGroups(ingredients), [ingredients]);
+  const liveGroups = useMemo(() => listCompareGroups(ingredients), [ingredients]);
+  const [overlay, setOverlay] = useState<IngredientCompareGroup | null>(null);
+  const groups = useMemo(() => {
+    if (!overlay) return liveGroups;
+    const live = liveGroups.find((group) => group.id === overlay.id);
+    if (live && overlay.memberIds.every((id) => live.memberIds.includes(id))) return liveGroups;
+    return [overlay, ...liveGroups.filter((group) => group.id !== overlay.id)];
+  }, [liveGroups, overlay]);
   const [groupId, setGroupId] = useState("");
+  const [preferredGroupId, setPreferredGroupId] = useState<string | null>(null);
   const [groupQuery, setGroupQuery] = useState("");
   const [vatMode, setVatMode] = useState<CompareVatMode>("net");
   const [managing, setManaging] = useState<"new" | "edit" | null>(null);
-  const [history, setHistory] = useState<{ productId: string; supplierId: string } | null>(null);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
 
   useEffect(() => {
     setVatMode(loadVat());
   }, []);
 
   useEffect(() => {
+    if (!overlay) return;
+    const live = liveGroups.find((group) => group.id === overlay.id);
+    if (live && overlay.memberIds.every((id) => live.memberIds.includes(id))) setOverlay(null);
+  }, [liveGroups, overlay]);
+
+  useEffect(() => {
+    if (preferredGroupId && groups.some((group) => group.id === preferredGroupId)) {
+      setGroupId(preferredGroupId);
+      window.localStorage.setItem(GROUP_KEY, preferredGroupId);
+      setPreferredGroupId(null);
+      return;
+    }
+    if (preferredGroupId) return;
     if (groupId && groups.some((group) => group.id === groupId)) return;
     const stored = typeof window !== "undefined" ? window.localStorage.getItem(GROUP_KEY) : "";
     if (stored && groups.some((group) => group.id === stored)) setGroupId(stored);
     else if (groups[0]) setGroupId(groups[0].id);
-  }, [groupId, groups]);
+  }, [groupId, groups, preferredGroupId]);
 
   const visibleGroups = groups.filter((group) => !groupQuery.trim() || group.name.toLowerCase().includes(groupQuery.trim().toLowerCase()));
   const group = groups.find((item) => item.id === groupId) ?? null;
@@ -82,10 +121,16 @@ export function ComparePane({
         : [],
     [group, ingredients, suppliers, offers, records, maps, vatMode]
   );
-  const { comparable, other } = partitionCompareRows(rows);
-  const displayUnit = comparable[0]?.displayUnit ?? other[0]?.displayUnit;
-  const supplierCount = new Set(rows.map((row) => row.supplierId).filter(Boolean)).size;
+  const sortedRows = useMemo(() => sortCompareRows(rows), [rows]);
+  const coverage = compareCoverage(rows);
   const hasPrice = rows.some((row) => row.buyPrice != null);
+  const hasCheapest = rows.some((row) => row.cheapest);
+  const latestDate = rows
+    .map((row) => row.purchaseDate)
+    .filter((date): date is string => Boolean(date))
+    .sort()
+    .at(-1);
+  const detail = sortedRows.find((row) => rowKey(row) === detailKey) ?? null;
 
   function persistVat(mode: CompareVatMode) {
     setVatMode(mode);
@@ -135,12 +180,14 @@ export function ComparePane({
           maps={maps}
           offers={offers}
           onClose={() => setManaging(null)}
-          onSaved={(id) => {
-            selectGroup(id);
+          onSaved={(saved) => {
+            setOverlay(saved);
+            setPreferredGroupId(saved.id);
+            setGroupId(saved.id);
+            window.localStorage.setItem(GROUP_KEY, saved.id);
             setManaging(null);
-            onToast(t("admin.compare.groupSaved"));
+            onToast(t("admin.compare.groupSavedCount").replace("{count}", String(saved.memberIds.length)));
           }}
-          onError={(message) => onToast(message, "error")}
         />
       )}
 
@@ -153,26 +200,36 @@ export function ComparePane({
       {group && (
         <AdminCard title={group.name}>
           <p className="mb-2 text-xs text-coffee/55">{t("admin.materialGroup.compareOnly")}</p>
-          <p className="mb-3 text-xs text-coffee/55">{t("admin.compare.cheapestAmongSaved")}</p>
-          {displayUnit && (
-            <p className="mb-3 text-sm font-medium">
-              {t("admin.compare.unit")}: {vatMode === "net" ? t("admin.finance.compareNet") : t("admin.finance.compareGross")} · ₪ / {t(unitLabelKey(displayUnit))}
-            </p>
-          )}
-          {supplierCount < 2 && <p className="mb-2 text-sm text-amber-800">{t("admin.compare.oneSupplier")}</p>}
+          <p className="text-sm font-semibold">{vatMode === "net" ? t("admin.compare.pricesNet") : t("admin.compare.pricesGross")}</p>
+          <p className="mb-3 text-xs text-coffee/60">
+            {t("admin.compare.savedPurchases")}
+            {latestDate ? ` · ${latestDate}` : ""}
+          </p>
+          <p className="mb-2 text-sm text-coffee/80">{coverageLabel(coverage.suppliers, coverage.products, t)}</p>
+          {coverage.products === 1 && <p className="mb-2 text-sm text-amber-800">{t("admin.compare.oneProduct")}</p>}
           {!hasPrice && <p className="mb-2 text-sm text-amber-800">{t("admin.compare.noPrices")}</p>}
+          {coverage.products >= 2 && hasPrice && !hasCheapest && (
+            <p className="mb-2 text-sm text-amber-800">{t("admin.compare.needCompareBasis")}</p>
+          )}
 
-          {rows.length > 0 && (
+          {sortedRows.length > 0 && (
             <CompareTable
-              rows={comparable.length ? comparable : []}
-              extra={other}
-              records={records}
-              history={history}
-              onHistory={setHistory}
-              onPackSaved={() => onToast(t("admin.compare.packSaved"))}
-              onPackError={(message) => onToast(message, "error")}
+              rows={sortedRows}
+              highlightCheapest={coverage.products >= 2}
+              onOpen={setDetailKey}
             />
           )}
+          <CompareDetailDialog
+            row={detail}
+            rows={sortedRows}
+            records={records}
+            invoices={invoices}
+            suppliers={suppliers}
+            vatMode={vatMode}
+            groupName={group.name}
+            onClose={() => setDetailKey(null)}
+            onSaved={() => onToast(t("admin.compare.packSaved"))}
+          />
         </AdminCard>
       )}
     </div>
@@ -181,173 +238,78 @@ export function ComparePane({
 
 function CompareTable({
   rows,
-  extra,
-  records,
-  history,
-  onHistory,
-  onPackSaved,
-  onPackError,
+  highlightCheapest,
+  onOpen,
 }: {
   rows: MaterialCompareRow[];
-  extra: MaterialCompareRow[];
-  records: PurchasePriceRecord[];
-  history: { productId: string; supplierId: string } | null;
-  onHistory: (value: { productId: string; supplierId: string } | null) => void;
-  onPackSaved: () => void;
-  onPackError: (message: string) => void;
+  highlightCheapest: boolean;
+  onOpen: (key: string) => void;
 }) {
   const t = useT();
   return (
-    <div className="space-y-4">
-      <div className="overflow-x-auto text-sm">
-        <table className="min-w-full">
-          <thead>
-            <tr className="text-coffee/55">
-              <th className="p-1 text-start">{t("admin.costing.supplier")}</th>
-              <th className="p-1 text-start">{t("admin.materialGroup.supplierProduct")}</th>
-              <th className="p-1 text-start">{t("admin.compare.packContents")}</th>
-              <th className="p-1 text-start">{t("admin.compare.lastPackPrice")}</th>
-              <th className="p-1 text-start">{t("admin.materialGroup.basePrice")}</th>
-              <th className="p-1 text-start">{t("admin.materialGroup.priceDate")}</th>
-              <th className="p-1 text-start">{t("admin.compare.gap")}</th>
-              <th className="p-1 text-start" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <CompareRow
-                key={`${row.ingredientId}-${row.supplierId}`}
-                row={row}
-                onHistory={() => onHistory({ productId: row.ingredientId, supplierId: row.supplierId })}
-                onPackSaved={onPackSaved}
-                onPackError={onPackError}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {extra.length > 0 && (
-        <div>
-          <p className="mb-2 text-sm font-medium">{t("admin.compare.incomparable")}</p>
-          <div className="overflow-x-auto text-sm">
-            <table className="min-w-full">
-              <tbody>
-                {extra.map((row) => (
-                  <CompareRow
-                    key={`other-${row.ingredientId}-${row.supplierId}`}
-                    row={row}
-                    onHistory={() => onHistory({ productId: row.ingredientId, supplierId: row.supplierId })}
-                    onPackSaved={onPackSaved}
-                    onPackError={onPackError}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-      {history && (
-        <div className="rounded-xl bg-beige/40 p-3 text-sm">
-          <p className="mb-2 font-medium">{t("admin.inventory.priceHistory")}</p>
-          {records
-            .filter((row) => row.productId === history.productId && row.supplierId === history.supplierId)
-            .slice()
-            .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate) || b.createdAt.localeCompare(a.createdAt))
-            .map((row) => (
-              <p key={row.id}>
-                {row.purchaseDate} · {formatIls(row.priceIncludingVat || row.unitCost)} ·{" "}
-                {row.source === "PURCHASE_INVOICE" ? t("admin.inventory.sourceInvoice") : t("admin.inventory.sourceManual")}
-              </p>
-            ))}
-          {!records.some((row) => row.productId === history.productId && row.supplierId === history.supplierId) && (
-            <p className="text-coffee/55">{t("admin.compare.noHistory")}</p>
-          )}
-          <Button type="button" variant="ghost" size="sm" className="mt-2" onClick={() => onHistory(null)}>
-            {t("common.close")}
-          </Button>
-        </div>
-      )}
+    <div className="overflow-x-auto text-sm">
+      <table className="min-w-full border-separate border-spacing-0">
+        <thead>
+          <tr className="bg-beige/50 text-xs text-coffee/70">
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.costing.supplier")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.materialGroup.supplierProduct")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.compare.packContents")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.compare.packPrice")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.compare.baseUnitPrice")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.materialGroup.priceDate")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.compare.gap")}</th>
+            <th className="border-b border-beige-dark/15 px-2 py-2 text-start font-medium">{t("admin.compare.details")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <CompareRow key={rowKey(row)} row={row} highlight={highlightCheapest && row.cheapest} onOpen={() => onOpen(rowKey(row))} />
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function CompareRow({
-  row,
-  onHistory,
-  onPackSaved,
-  onPackError,
-}: {
-  row: MaterialCompareRow;
-  onHistory: () => void;
-  onPackSaved: () => void;
-  onPackError: (message: string) => void;
-}) {
+function CompareRow({ row, highlight, onOpen }: { row: MaterialCompareRow; highlight: boolean; onOpen: () => void }) {
   const t = useT();
-  const [packQty, setPackQty] = useState(row.packQuantity != null ? String(row.packQuantity) : "");
-  const [packUnit, setPackUnit] = useState<PurchaseUnit>(row.packUnit ?? "kg");
-  const missingPack = row.reason === "missing-pack";
+  const missingBasis = (!row.supplierId && !row.supplierName.trim()) || row.buyPrice == null;
+  const needsCompletion = missingBasis || row.reason === "missing-pack" || row.reason === "vat-mismatch" || row.reason === "unit-mismatch";
   return (
-    <tr className={row.cheapest ? "bg-emerald-50" : ""}>
-      <td className="p-1">{row.supplierName}</td>
-      <td className="p-1">
+    <tr className={highlight ? "bg-emerald-50" : ""}>
+      <td className="border-b border-beige-dark/10 px-2 py-2">{row.supplierName || "—"}</td>
+      <td className="border-b border-beige-dark/10 px-2 py-2">
         {row.supplierProductName}
         {row.invoiceNumber ? <span className="block text-xs text-coffee/50">{row.invoiceNumber}</span> : null}
       </td>
-      <td className="p-1">
-        {missingPack ? (
-          <div className="flex flex-wrap items-center gap-1">
-            <span className="text-amber-800">{t("admin.compare.needPackInline")}</span>
-            <Input className="h-8 w-16" value={packQty} inputMode="decimal" onChange={(e) => setPackQty(e.target.value)} />
-            <select className="h-8 rounded-lg border px-1 text-xs" value={packUnit} onChange={(e) => setPackUnit(e.target.value as PurchaseUnit)}>
-              {PURCHASE_UNITS.map((unit) => (
-                <option key={unit} value={unit}>
-                  {t(unitLabelKey(unit))}
-                </option>
-              ))}
-            </select>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={async () => {
-                const qty = Number(packQty.replace(",", "."));
-                if (!Number.isFinite(qty) || qty <= 0) return;
-                const saved = await saveComparePack({
-                  productId: row.ingredientId,
-                  supplierId: row.supplierId,
-                  packageQuantity: qty,
-                  purchaseUnit: packUnit,
-                });
-                if (saved.success) onPackSaved();
-                else onPackError(saved.error);
-              }}
-            >
-              {t("common.save")}
-            </Button>
-          </div>
-        ) : (
-          `${row.packQuantity} ${row.packUnit ? t(unitLabelKey(row.packUnit)) : ""}`
-        )}
+      <td className="border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap">
+        {row.packQuantity != null && row.packUnit ? `${row.packQuantity} ${t(unitLabelKey(row.packUnit))}` : "—"}
       </td>
-      <td className="p-1">{row.buyPrice != null ? formatIls(row.buyPrice) : "—"}</td>
-      <td className={`p-1 ${row.cheapest ? "font-semibold text-emerald-800" : ""}`}>
-        {row.comparable && row.displayUnitCost != null
-          ? `${formatIls(row.displayUnitCost, 4)} / ${t(unitLabelKey(row.displayUnit))}`
-          : "—"}
-        {row.cheapest ? ` · ${t("admin.inventory.cheapest")}` : ""}
+      <td className="border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap tabular-nums">
+        {missingBasis ? <span className="text-amber-800">{t("admin.compare.missingSupplierPrice")}</span> : row.buyPrice != null ? formatCompareMoney(row.buyPrice) : "—"}
       </td>
-      <td className="p-1">{row.purchaseDate || "—"}</td>
-      <td className="p-1">
-        {row.cheapest
+      <td className={`border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap tabular-nums ${highlight ? "font-semibold text-emerald-800" : ""}`}>
+        {row.comparable && row.displayUnitCost != null ? `${formatCompareMoney(row.displayUnitCost)} / ${t(unitLabelKey(row.displayUnit))}` : "—"}
+      </td>
+      <td className="border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap">{row.purchaseDate || "—"}</td>
+      <td className="border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap tabular-nums">
+        {highlight
           ? t("admin.inventory.cheapest")
           : row.gapAmount != null
-            ? `+${formatIls(row.gapAmount, 4)} · +${Math.round(row.gapPercent ?? 0)}%`
+            ? `+${formatCompareMoney(row.gapAmount)}${row.gapPercent != null ? ` · +${formatComparePercent(row.gapPercent)}%` : ""}`
             : "—"}
       </td>
-      <td className="p-1">
-        <button type="button" className="text-turquoise" onClick={onHistory}>
-          {t("admin.inventory.priceHistory")}
-        </button>
+      <td className="border-b border-beige-dark/10 px-2 py-2">
+        <div className="flex flex-wrap gap-1">
+          <Button type="button" size="sm" variant="outline" className="min-h-9" aria-haspopup="dialog" onClick={onOpen}>
+            {t("admin.compare.details")}
+          </Button>
+          {needsCompletion && (
+            <Button type="button" size="sm" variant="outline" className="min-h-9" aria-haspopup="dialog" onClick={onOpen}>
+              {t("admin.compare.complete")}
+            </Button>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -362,7 +324,6 @@ function GroupEditor({
   offers,
   onClose,
   onSaved,
-  onError,
 }: {
   mode: "new" | "edit";
   group: { id: string; name: string; memberIds: string[] } | null;
@@ -371,13 +332,15 @@ function GroupEditor({
   maps: SupplierItemMap[];
   offers: SupplierOffer[];
   onClose: () => void;
-  onSaved: (id: string) => void;
-  onError: (message: string) => void;
+  onSaved: (group: IngredientCompareGroup) => void;
 }) {
   const t = useT();
   const [name, setName] = useState(group?.name ?? "");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string[]>(group?.memberIds ?? []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const savingRef = useRef(false);
   const picks = listCompareProductPicks({ ingredients, suppliers, maps, offers });
   const visible = searchCompareProductPicks(picks, query);
   const suggestions = query.trim().length >= 2 ? similarMaterialCandidates({ name: query }, ingredients, maps) : [];
@@ -416,22 +379,35 @@ function GroupEditor({
           </div>
         )}
         <p className="text-xs text-coffee/55">{t("admin.materialGroup.compareOnly")}</p>
-        <div className="flex flex-wrap gap-2">
+        {error && <p className="text-sm text-red-700">{error}</p>}
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             variant="turquoise"
-            disabled={!name.trim() || selected.length === 0}
+            disabled={saving || !name.trim() || selected.length === 0}
             onClick={async () => {
+              if (savingRef.current) return;
+              const memberIds = [...new Set(selected)];
+              const trimmed = name.trim();
+              if (!trimmed || memberIds.length === 0) return;
+              savingRef.current = true;
+              setSaving(true);
+              setError(null);
               const saved = await saveIngredientCompareGroup({
-                groupId: group?.id,
-                name: name.trim(),
-                memberIds: selected,
+                groupId: mode === "edit" ? group?.id : undefined,
+                name: trimmed,
+                memberIds,
               });
-              if (saved.success) onSaved(saved.data.id);
-              else onError(saved.error);
+              savingRef.current = false;
+              setSaving(false);
+              if (!saved.success || saved.data.memberIds.length !== memberIds.length) {
+                setError(t("admin.compare.saveFailed"));
+                return;
+              }
+              onSaved({ id: saved.data.id, name: saved.data.name, memberIds: saved.data.memberIds });
             }}
           >
-            {t("common.save")}
+            {saving ? t("admin.compare.saving") : t("common.save")}
           </Button>
           <Button type="button" variant="outline" onClick={onClose}>
             {t("common.cancel")}

@@ -5,7 +5,10 @@ import {
   assignmentKeepsSourceAmounts,
   buildGroupCompareRows,
   cheapestGroupRow,
+  compareCoverage,
   compareUsesPurchaseOnly,
+  purchaseFactsFromProductName,
+  resolveCompareGroupId,
   latestPurchaseForSupplier,
   packFieldsConflict,
   posSalePriceIsNotBuyPrice,
@@ -213,6 +216,64 @@ describe("cheapest comparable purchase price", () => {
     expect(cheap?.purchaseDate).toBe("2026-09-18");
     expect(rows.find((row) => row.packUnit === "unit")?.comparable).toBe(false);
     expect(unitsComparableForGroup("kg", "unit", "g")).toBe(false);
+  });
+
+  it("compares two suppliers with different pack sizes of the same unit and does not crown a single product", () => {
+    const rows = buildGroupCompareRows({
+      ingredientIds: ["cola", "cola-zero"],
+      ingredients: [cola, colaZero],
+      suppliers: [alsunbola, brioche],
+      offers: [
+        offer({
+          id: "p40",
+          productId: "cola",
+          supplierId: "s1",
+          vatType: "exclusive",
+          packageQuantity: 40,
+          purchaseUnit: "unit",
+          lastPurchaseDate: "2026-10-13",
+          lastPriceBeforeVat: 244.8,
+          priceBeforeVat: 244.8,
+        }),
+        offer({
+          id: "p24",
+          productId: "cola-zero",
+          supplierId: "s2",
+          vatType: "exclusive",
+          packageQuantity: 24,
+          purchaseUnit: "unit",
+          lastPurchaseDate: "2026-10-13",
+          lastPriceBeforeVat: 168,
+          priceBeforeVat: 168,
+        }),
+      ],
+      lineVatBasis: "net",
+    });
+    expect(rows.every((row) => row.comparable && row.displayUnit === "unit")).toBe(true);
+    expect(rows.find((row) => row.ingredientId === "cola")?.cheapest).toBe(true);
+    expect(rows.find((row) => row.ingredientId === "cola")?.displayUnitCost).toBeCloseTo(6.12);
+    expect(rows.find((row) => row.ingredientId === "cola-zero")?.displayUnitCost).toBeCloseTo(7);
+    const alone = buildGroupCompareRows({
+      ingredientIds: ["cola"],
+      ingredients: [cola],
+      suppliers: [alsunbola],
+      offers: [
+        offer({
+          id: "only",
+          productId: "cola",
+          supplierId: "s1",
+          vatType: "exclusive",
+          packageQuantity: 40,
+          purchaseUnit: "unit",
+          lastPurchaseDate: "2026-10-13",
+          lastPriceBeforeVat: 244.8,
+          priceBeforeVat: 244.8,
+        }),
+      ],
+      lineVatBasis: "net",
+    });
+    expect(compareCoverage(alone).products).toBe(1);
+    expect(alone[0]?.cheapest).toBe(false);
   });
 
   it("does not change invoice amounts or create stock when assigning a group", () => {
@@ -456,7 +517,126 @@ describe("user-defined comparison groups", () => {
     expect(incomplete?.complete).toBe(false);
     expect(incomplete?.comparable).toBe(false);
     expect(incomplete?.reason).toBe("missing-pack");
-    expect(incomplete?.cheapest).toBe(false);
-    expect(cheapestGroupRow(rows)?.ingredientId).toBe("labaneh-asli");
+    expect(rows.every((row) => row.cheapest === false)).toBe(true);
+    expect(cheapestGroupRow(rows)).toBeUndefined();
+  });
+
+  it("keeps both products when one has no purchase price and ignores a selling price in the name", () => {
+    const priced: CostingIngredient = {
+      id: "lettuce-a",
+      name: "חסה ערבית",
+      purchasePrice: 41.77,
+      purchaseQuantity: 6,
+      purchaseUnit: "unit",
+      baseUnit: "unit",
+      costPerBaseUnit: 0,
+      supplier: "Merkaza",
+      active: true,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const named: CostingIngredient = {
+      id: "lettuce-b",
+      name: "חסה ערבית 3 ב־10 ש״ח",
+      purchasePrice: 0,
+      purchaseQuantity: 2,
+      purchaseUnit: "unit",
+      baseUnit: "unit",
+      costPerBaseUnit: 0,
+      supplier: "Merkaza",
+      active: true,
+      createdAt: "",
+      updatedAt: "",
+    };
+    expect(purchaseFactsFromProductName(named.name)).toEqual({ price: null, packQuantity: null });
+    const rows = buildGroupCompareRows({
+      ingredientIds: [priced.id, named.id],
+      ingredients: [priced, named],
+      suppliers: [{ id: "merkaza", name: "Merkaza", active: true, createdAt: "", updatedAt: "" }],
+      offers: [],
+      records: [],
+      lineVatBasis: "net",
+    });
+    const sale = rows.find((row) => row.ingredientId === "lettuce-b");
+    const catalog = rows.find((row) => row.ingredientId === "lettuce-a");
+    expect(rows).toHaveLength(2);
+    expect(sale?.buyPrice).toBeNull();
+    expect(sale?.packQuantity).toBeNull();
+    expect(sale?.reason).toBe("missing-price");
+    expect(sale?.comparable).toBe(false);
+    expect(catalog?.buyPrice).toBeCloseTo(41.77);
+    expect(catalog?.packQuantity).toBe(6);
+    expect(catalog?.comparable).toBe(false);
+    expect(catalog?.supplierName).toBe("Merkaza");
+    expect(rows.every((row) => row.cheapest === false)).toBe(true);
+    expect(compareCoverage(rows)).toEqual({ suppliers: 1, products: 2 });
+  });
+
+  it("compares two products from the same supplier without calling either cheapest early", () => {
+    const rows = buildGroupCompareRows({
+      ingredientIds: ["labaneh-25", "labaneh-asli"],
+      ingredients: [labanehA, labanehB],
+      suppliers: [alsunbola],
+      offers: [
+        offer({
+          id: "same-a",
+          productId: "labaneh-25",
+          supplierId: "s1",
+          lastPurchaseDate: "2026-10-01",
+          lastPriceIncludingVat: 50,
+          lastPackageQuantity: 2,
+          lastUnit: "kg",
+          purchaseUnit: "kg",
+          packageQuantity: 2,
+          vatType: "inclusive",
+        }),
+        offer({
+          id: "same-b",
+          productId: "labaneh-asli",
+          supplierId: "s1",
+          lastPurchaseDate: "2026-10-02",
+          lastPriceIncludingVat: 60,
+          lastPackageQuantity: 2,
+          lastUnit: "kg",
+          purchaseUnit: "kg",
+          packageQuantity: 2,
+          vatType: "inclusive",
+        }),
+      ],
+      lineVatBasis: "gross",
+    });
+    expect(compareCoverage(rows)).toEqual({ suppliers: 1, products: 2 });
+    expect(cheapestGroupRow(rows)?.ingredientId).toBe("labaneh-25");
+    expect(rows.find((row) => row.ingredientId === "labaneh-asli")?.cheapest).toBe(false);
+  });
+});
+
+describe("compare group retry", () => {
+  it("reuses the saved group id when the same name is saved again", () => {
+    expect(
+      resolveCompareGroupId({
+        name: "חסה",
+        members: [
+          { id: "a", compareGroupId: "grp-חסה-dyxky", compareGroupName: "חסה" },
+          { id: "b", compareGroupId: "grp-חסה-dyxky", compareGroupName: "חסה" },
+        ],
+      })
+    ).toBe("grp-חסה-dyxky");
+  });
+
+  it("does not attach a new name onto a different group", () => {
+    const id = resolveCompareGroupId({
+      name: "חסה",
+      members: [
+        { id: "a", compareGroupId: "grp-מאפיים-rhqpd", compareGroupName: "מאפיים" },
+        { id: "b", compareGroupId: "grp-מאפיים-rhqpd", compareGroupName: "מאפיים" },
+      ],
+    });
+    expect(id).not.toBe("grp-מאפיים-rhqpd");
+    expect(id.startsWith("grp-")).toBe(true);
+  });
+
+  it("keeps an explicit group id while editing", () => {
+    expect(resolveCompareGroupId({ groupId: "grp-keep", name: "חסה", members: [] })).toBe("grp-keep");
   });
 });

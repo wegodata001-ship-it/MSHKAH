@@ -1,5 +1,6 @@
 import { aliasOverlap } from "@/lib/costing/ingredient-aliases";
 import type { CostingIngredient } from "@/lib/costing/types";
+import { mergeCategoryNames } from "@/lib/inventory/category-name";
 
 export const MATCH_SUGGEST_MIN = 0.6;
 export const MATCH_SAFE_MIN = 0.9;
@@ -122,10 +123,11 @@ export function rankProductMatches(
     .slice(0, limit);
 }
 
-export function inventoryCategories(ingredients: CostingIngredient[]): string[] {
-  return [...new Set(ingredients.map((item) => item.category?.trim()).filter(Boolean) as string[])].sort((a, b) =>
-    a.localeCompare(b, "he")
-  );
+export function inventoryCategories(
+  ingredients: CostingIngredient[],
+  extras: Array<string | null | undefined> = []
+): string[] {
+  return mergeCategoryNames(extras, ingredients.map((item) => item.category));
 }
 
 export function isSafeInvoiceMatch(score: number | null | undefined, kind?: string): boolean {

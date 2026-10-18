@@ -619,6 +619,7 @@ export function CostingAdmin() {
           suppliers={suppliers}
           offers={offers}
           records={priceRecords}
+          categories={[...new Set(ingredients.map((item) => item.category?.trim()).filter(Boolean) as string[])]}
           onToast={toast}
           onClose={() => {
             setIngredientForm(null);

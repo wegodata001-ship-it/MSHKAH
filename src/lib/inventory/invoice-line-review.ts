@@ -1,5 +1,7 @@
 import { findDuplicateIngredient } from "@/lib/costing/names";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
+import { packNeedsCompletion } from "@/lib/inventory/ingredient-core";
+import { lineHasAmount } from "@/lib/inventory/invoice-lines";
 import { isSafeInvoiceMatch } from "@/lib/inventory/product-match";
 import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 
@@ -49,7 +51,11 @@ export function invoiceLineMatchesFilter(
   if (filter === "all") return true;
   const status = invoiceLineMatchStatus(line);
   if (filter === "needs") {
-    return status !== "confirmed" || !line.unit || (line.quantity == null && line.unitPrice == null && line.lineTotal == null && line.netAmount == null && line.grossAmount == null);
+    if (line.skipInventory) return false;
+    if (!line.productId || !isConfirmedInvoiceMatch(line)) return true;
+    if (!line.unit || line.quantity == null || line.quantity <= 0) return true;
+    if (packNeedsCompletion(line)) return true;
+    return !lineHasAmount(line);
   }
   if (filter === "confirmed") return status === "confirmed";
   if (filter === "new") return status === "new";

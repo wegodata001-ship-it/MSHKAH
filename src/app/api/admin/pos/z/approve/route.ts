@@ -9,6 +9,7 @@ import {
   findDuplicateZReport,
   overlappingPostedZReports,
   overlapRequiresAck,
+  overlapReviewRequired,
   websiteSalesOverlap,
   zAmountToPost,
   zFinanceIdempotencyKey,
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
     report?: Partial<PosZReport>;
     overlapAcknowledged?: boolean;
     periodOverlapAcknowledged?: boolean;
+    overlapReviewAcknowledged?: boolean;
   };
   const reportId = String(body.reportId || "").trim();
   if (!reportId) return Response.json({ ok: false, error: "report-required" }, { status: 400 });
@@ -47,7 +49,7 @@ export async function POST(request: NextRequest) {
     sourceFiles: stored.sourceFiles,
   };
 
-  const check = canPostZReport(merged);
+  const check = canPostZReport(merged, { overlapReviewAcknowledged: body.overlapReviewAcknowledged });
   if (!check.ok) {
     return Response.json({ ok: false, error: check.reason, existingId: stored.financeEntryId }, { status: 409 });
   }
@@ -75,7 +77,25 @@ export async function POST(request: NextRequest) {
 
   const ordersSnap = await db.collection(COLLECTIONS.orders).limit(800).get();
   const orders = ordersSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Order);
-  const overlap = websiteSalesOverlap(orders, merged.periodFrom ?? merged.businessDate, merged.periodTo ?? merged.businessDate);
+  let overlap;
+  try {
+    overlap = websiteSalesOverlap(orders, merged.periodFrom ?? merged.businessDate, merged.periodTo ?? merged.businessDate);
+  } catch (error) {
+    console.error("[pos-z-approve] overlap-failed", error);
+    return Response.json({
+      ok: false,
+      error: "overlap-incomplete",
+      message: "נדרש בירור חפיפה — קיימות הזמנות ללא תאריך תקין",
+    }, { status: 409 });
+  }
+  if (overlapReviewRequired(overlap) && !body.overlapReviewAcknowledged && !merged.overlapReviewResolved) {
+    return Response.json({
+      ok: false,
+      error: "overlap-incomplete",
+      overlap,
+      message: "נדרש בירור חפיפה — קיימות הזמנות ללא תאריך תקין",
+    }, { status: 409 });
+  }
   if (overlapRequiresAck(overlap) && !body.overlapAcknowledged) {
     return Response.json({ ok: false, error: "website-overlap", overlap }, { status: 409 });
   }
@@ -120,6 +140,7 @@ export async function POST(request: NextRequest) {
       status: "posted",
       financeEntryId: financeId,
       websiteOverlap: overlap,
+      overlapReviewResolved: overlap.status === "incomplete" ? true : merged.overlapReviewResolved,
       postedAt: FieldValue.serverTimestamp(),
       postedBy: auth.uid,
       updatedAt: FieldValue.serverTimestamp(),

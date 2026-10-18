@@ -10,6 +10,7 @@ import type {
   PosZScanStatus,
   InventoryMovement,
   PosImport,
+  WebsiteSalesOverlap,
 } from "@/lib/inventory/types";
 
 export function zDuplicateKey(
@@ -38,17 +39,47 @@ export function websiteSalesOverlap(
   orders: Order[],
   from: string | null | undefined,
   to: string | null | undefined
-): { orderCount: number; amount: number } {
-  if (!from || !to) return { orderCount: 0, amount: 0 };
-  const rows = orders.filter((order) => {
-    if (!isCountableSale(order)) return false;
-    const day = orderBusinessDate(order);
-    return day >= from && day <= to;
-  });
+): WebsiteSalesOverlap {
+  if (!from || !to) return { orderCount: 0, amount: 0, status: "ok" };
+  const rows: Order[] = [];
+  const invalidOrderIds: string[] = [];
+  for (const order of orders) {
+    try {
+      if (!isCountableSale(order)) continue;
+      const day = orderBusinessDate(order);
+      if (!day) {
+        if (order.id) invalidOrderIds.push(order.id);
+        continue;
+      }
+      if (day >= from && day <= to) rows.push(order);
+    } catch {
+      if (order.id) invalidOrderIds.push(order.id);
+    }
+  }
   return {
     orderCount: rows.length,
     amount: rows.reduce((sum, order) => sum + (Number(order.total) || 0), 0),
+    status: invalidOrderIds.length ? "incomplete" : "ok",
+    invalidOrderCount: invalidOrderIds.length || undefined,
+    invalidOrderIds: invalidOrderIds.length ? invalidOrderIds.slice(0, 20) : undefined,
   };
+}
+
+export function overlapReviewRequired(overlap: WebsiteSalesOverlap | null | undefined): boolean {
+  return overlap?.status === "incomplete";
+}
+
+export function canReuseZExtract(
+  current: PosZReport | undefined,
+  files: unknown[],
+  options?: boolean | { recheckOverlap?: boolean; forceAi?: boolean }
+): boolean {
+  const flags = typeof options === "boolean" ? { recheckOverlap: options } : options;
+  if (!current || files.length) return false;
+  if (isEmptyZExtraction(current)) return false;
+  if (flags?.forceAi) return false;
+  if (flags?.recheckOverlap) return true;
+  return current.scanStatus === "ready" || current.scanStatus === "partial";
 }
 
 export function periodsOverlap(
@@ -99,13 +130,17 @@ export function periodNeedsConfirm(report: PosZReport): boolean {
 }
 
 export function canPostZReport(
-  report: PosZReport
-): { ok: true } | { ok: false; reason: "already-posted" | "missing-amount" | "missing-date" | "period-unconfirmed" | "empty-extract" } {
+  report: PosZReport,
+  options?: { overlapReviewAcknowledged?: boolean }
+): { ok: true } | { ok: false; reason: "already-posted" | "missing-amount" | "missing-date" | "period-unconfirmed" | "empty-extract" | "overlap-incomplete" } {
   if (report.status === "posted" || report.financeEntryId) return { ok: false, reason: "already-posted" };
   if (isEmptyZExtraction(report)) return { ok: false, reason: "empty-extract" };
   if (zAmountToPost(report) == null) return { ok: false, reason: "missing-amount" };
   if (!report.businessDate && !report.periodFrom) return { ok: false, reason: "missing-date" };
   if (periodNeedsConfirm(report) && !report.periodConfirmed) return { ok: false, reason: "period-unconfirmed" };
+  if (overlapReviewRequired(report.websiteOverlap) && !report.overlapReviewResolved && !options?.overlapReviewAcknowledged) {
+    return { ok: false, reason: "overlap-incomplete" };
+  }
   return { ok: true };
 }
 

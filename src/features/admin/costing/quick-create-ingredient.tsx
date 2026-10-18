@@ -15,6 +15,7 @@ import { emptyIngredientForm } from "@/features/admin/costing/ingredient-form";
 import { createIngredient } from "@/services/costingService";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { inventoryCategories } from "@/lib/inventory/product-match";
+import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { cn } from "@/lib/utils";
 
 const LAST_UNIT_KEY = "mishkah.costing.lastPurchaseUnit";
@@ -176,18 +177,14 @@ export function QuickCreateIngredientPanel({
             </div>
             <div>
               <Label htmlFor="qc-ingredient-category">{t("admin.costing.category")}</Label>
-              <Input
-                id="qc-ingredient-category"
-                className="mt-1 h-11"
-                list="qc-ingredient-categories"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              />
-              <datalist id="qc-ingredient-categories">
-                {inventoryCategories(existing).map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
+              <div className="mt-1">
+                <IngredientCategoryField
+                  value={category}
+                  extras={inventoryCategories(existing)}
+                  disabled={saving}
+                  onChange={setCategory}
+                />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

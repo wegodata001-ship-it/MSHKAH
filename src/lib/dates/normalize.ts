@@ -1,5 +1,14 @@
 /** Shared date normalization. Never assumes Firebase Timestamp. Never invents today. */
 
+export const DEFAULT_BUSINESS_TIMEZONE = "Asia/Jerusalem";
+
+function isDateOnlyString(value: string): boolean {
+  const trimmed = value
+    .trim()
+    .replace(/^(?:תאריך(?:\s*חשבונית)?|date|invoice\s*date|issued?)\s*[:\-]?\s*/i, "");
+  return /^\d{4}[./-]\d{1,2}[./-]\d{1,2}$/.test(trimmed) || /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(trimmed);
+}
+
 function hasToDate(value: object): value is { toDate: () => Date } {
   return typeof (value as { toDate?: unknown }).toDate === "function";
 }
@@ -121,6 +130,59 @@ export function toDateOnly(value: unknown): string | null {
   const date = toJsDate(value);
   if (!date) return null;
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+export function toBusinessDate(value: unknown, timeZone = DEFAULT_BUSINESS_TIMEZONE): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (isDateOnlyString(trimmed)) return parseDateOnlyParts(trimmed);
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value);
+    if ("value" in value && keys.every((key) => key === "value" || key === "confidence")) {
+      return toBusinessDate((value as { value: unknown }).value, timeZone);
+    }
+    const row = value as { year?: unknown; month?: unknown; day?: unknown };
+    const year = Number(row.year);
+    const month = Number(row.month);
+    const day = Number(row.day);
+    if (
+      Number.isFinite(year) &&
+      year > 1900 &&
+      Number.isFinite(month) &&
+      Number.isFinite(day) &&
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      day <= 31 &&
+      keys.every((key) => key === "year" || key === "month" || key === "day")
+    ) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+  const date = toJsDate(value);
+  if (!date || date.getTime() === 0) return null;
+  try {
+    const formatted = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+    return /^\d{4}-\d{2}-\d{2}$/.test(formatted) ? formatted : null;
+  } catch {
+    return null;
+  }
+}
+
+export function firstBusinessDate(values: unknown[], timeZone = DEFAULT_BUSINESS_TIMEZONE): string | null {
+  for (const value of values) {
+    const day = toBusinessDate(value, timeZone);
+    if (day) return day;
+  }
+  return null;
 }
 
 export function toIsoTimestamp(value: unknown): string | null {

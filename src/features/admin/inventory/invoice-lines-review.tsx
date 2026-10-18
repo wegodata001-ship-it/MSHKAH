@@ -1,17 +1,17 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Check, Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
+import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { formatIls } from "@/lib/costing/money";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import {
   assignLinesToIngredient,
   invoicePriceIncrease,
-  packNeedsCompletion,
 } from "@/lib/inventory/ingredient-core";
 import {
   clearInvoiceMatchPatch,
@@ -26,16 +26,19 @@ import {
   type InvoiceReviewFilter,
 } from "@/lib/inventory/invoice-line-review";
 import { finalizeInvoiceLine, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
-import { invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
+import { applyInvoiceUnitChange, invoiceLineReviewStatus, workingInvoiceLines } from "@/lib/inventory/invoice-line-status";
+import { invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
 import { inventoryCategories } from "@/lib/inventory/product-match";
 import type { PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { MaterialGroupSuggest } from "@/features/admin/inventory/material-group-suggest";
-import { createIngredient } from "@/services/costingService";
+import { createIngredient, setIngredientCategory } from "@/services/costingService";
 import { cn } from "@/lib/utils";
 
 export type InvoiceLinesReviewHandle = {
   flush: () => PurchaseInvoiceLine[];
   dirtyCount: () => number;
+  preview: () => PurchaseInvoiceLine[];
+  saveAll: () => Promise<PurchaseInvoiceLine[]>;
 };
 
 export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
@@ -48,9 +51,12 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierName?: string;
   vatRate: number;
   locked?: boolean;
+  highlightKey?: string | null;
+  highlightField?: string | null;
   onChangeLine: (key: string, patch: Partial<PurchaseInvoiceLine>) => void;
   onChangeLines: (lines: PurchaseInvoiceLine[]) => void;
   onUpdateLine: (line: PurchaseInvoiceLine) => Promise<void> | void;
+  onWorkingChange?: (lines: PurchaseInvoiceLine[], dirtyKeys: string[]) => void;
 }>(function InvoiceLinesReview({
   lines,
   ingredients,
@@ -61,9 +67,12 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierName,
   vatRate,
   locked,
+  highlightKey,
+  highlightField,
   onChangeLine,
   onChangeLines,
   onUpdateLine,
+  onWorkingChange,
 }, ref) {
   const t = useT();
   const [filter, setFilter] = useState<InvoiceReviewFilter>("all");
@@ -79,6 +88,10 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkId, setBulkId] = useState("");
 
+  const working = useMemo(() => workingInvoiceLines(lines, drafts), [lines, drafts]);
+  const onWorkingChangeRef = useRef(onWorkingChange);
+  onWorkingChangeRef.current = onWorkingChange;
+
   useEffect(() => {
     setDrafts((current) => {
       const next = { ...current };
@@ -89,11 +102,18 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     });
   }, [lines]);
 
-  const counts = useMemo(() => invoiceReviewCounts(lines), [lines]);
-  const needsCount = useMemo(() => lines.filter(invoiceNeedsAttention).length, [lines]);
+  useEffect(() => {
+    onWorkingChangeRef.current?.(working, Object.keys(drafts));
+  }, [working, drafts]);
+
+  const counts = useMemo(() => invoiceReviewCounts(working), [working]);
+  const needsCount = useMemo(
+    () => working.filter((line) => invoiceNeedsAttention(line, { dirty: Boolean(drafts[line.key]) })).length,
+    [working, drafts]
+  );
   const visible = useMemo(
-    () => lines.filter((line) => invoiceLineMatchesFilter(drafts[line.key] ?? line, filter, query)),
-    [lines, drafts, filter, query]
+    () => working.filter((line) => invoiceLineMatchesFilter(line, filter, query) || (filter === "needs" && drafts[line.key])),
+    [working, filter, query, drafts]
   );
 
   const current = (key: string) => drafts[key] ?? lines.find((line) => line.key === key);
@@ -108,22 +128,9 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     return next;
   };
 
-  useImperativeHandle(ref, () => ({
-    flush,
-    dirtyCount: () => Object.keys(drafts).length,
-  }));
-
-  const edit = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
-    const base = current(key);
-    if (!base) return;
-    setDrafts((prev) => ({ ...prev, [key]: finalizeInvoiceLine({ ...base, ...patch }, vatRate) }));
-    setSavedKey((value) => (value === key ? null : value));
-    setErrorKey((value) => (value === key ? null : value));
-  };
-
   const updateRow = async (key: string) => {
     const line = current(key);
-    if (!line || locked) return;
+    if (!line || locked) return line;
     setSavingKey(key);
     setErrorKey(null);
     try {
@@ -135,12 +142,36 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
         return next;
       });
       setSavedKey(key);
+      return line;
     } catch (error) {
       setErrorKey(key);
       setErrorText(error instanceof Error ? error.message : t("admin.inventory.smart.lineUpdateFailed"));
+      throw error;
     } finally {
       setSavingKey(null);
     }
+  };
+
+  const saveAll = async () => {
+    for (const key of Object.keys(drafts)) {
+      await updateRow(key);
+    }
+    return flush();
+  };
+
+  useImperativeHandle(ref, () => ({
+    flush,
+    dirtyCount: () => Object.keys(drafts).length,
+    preview: () => working,
+    saveAll,
+  }));
+
+  const edit = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
+    const base = current(key);
+    if (!base) return;
+    setDrafts((prev) => ({ ...prev, [key]: finalizeInvoiceLine({ ...base, ...patch }, vatRate) }));
+    setSavedKey((value) => (value === key ? null : value));
+    setErrorKey((value) => (value === key ? null : value));
   };
 
   const createInline = async (key: string, name: string, category: string) => {
@@ -180,7 +211,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
           {t("admin.inventory.smart.filterAll")} · {counts.total}
         </FilterChip>
         <FilterChip active={filter === "needs"} onClick={() => setFilter("needs")}>
-          {t("admin.inventory.smart.filterNeeds")} · {needsCount}
+          {t("admin.inventory.smart.filterNeedsCare")} · {needsCount}
         </FilterChip>
         <div className="relative">
           <Button type="button" variant="outline" className="h-8 text-xs" onClick={() => setMoreOpen((value) => !value)}>
@@ -188,7 +219,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
           </Button>
           {moreOpen && (
             <div className="absolute end-0 z-20 mt-1 w-56 rounded-xl border bg-white p-1 text-sm shadow-lg">
-              <button type="button" className="block w-full rounded-lg px-3 py-2 text-start hover:bg-beige/50" disabled={locked} onClick={() => { onChangeLines(confirmSafeInvoiceMatches(lines)); setMoreOpen(false); }}>
+              <button type="button" className="block w-full rounded-lg px-3 py-2 text-start hover:bg-beige/50" disabled={locked} onClick={() => { onChangeLines(confirmSafeInvoiceMatches(working)); setMoreOpen(false); }}>
                 {t("admin.inventory.smart.confirmSafe")}
               </button>
             </div>
@@ -210,7 +241,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
               onClick={() => {
                 const product = ingredients.find((item) => item.id === bulkId);
                 if (!product) return;
-                onChangeLines(assignLinesToIngredient(lines.map((line) => drafts[line.key] ?? line), selected, product));
+                onChangeLines(assignLinesToIngredient(working, selected, product));
                 setDrafts({});
                 setSelected([]);
               }}
@@ -222,57 +253,24 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
       </div>
 
       <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/15 lg:block">
-        <table className="w-full min-w-[1080px] border-collapse text-sm">
+        <table className="w-full min-w-[1180px] border-collapse text-sm">
           <thead className="bg-beige/50 text-xs text-coffee/60">
             <tr className="h-8">
               <th className="w-8 px-2" />
               <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colInvoice")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colMatch")}</th>
+              <th className="px-2 text-start font-medium">{t("admin.inventory.smart.unifiedMaterial")}</th>
+              <th className="px-2 text-start font-medium">{t("admin.costing.category")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.qty")}</th>
               <th className="px-2 text-start font-medium">{t("admin.costing.unit")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.unitPrice")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.vat")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.lineTotal")}</th>
               <th className="px-2 text-start font-medium">{t("admin.inventory.smart.updateLine")}</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((base) => {
-              const line = current(base.key)!;
-              return (
-                <LineEditor
-                  key={line.key}
-                  line={line}
-                  selected={selected.includes(line.key)}
-                  onToggleSelect={() => setSelected((current) => current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key])}
-                  ingredients={ingredients}
-                  maps={maps}
-                  offers={offers}
-                  suppliers={suppliers}
-                  supplierId={supplierId}
-                  locked={locked}
-                  saving={savingKey === line.key}
-                  saved={savedKey === line.key}
-                  error={errorKey === line.key ? errorText : null}
-                  creating={creating}
-                  openCreate={openCreate === line.key}
-                  onOpenCreate={setOpenCreate}
-                  onEdit={(patch) => edit(line.key, patch)}
-                  onUpdate={() => void updateRow(line.key)}
-                  onCreate={(name, category) => void createInline(line.key, name, category)}
-                />
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="space-y-2 lg:hidden">
-        {visible.map((base) => {
-          const line = current(base.key)!;
-          return (
-            <div key={line.key} className="rounded-xl border border-beige-dark/15 p-2.5">
+            {visible.map((line) => (
               <LineEditor
+                key={line.key}
                 line={line}
                 selected={selected.includes(line.key)}
                 onToggleSelect={() => setSelected((current) => current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key])}
@@ -282,20 +280,53 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 suppliers={suppliers}
                 supplierId={supplierId}
                 locked={locked}
+                dirty={Boolean(drafts[line.key])}
                 saving={savingKey === line.key}
                 saved={savedKey === line.key}
                 error={errorKey === line.key ? errorText : null}
                 creating={creating}
                 openCreate={openCreate === line.key}
+                highlight={highlightKey === line.key}
+                highlightField={highlightKey === line.key ? highlightField : null}
                 onOpenCreate={setOpenCreate}
                 onEdit={(patch) => edit(line.key, patch)}
                 onUpdate={() => void updateRow(line.key)}
                 onCreate={(name, category) => void createInline(line.key, name, category)}
-                card
               />
-            </div>
-          );
-        })}
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="space-y-2 lg:hidden">
+        {visible.map((line) => (
+          <div key={line.key} className="rounded-xl border border-beige-dark/15 p-2.5">
+            <LineEditor
+              line={line}
+              selected={selected.includes(line.key)}
+              onToggleSelect={() => setSelected((current) => current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key])}
+              ingredients={ingredients}
+              maps={maps}
+              offers={offers}
+              suppliers={suppliers}
+              supplierId={supplierId}
+              locked={locked}
+              dirty={Boolean(drafts[line.key])}
+              saving={savingKey === line.key}
+              saved={savedKey === line.key}
+              error={errorKey === line.key ? errorText : null}
+              creating={creating}
+              openCreate={openCreate === line.key}
+              highlight={highlightKey === line.key}
+              highlightField={highlightKey === line.key ? highlightField : null}
+              onOpenCreate={setOpenCreate}
+              onEdit={(patch) => edit(line.key, patch)}
+              onUpdate={() => void updateRow(line.key)}
+              onCreate={(name, category) => void createInline(line.key, name, category)}
+              card
+            />
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -311,11 +342,14 @@ function LineEditor({
   suppliers,
   supplierId,
   locked,
+  dirty,
   saving,
   saved,
   error,
   creating,
   openCreate,
+  highlight,
+  highlightField,
   onOpenCreate,
   onEdit,
   onUpdate,
@@ -331,11 +365,14 @@ function LineEditor({
   suppliers?: Supplier[];
   supplierId?: string;
   locked?: boolean;
+  dirty: boolean;
   saving: boolean;
   saved: boolean;
   error: string | null;
   creating: boolean;
   openCreate: boolean;
+  highlight?: boolean;
+  highlightField?: string | null;
   onOpenCreate: (key: string | null) => void;
   onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
   onUpdate: () => void;
@@ -345,166 +382,38 @@ function LineEditor({
   const t = useT();
   const [name, setName] = useState(line.rawName);
   const [category, setCategory] = useState(line.category ?? "");
-  const [conversion, setConversion] = useState(false);
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  const [updatingCategory, setUpdatingCategory] = useState(false);
   const match = ingredients.find((item) => item.id === line.productId);
-  const care = invoiceLineCareStatus(line);
-  const needsPack = packNeedsCompletion(line, match?.baseUnit);
+  const status = invoiceLineReviewStatus(line, { dirty, productBase: match?.baseUnit });
   const priceUp = invoicePriceIncrease(line);
-  const categories = inventoryCategories(ingredients);
-  const extras = (openCreate || conversion) && (
+  const categories = inventoryCategories(ingredients, [line.category, match?.category]);
+  const displayCategory = match?.category || line.category || "";
+
+  const extras = (
     <div className="mt-2 rounded-xl bg-beige/40 p-3">
+      <p className="mb-2 text-[11px] text-coffee/55">{t("admin.inventory.smart.compareHint")}</p>
       {openCreate && (
         <div className="mb-2 grid gap-2 sm:grid-cols-3">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={line.rawName} />
-          <select className="h-10 rounded-xl border px-2 text-sm" value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="">{t("admin.inventory.smart.uncategorized")}</option>
-            {categories.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
+          <IngredientCategoryField value={category} extras={categories} disabled={locked || creating} onChange={setCategory} />
           <Button type="button" variant="turquoise" disabled={creating || locked} onClick={() => onCreate(name.trim() || line.rawName, category)}>
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="me-1 h-4 w-4" /> {t("admin.inventory.smart.createInline")}</>}
           </Button>
         </div>
       )}
-      {conversion && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Input value={line.conversionNote ?? ""} disabled={locked} placeholder={t("admin.inventory.smart.packConversion")} onChange={(e) => onEdit({ conversionNote: e.target.value })} />
+      {status.kind === "missing-pack" && (
+        <div className="mb-2 grid gap-2 sm:grid-cols-2">
+          <Input
+            id={`invoice-line-${line.key}-pack`}
+            value={line.conversionNote ?? ""}
+            disabled={locked}
+            placeholder={t("admin.inventory.smart.packConversion")}
+            onChange={(e) => onEdit({ conversionNote: e.target.value })}
+          />
           <Input type="number" min="0" value={line.conversionFactor ?? ""} disabled={locked} onChange={(e) => onEdit({ conversionFactor: e.target.value === "" ? null : Number(e.target.value) })} />
         </div>
       )}
-      {match?.category && <p className="mt-2 text-xs text-coffee/55">{t("admin.costing.category")}: {match.category}</p>}
-    </div>
-  );
-
-  if (card) {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-start justify-between gap-2">
-          <label className="flex items-start gap-2">
-            <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
-            <p className="font-medium">{line.originalDescription || line.rawName}</p>
-          </label>
-          <CareBadge status={care} />
-        </div>
-        {priceUp && <p className="text-xs text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
-        {needsPack && <p className="text-xs text-amber-800">{t("admin.inventory.smart.needPack")}</p>}
-        <MatchSelect line={line} ingredients={ingredients} maps={maps} offers={offers} suppliers={suppliers} supplierId={supplierId} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
-        <div className="grid grid-cols-2 gap-2">
-          <label className="block">
-            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.qty")}</span>
-            <Input type="number" min="0" className="h-9" value={line.quantity ?? ""} disabled={locked} onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })} />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.costing.unit")}</span>
-            <select className="h-9 w-full rounded-xl border px-2 text-sm" value={line.unit ?? ""} disabled={locked} onChange={(e) => onEdit({ unit: (e.target.value || null) as PurchaseUnit | null })}>
-              <option value="">{t("admin.inventory.smart.unitPick")}</option>
-              {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.unitPrice")}</span>
-            <Input type="number" min="0" className="h-9" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })} />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.vat")}</span>
-            <Input type="number" min="0" className="h-9" value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""} disabled={locked} onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })} />
-          </label>
-        </div>
-        <p className="text-sm">{t("admin.inventory.lineTotal")}: {line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</p>
-        <RowActions saving={saving} saved={saved} error={error} locked={locked} onUpdate={onUpdate} onToggleConversion={() => setConversion((value) => !value)} />
-        {extras}
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <tr className="border-t border-beige-dark/10 align-middle">
-        <td className="px-2 py-1.5">
-          <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
-        </td>
-        <td className="max-w-[12rem] px-2 py-1.5">
-          <p className="font-medium leading-5">{line.originalDescription || line.rawName}</p>
-          <CareBadge status={care} />
-          {priceUp && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
-          {needsPack && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.needPack")}</p>}
-        </td>
-        <td className="px-2 py-1.5">
-          <MatchSelect line={line} ingredients={ingredients} maps={maps} offers={offers} suppliers={suppliers} supplierId={supplierId} locked={locked} onEdit={onEdit} onCreate={() => onOpenCreate(line.key)} />
-        </td>
-        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.quantity ?? ""} disabled={locked} onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })} /></td>
-        <td className="px-2 py-1.5">
-          <select className="h-8 w-full rounded-lg border px-2 text-sm" value={line.unit ?? ""} disabled={locked} onChange={(e) => onEdit({ unit: (e.target.value || null) as PurchaseUnit | null })}>
-            <option value="">{t("admin.inventory.smart.unitPick")}</option>
-            {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
-          </select>
-        </td>
-        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.unitPrice ?? ""} disabled={locked} onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })} /></td>
-        <td className="px-2 py-1.5"><Input type="number" min="0" className="h-8" value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""} disabled={locked} onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })} /></td>
-        <td className="px-2 py-1.5 tabular-nums leading-8">{line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</td>
-        <td className="px-2 py-1.5">
-          <RowActions saving={saving} saved={saved} error={error} locked={locked} onUpdate={onUpdate} onToggleConversion={() => setConversion((value) => !value)} />
-        </td>
-      </tr>
-      {(openCreate || conversion) && (
-        <tr>
-          <td colSpan={9} className="px-2 pb-3">{extras}</td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function MatchSelect({
-  line,
-  ingredients,
-  maps,
-  offers,
-  suppliers,
-  supplierId,
-  locked,
-  onEdit,
-  onCreate,
-}: {
-  line: PurchaseInvoiceLine;
-  ingredients: CostingIngredient[];
-  maps?: SupplierItemMap[];
-  offers?: SupplierOffer[];
-  suppliers?: Supplier[];
-  supplierId?: string;
-  locked?: boolean;
-  onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
-  onCreate: () => void;
-}) {
-  const t = useT();
-  const [query, setQuery] = useState("");
-  const status = invoiceLineMatchStatus(line);
-  const filtered = ingredients.filter((item) => !query || item.name.toLowerCase().includes(query.toLowerCase())).slice(0, 40);
-  return (
-    <div className="min-w-[12rem] space-y-1">
-      <Input className="h-8 text-xs" value={query} placeholder={t("admin.inventory.matchExisting")} onChange={(e) => setQuery(e.target.value)} />
-      <select
-        className="h-9 w-full rounded-xl border px-2 text-sm"
-        value={line.productId ?? ""}
-        disabled={locked}
-        onChange={(e) => {
-          const item = ingredients.find((row) => row.id === e.target.value);
-          onEdit(item ? confirmInvoiceMatchPatch(item) : clearInvoiceMatchPatch());
-        }}
-      >
-        <option value="">{t("admin.inventory.smart.noMatch")}</option>
-        {filtered.map((item) => (
-          <option key={item.id} value={item.id}>{item.name}</option>
-        ))}
-      </select>
-      {status === "possible" && (line.candidates ?? []).slice(0, 2).map((item) => (
-        <button key={item.productId} type="button" className="block text-xs text-turquoise" disabled={locked} onClick={() => {
-          const product = ingredients.find((row) => row.id === item.productId);
-          if (product) onEdit(confirmInvoiceMatchPatch(product, item.score));
-        }}>
-          {t("admin.inventory.smart.confirmMatch")}: {item.name} · {Math.round(item.score * 100)}%
-        </button>
-      ))}
-      <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={onCreate}>+ {t("admin.inventory.smart.createInline")}</button>
       <MaterialGroupSuggest
         line={{
           name: line.rawName,
@@ -528,12 +437,217 @@ function MatchSelect({
         supplierId={supplierId}
         locked={locked}
         onAssignSame={(item) => onEdit(confirmInvoiceMatchPatch(item))}
-        onCreateUnified={(name) => {
-          onEdit({ rawName: line.rawName, category: name });
-          onCreate();
+        onCreateUnified={(label) => {
+          onEdit({ rawName: line.rawName, category: label });
+          onOpenCreate(line.key);
         }}
         onKeepSeparate={() => onEdit({ matchKind: line.productId ? line.matchKind : "new", matchConfirmed: Boolean(line.productId) })}
       />
+    </div>
+  );
+
+  const matchField = (
+    <MatchSelect
+      line={line}
+      ingredients={ingredients}
+      locked={locked}
+      highlight={highlightField === "product"}
+      onEdit={onEdit}
+      onCreate={() => onOpenCreate(line.key)}
+    />
+  );
+  const categoryField = (
+    <div id={`invoice-line-${line.key}-category`}>
+      <IngredientCategoryField
+        value={displayCategory}
+        extras={categories}
+        disabled={locked}
+        highlight={highlightField === "category"}
+        onChange={(next) => onEdit({ category: next })}
+      />
+      {match && displayCategory && displayCategory !== match.category && (
+        <button
+          type="button"
+          className="mt-1 text-[11px] text-turquoise"
+          disabled={locked || updatingCategory}
+          onClick={async () => {
+            setUpdatingCategory(true);
+            const result = await setIngredientCategory(match.id, displayCategory);
+            setUpdatingCategory(false);
+            if (!result.success) onEdit({ category: match.category });
+          }}
+        >
+          {t("admin.inventory.smart.updateIngredientCategory")}
+        </button>
+      )}
+    </div>
+  );
+  const quantityInput = (
+    <Input
+      id={`invoice-line-${line.key}-quantity`}
+      type="number"
+      min="0"
+      className={cn("h-8", highlightField === "quantity" && "ring-2 ring-turquoise")}
+      value={line.quantity ?? ""}
+      disabled={locked}
+      onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })}
+    />
+  );
+  const unitSelect = (
+    <select
+      id={`invoice-line-${line.key}-unit`}
+      className={cn("h-8 w-full rounded-lg border px-2 text-sm", highlightField === "unit" && "ring-2 ring-turquoise")}
+      value={line.unit ?? ""}
+      disabled={locked}
+      onChange={(e) => onEdit(applyInvoiceUnitChange(line, (e.target.value || null) as PurchaseUnit | null))}
+    >
+      <option value="">{t("admin.inventory.smart.unitPick")}</option>
+      {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
+    </select>
+  );
+  const priceInput = (
+    <Input
+      id={`invoice-line-${line.key}-price`}
+      type="number"
+      min="0"
+      className={cn("h-8", highlightField === "price" && "ring-2 ring-turquoise")}
+      value={line.unitPrice ?? ""}
+      disabled={locked}
+      onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })}
+    />
+  );
+  const vatInput = (
+    <Input
+      id={`invoice-line-${line.key}-vat`}
+      type="number"
+      min="0"
+      className={cn("h-8", highlightField === "vat" && "ring-2 ring-turquoise")}
+      value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""}
+      disabled={locked}
+      onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })}
+    />
+  );
+
+  if (card) {
+    return (
+      <div id={`invoice-line-${line.key}`} className={cn("space-y-2", highlight && "rounded-xl ring-2 ring-turquoise")}>
+        <div className="flex items-start justify-between gap-2">
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
+            <p className="font-medium">{line.originalDescription || line.rawName}</p>
+          </label>
+          <CareBadge status={status} />
+        </div>
+        {priceUp && <p className="text-xs text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+        <p className="text-[11px] text-coffee/50">{t("admin.inventory.smart.materialHint")}</p>
+        {matchField}
+        {categoryField}
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.qty")}</span>
+            {quantityInput}
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.costing.unit")}</span>
+            {unitSelect}
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.unitPrice")}</span>
+            {priceInput}
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.vat")}</span>
+            {vatInput}
+          </label>
+        </div>
+        <p className="text-sm">{t("admin.inventory.lineTotal")}: {line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</p>
+        <RowActions saving={saving} saved={saved} error={error} locked={locked} highlight={highlightField === "update"} onUpdate={onUpdate} />
+        <button type="button" className="text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
+          {t("admin.inventory.smart.moreOptions")}
+        </button>
+        {(extrasOpen || openCreate || status.kind === "missing-pack") && extras}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <tr id={`invoice-line-${line.key}`} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-turquoise/8")}>
+        <td className="px-2 py-1.5">
+          <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
+        </td>
+        <td className="max-w-[12rem] px-2 py-1.5">
+          <p className="font-medium leading-5">{line.originalDescription || line.rawName}</p>
+          <CareBadge status={status} />
+          {priceUp && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+        </td>
+        <td className="px-2 py-1.5">{matchField}</td>
+        <td className="min-w-[11rem] px-2 py-1.5">{categoryField}</td>
+        <td className="px-2 py-1.5">{quantityInput}</td>
+        <td className="px-2 py-1.5">{unitSelect}</td>
+        <td className="px-2 py-1.5">{priceInput}</td>
+        <td className="px-2 py-1.5">{vatInput}</td>
+        <td className="px-2 py-1.5">
+          <RowActions saving={saving} saved={saved} error={error} locked={locked} highlight={highlightField === "update"} onUpdate={onUpdate} />
+          <button type="button" className="mt-1 block text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
+            {t("admin.inventory.smart.moreOptions")}
+          </button>
+        </td>
+      </tr>
+      {(extrasOpen || openCreate || status.kind === "missing-pack") && (
+        <tr>
+          <td colSpan={9} className="px-2 pb-3">{extras}</td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function MatchSelect({
+  line,
+  ingredients,
+  locked,
+  highlight,
+  onEdit,
+  onCreate,
+}: {
+  line: PurchaseInvoiceLine;
+  ingredients: CostingIngredient[];
+  locked?: boolean;
+  highlight?: boolean;
+  onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
+  onCreate: () => void;
+}) {
+  const t = useT();
+  const [query, setQuery] = useState("");
+  const status = invoiceLineMatchStatus(line);
+  const filtered = ingredients.filter((item) => !query || item.name.toLowerCase().includes(query.toLowerCase())).slice(0, 40);
+  return (
+    <div id={`invoice-line-${line.key}-product`} className={cn("min-w-[12rem] space-y-1", highlight && "rounded-xl ring-2 ring-turquoise")}>
+      <Input className="h-8 text-xs" value={query} placeholder={t("admin.inventory.smart.unifiedMaterial")} onChange={(e) => setQuery(e.target.value)} />
+      <select
+        className="h-9 w-full rounded-xl border px-2 text-sm"
+        value={line.productId ?? ""}
+        disabled={locked}
+        onChange={(e) => {
+          const item = ingredients.find((row) => row.id === e.target.value);
+          onEdit(item ? confirmInvoiceMatchPatch(item) : clearInvoiceMatchPatch());
+        }}
+      >
+        <option value="">{t("admin.inventory.smart.noMatch")}</option>
+        {filtered.map((item) => (
+          <option key={item.id} value={item.id}>{item.name}</option>
+        ))}
+      </select>
+      {status === "possible" && (line.candidates ?? []).slice(0, 2).map((item) => (
+        <button key={item.productId} type="button" className="block text-xs text-turquoise" disabled={locked} onClick={() => {
+          const product = ingredients.find((row) => row.id === item.productId);
+          if (product) onEdit(confirmInvoiceMatchPatch(product, item.score));
+        }}>
+          {t("admin.inventory.smart.confirmMatch")}: {item.name} · {Math.round(item.score * 100)}%
+        </button>
+      ))}
+      <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={onCreate}>+ {t("admin.inventory.smart.createInline")}</button>
     </div>
   );
 }
@@ -543,37 +657,40 @@ function RowActions({
   saved,
   error,
   locked,
+  highlight,
   onUpdate,
-  onToggleConversion,
 }: {
   saving: boolean;
   saved: boolean;
   error: string | null;
   locked?: boolean;
+  highlight?: boolean;
   onUpdate: () => void;
-  onToggleConversion: () => void;
 }) {
   const t = useT();
   return (
-    <div className="space-y-1">
+    <div className={cn("space-y-1", highlight && "rounded-xl ring-2 ring-turquoise")}>
       <Button type="button" variant="outline" className="h-8 text-xs" disabled={locked || saving} onClick={onUpdate}>
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <><Check className="me-1 h-3.5 w-3.5" /> {t("admin.inventory.smart.lineUpdated")}</> : t("admin.inventory.smart.updateLine")}
       </Button>
-      <button type="button" className="block text-[11px] text-coffee/55" onClick={onToggleConversion}>{t("admin.inventory.smart.packConversion")}</button>
       {error && <p className="text-[11px] text-red-600">{error}</p>}
     </div>
   );
 }
 
-function CareBadge({ status }: { status: ReturnType<typeof invoiceLineCareStatus> }) {
+function CareBadge({ status }: { status: ReturnType<typeof invoiceLineReviewStatus> }) {
   const t = useT();
   const styles = {
-    ok: "bg-emerald-50 text-emerald-800",
+    ready: "bg-emerald-50 text-emerald-800",
+    unsaved: "bg-amber-50 text-amber-900",
+    "missing-material": "bg-stone-100 text-stone-700",
+    "missing-pack": "bg-amber-50 text-amber-800",
     "missing-unit": "bg-amber-50 text-amber-800",
-    "needs-match": "bg-stone-100 text-stone-700",
-  }[status];
-  const label = status === "ok" ? t("admin.inventory.smart.rowOk") : status === "missing-unit" ? t("admin.inventory.smart.rowMissingUnit") : t("admin.inventory.smart.rowNeedsMatch");
-  return <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", styles)}>{label}</span>;
+    "missing-qty": "bg-amber-50 text-amber-800",
+    "missing-price": "bg-amber-50 text-amber-800",
+    field: "bg-red-50 text-red-700",
+  }[status.kind];
+  return <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", styles)}>{t(status.labelKey)}</span>;
 }
 
 function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {

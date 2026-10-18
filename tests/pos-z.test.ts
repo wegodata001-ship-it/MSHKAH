@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseZExtraction, toPrintedDateTime } from "@/lib/ai/gemini-z-report";
 import {
   canPostZReport,
+  canReuseZExtract,
   classifyPaymentRole,
   compareExcelToZ,
   financeTenders,
@@ -13,10 +14,12 @@ import {
   missingNotZero,
   overlappingPostedZReports,
   overlapRequiresAck,
+  overlapReviewRequired,
   periodNeedsConfirm,
   websiteSalesOverlap,
   zAmountToPost,
 } from "@/lib/inventory/pos-z";
+import { readJsonSafe } from "@/lib/http/read-json-safe";
 import type { PosZReport } from "@/lib/inventory/types";
 import type { Order } from "@/types";
 
@@ -94,6 +97,58 @@ describe("Z finance posting rules", () => {
     expect(overlap.orderCount).toBeGreaterThan(0);
     expect(overlapRequiresAck(overlap)).toBe(true);
     expect(overlapRequiresAck({ orderCount: 0, amount: 0 })).toBe(false);
+  });
+
+  it("keeps extract usable when some orders have no valid date and does not treat that as no overlap", () => {
+    const dated = order(80, "2026-10-01T12:00:00.000Z");
+    const broken = {
+      ...order(40, "2026-10-01T12:00:00.000Z"),
+      id: "broken",
+      paidAt: { toDate: "not-a-function" },
+      completedAt: "nope",
+      createdAt: { seconds: 0, nanoseconds: 0 },
+    } as unknown as Order;
+    const overlap = websiteSalesOverlap([dated, broken], "2026-10-01", "2026-10-01");
+    expect(overlap.status).toBe("incomplete");
+    expect(overlap.orderCount).toBe(1);
+    expect(overlap.invalidOrderIds).toContain("broken");
+    expect(overlapReviewRequired(overlap)).toBe(true);
+    expect(overlapRequiresAck(overlap)).toBe(true);
+    const draft = report({ websiteOverlap: overlap, salesTotal: 1200 });
+    const blocked = canPostZReport(draft);
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.reason).toBe("overlap-incomplete");
+    expect(canPostZReport(draft, { overlapReviewAcknowledged: true }).ok).toBe(true);
+    expect(canReuseZExtract({ ...draft, scanStatus: "ready" }, [], { recheckOverlap: true })).toBe(true);
+    expect(canReuseZExtract({ ...draft, scanStatus: "ready" }, [{}], { recheckOverlap: true })).toBe(false);
+    expect(canReuseZExtract({ ...draft, scanStatus: "ready" }, [], { forceAi: true })).toBe(false);
+  });
+
+  it("does not treat a failed overlap as zero overlap when every dated order is unreadable", () => {
+    const broken = {
+      ...order(40, "2026-10-01T12:00:00.000Z"),
+      id: "nodate",
+      paidAt: null,
+      completedAt: undefined,
+      createdAt: "bad",
+    } as unknown as Order;
+    const overlap = websiteSalesOverlap([broken], "2026-10-01", "2026-10-01");
+    expect(overlap.status).toBe("incomplete");
+    expect(overlap.orderCount).toBe(0);
+    expect(overlapRequiresAck(overlap)).toBe(false);
+    expect(canPostZReport(report({ websiteOverlap: overlap })).ok).toBe(false);
+  });
+});
+
+describe("admin JSON responses stay on-screen", () => {
+  it("parses empty and non-JSON bodies without throwing", async () => {
+    const empty = await readJsonSafe(new Response("", { status: 500 }));
+    expect(empty.error).toBe("empty-response");
+    const html = await readJsonSafe(new Response("<html></html>", { status: 500 }));
+    expect(html.error).toBe("invalid-json");
+    const ok = await readJsonSafe(new Response(JSON.stringify({ ok: true, report: { id: "z1" } }), { status: 200 }));
+    expect(ok.ok).toBe(true);
+    expect((ok.report as { id: string }).id).toBe("z1");
   });
 });
 

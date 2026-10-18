@@ -24,6 +24,7 @@ export const COLLECTIONS = {
   printAgentHeartbeats: "printAgentHeartbeats",
   payments: "payments",
   ingredients: "ingredients",
+  ingredientCategories: "ingredientCategories",
   dishRecipes: "dishRecipes",
   productCostLinks: "productCostLinks",
   ingredientPriceHistory: "ingredientPriceHistory",

@@ -12,6 +12,8 @@ import { FieldValue } from "firebase-admin/firestore";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const inflightHashes = new Set<string>();
+
 const MAX_BYTES = 12 * 1024 * 1024;
 
 function mimeFor(file: File): string | null {
@@ -46,11 +48,32 @@ export async function POST(request: NextRequest) {
     if (!mimeType) return Response.json({ ok: false, error: "file-type", requestId }, { status: 400 });
     const bytes = Buffer.from(await file.arrayBuffer());
     const fileHash = createHash("sha256").update(bytes).digest("hex");
+    const byHash = existing.find((item) => item.fileHash && item.fileHash === fileHash);
+    if (byHash && !attachToId) {
+      return Response.json({
+        ok: true,
+        duplicate: true,
+        existingId: byHash.id,
+        existingStatus: byHash.status,
+        requestId,
+      });
+    }
+    if (!attachToId && inflightHashes.has(fileHash)) {
+      return Response.json({ ok: false, error: "UPLOAD_IN_PROGRESS", requestId }, { status: 409 });
+    }
+    if (!attachToId) inflightHashes.add(fileHash);
 
-    const ref = attachToId ? db.collection(COLLECTIONS.posZReports).doc(attachToId) : db.collection(COLLECTIONS.posZReports).doc();
-    const current = attachToId ? ((await ref.get()).data() as PosZReport | undefined) : undefined;
-    if (attachToId && current?.status === "posted") {
-      return Response.json({ ok: false, error: "already-posted", requestId, existingId: attachToId }, { status: 409 });
+    try {
+    const ref = attachToId
+      ? db.collection(COLLECTIONS.posZReports).doc(attachToId)
+      : db.collection(COLLECTIONS.posZReports).doc(`zup-${fileHash.slice(0, 40)}`);
+    const current = ((await ref.get()).data() as PosZReport | undefined) ?? undefined;
+    if (current?.status === "posted") {
+      return Response.json({ ok: false, error: "already-posted", requestId, existingId: ref.id }, { status: 409 });
+    }
+    if (current?.fileHash === fileHash && (current.sourceFiles?.length ?? 0) > 0 && !attachToId) {
+      reports.push({ ...current, id: ref.id });
+      continue;
     }
 
     const probe: PosZReport = {
@@ -106,6 +129,9 @@ export async function POST(request: NextRequest) {
     );
     reports.push(draft);
     existing.push(draft);
+    } finally {
+      if (!attachToId) inflightHashes.delete(fileHash);
+    }
   }
 
   return Response.json({ ok: true, reports, requestId });

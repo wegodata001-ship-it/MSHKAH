@@ -20,6 +20,7 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import type { PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
 import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-panel";
+import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { cn } from "@/lib/utils";
 
 const UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
@@ -82,6 +83,7 @@ export function IngredientFormModal({
   suppliers = [],
   offers = [],
   records = [],
+  categories = [],
   onToast,
 }: {
   open: boolean;
@@ -97,11 +99,12 @@ export function IngredientFormModal({
   suppliers?: Supplier[];
   offers?: SupplierOffer[];
   records?: PurchasePriceRecord[];
+  categories?: string[];
   onToast?: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
   const [form, setForm] = useState(initial);
-  const [showExtra, setShowExtra] = useState(Boolean(initial.category || initial.notes || initial.minStock || initial.barcode));
+  const [showExtra, setShowExtra] = useState(Boolean(initial.notes || initial.minStock || initial.barcode));
   const [saved, setSaved] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -169,6 +172,17 @@ export function IngredientFormModal({
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 autoFocus
               />
+            </div>
+            <div>
+              <Label>{t("admin.costing.category")}</Label>
+              <div className="mt-1">
+                <IngredientCategoryField
+                  value={form.category}
+                  extras={categories}
+                  disabled={saving}
+                  onChange={(category) => setForm({ ...form, category })}
+                />
+              </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -253,14 +267,6 @@ export function IngredientFormModal({
             </button>
             {showExtra && (
               <div className="grid gap-3">
-                <div>
-                  <Label>{t("admin.costing.category")}</Label>
-                  <Input
-                    className="mt-1"
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  />
-                </div>
                 <div>
                   <Label>{t("admin.inventory.minStock")}</Label>
                   <Input

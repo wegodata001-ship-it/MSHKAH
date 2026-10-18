@@ -15,11 +15,12 @@ import { finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lin
 import { invoiceCreateProductDraft, newInvoiceProductPatch } from "@/lib/inventory/invoice-line-review";
 import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
-import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap } from "@/services/inventoryService";
+import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap, transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
 import { applyComputedTotals, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
+import { invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
@@ -114,6 +115,10 @@ export function SmartInvoiceFlow({
   const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
   const [moreOpen, setMoreOpen] = useState(false);
   const [focusField, setFocusField] = useState<string | null>(null);
+  const [highlightKey, setHighlightKey] = useState<string | null>(null);
+  const [highlightField, setHighlightField] = useState<string | null>(null);
+  const [workingLines, setWorkingLines] = useState<PurchaseInvoiceLine[]>([]);
+  const [dirtyKeys, setDirtyKeys] = useState<string[]>([]);
   const linesRef = useRef<InvoiceLinesReviewHandle>(null);
 
   const summary = useMemo(() => (invoice ? invoiceSummary(invoice.lines, vatRate) : null), [invoice, vatRate]);
@@ -312,7 +317,9 @@ export function SmartInvoiceFlow({
   const dueDate = toDateOnly(invoice.dueDate) || "";
   const vatRateValue = invoice.vatRate == null ? "" : invoice.vatRate > 1 ? invoice.vatRate : invoice.vatRate * 100;
   const reviewState = invoiceReviewState(invoice, invoice.scanStatus === "failed" || Boolean(error));
-  const blockers = invoiceApproveBlockers(invoice);
+  const reviewLines = workingLines.length ? workingLines : invoice.lines;
+  const blockers = invoiceApproveBlockers({ ...invoice, lines: reviewLines }, { dirtyKeys });
+  const lineBlockers = invoiceLineBlockers(reviewLines, { dirtyKeys });
   const supplierGuess = !invoice.supplierId && invoice.supplierName
     ? matchSupplier(invoice.supplierName, invoice.supplierTaxId, suppliers)
     : null;
@@ -487,6 +494,12 @@ export function SmartInvoiceFlow({
             supplierName={invoice.supplierName}
             vatRate={vatRate}
             locked={locked || postedDuplicate}
+            highlightKey={highlightKey}
+            highlightField={highlightField}
+            onWorkingChange={(lines, keys) => {
+              setWorkingLines(lines);
+              setDirtyKeys(keys);
+            }}
             onChangeLine={updateLine}
             onChangeLines={(lines) => update({ lines: lines.map((line) => finalizeInvoiceLine(line, vatRate)) })}
             onUpdateLine={async (line) => {
@@ -496,7 +509,13 @@ export function SmartInvoiceFlow({
               });
               setInvoice(next);
               const saved = await persistDraft(next);
-              if (!saved.success) throw new Error(saved.error || t("admin.inventory.smart.lineUpdateFailed"));
+              if (!saved.success) {
+                throw new Error(
+                  saved.error === "PERMISSION_DENIED"
+                    ? t("admin.inventory.smart.permissionSystem")
+                    : saved.error || t("admin.inventory.smart.lineUpdateFailed")
+                );
+              }
               setInvoice({ ...next, id: saved.data });
               if (next.supplierId && line.productId && line.rawName) {
                 await saveSupplierItemMap({
@@ -551,7 +570,7 @@ export function SmartInvoiceFlow({
             const result = await persistDraft(current);
             setSaving(false);
             if (!result.success) {
-              onToast(t("admin.costing.saveFailed"), "error");
+              onToast(result.error === "PERMISSION_DENIED" ? t("admin.inventory.smart.permissionSystem") : t("admin.costing.saveFailed"), "error");
               return;
             }
             setInvoice({ ...current, id: result.data, status: "draft" });
@@ -560,57 +579,112 @@ export function SmartInvoiceFlow({
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.saveDraft")}
         </Button>
-        <div className="space-y-1 text-end">
-          {blockers.length > 0 && (
-            <div className="text-xs text-amber-800">
-              {blockers.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className="ms-2 underline"
-                  onClick={() => {
-                    setFocusField(item.field ?? item.key);
-                    if (item.field === "invoiceDate") document.getElementById("invoice-date")?.focus();
-                    if (item.field === "lines") document.getElementById("invoice-lines")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
-                >
-                  {t(item.labelKey).replace("{count}", String(item.count ?? 0))}
-                </button>
-              ))}
+        <div className="max-w-md space-y-1 text-end">
+          {lineBlockers.length > 0 && (
+            <div className="rounded-xl bg-amber-50 px-3 py-2 text-start text-xs text-amber-950">
+              <p className="font-medium">{t("admin.inventory.smart.needsTreatment").replace("{count}", String(lineBlockers.length))}</p>
+              <ul className="mt-1 space-y-1">
+                {lineBlockers.map((item) => (
+                  <li key={item.lineKey}>
+                    <button
+                      type="button"
+                      className="underline"
+                      onClick={() => {
+                        setHighlightKey(item.lineKey);
+                        setHighlightField(item.field);
+                        setFocusField("lines");
+                        document.getElementById(`invoice-line-${item.lineKey}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                        document.getElementById(`invoice-line-${item.lineKey}-${item.field}`)?.focus?.();
+                      }}
+                    >
+                      {item.lineIndex}. {item.productName || "—"} — {t(item.labelKey)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
+          {blockers.filter((item) => item.field !== "lines").map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className="ms-2 text-xs text-amber-800 underline"
+              onClick={() => {
+                setFocusField(item.field ?? item.key);
+                if (item.field === "invoiceDate") document.getElementById("invoice-date")?.focus();
+              }}
+            >
+              {t(item.labelKey).replace("{count}", String(item.count ?? 0))}
+            </button>
+          ))}
           <Button
             type="button"
             variant="turquoise"
-            disabled={saving || locked || postedDuplicate || blockers.length > 0}
+            disabled={saving || locked || postedDuplicate}
             onClick={async () => {
-              if (!invoice || saving || blockers.length) return;
+              if (!invoice || saving) return;
               setSaving(true);
-              const current = flushLines();
-              if (!current) {
+              try {
+                if (linesRef.current?.dirtyCount()) {
+                  await linesRef.current.saveAll();
+                }
+                const current = flushLines();
+                if (!current) return;
+                const nextLineBlockers = invoiceLineBlockers(current.lines);
+                const nextHeader = invoiceApproveBlockers(current);
+                setWorkingLines(current.lines);
+                setDirtyKeys([]);
+                if (nextLineBlockers.length || nextHeader.length) return;
+                const draft = await persistDraft(current);
+                if (!draft.success) {
+                  onToast(
+                    draft.error === "PERMISSION_DENIED" ? t("admin.inventory.smart.permissionSystem") : t("admin.costing.saveFailed"),
+                    "error"
+                  );
+                  return;
+                }
+                const withId = { ...current, id: draft.data };
+                setInvoice(withId);
+                const finance = await saveFinanceInvoice({
+                  ...withId,
+                  status: "needs_review",
+                  approvedBy: "admin",
+                });
+                if (!finance.success) {
+                  onToast(
+                    finance.error === "PERMISSION_DENIED"
+                      ? t("admin.inventory.smart.permissionSystem")
+                      : finance.error === "DUPLICATE_INVOICE"
+                        ? t("admin.inventory.smart.duplicate")
+                        : finance.error,
+                    "error"
+                  );
+                  return;
+                }
+                const ready = { ...withId, id: finance.data, status: "saved" as const, stockStatus: "none" as const };
+                setInvoice(ready);
+                if (!ready.supplierId && !allowNoSupplier) {
+                  setAskStock(true);
+                  onToast(t("admin.finance.saved"));
+                  return;
+                }
+                const stock = await transferInvoiceLinesToStock(ready);
+                if (!stock.success) {
+                  onToast(
+                    stock.error === "PERMISSION_DENIED"
+                      ? t("admin.inventory.smart.permissionSystem")
+                      : stock.error === "NO_STOCK_LINES"
+                        ? t("admin.finance.noStockLines")
+                        : t("admin.inventory.smart.stockNotPosted"),
+                    "error"
+                  );
+                  return;
+                }
+                setInvoice(stock.data || { ...ready, stockStatus: "posted" });
+                onToast(t("admin.finance.stockTransferred"));
+              } finally {
                 setSaving(false);
-                return;
               }
-              const draft = await persistDraft(current);
-              if (!draft.success) {
-                setSaving(false);
-                onToast(t("admin.costing.saveFailed"), "error");
-                return;
-              }
-              const result = await saveFinanceInvoice({
-                ...current,
-                id: draft.data,
-                status: "needs_review",
-                approvedBy: "admin",
-              });
-              setSaving(false);
-              if (!result.success) {
-                onToast(result.error === "DUPLICATE_INVOICE" ? t("admin.inventory.smart.duplicate") : result.error, "error");
-                return;
-              }
-              setInvoice({ ...current, id: result.data, status: "saved", stockStatus: "none" });
-              setAskStock(true);
-              onToast(t("admin.finance.saved"));
             }}
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.approveStock")}

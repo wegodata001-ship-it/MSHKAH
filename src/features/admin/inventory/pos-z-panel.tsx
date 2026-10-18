@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Loader2, ScanSearch, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,9 +9,11 @@ import { AdminCard } from "@/features/admin/components/admin-card";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { formatIls } from "@/lib/costing/money";
 import { useAuthFetch } from "@/lib/auth/auth-fetch";
+import { readJsonSafe } from "@/lib/http/read-json-safe";
 import {
   canPostZReport,
   overlapRequiresAck,
+  overlapReviewRequired,
   periodNeedsConfirm,
   refreshZDerived,
   zAmountToPost,
@@ -50,9 +52,15 @@ export function PosZPanel(props: InventoryHubProps) {
   const [overlapAck, setOverlapAck] = useState(false);
   const [periodOverlapAck, setPeriodOverlapAck] = useState(false);
   const [busy, setBusy] = useState<"upload" | "scan" | "save" | "post" | null>(null);
+  const [overlapReviewAck, setOverlapReviewAck] = useState(false);
+  const [screenError, setScreenError] = useState<string | null>(null);
+  const uploadLock = useRef(false);
+  const scanLock = useRef<string | null>(null);
   const drafts = useMemo(() => mergeReports(props.zReports, local), [props.zReports, local]);
   const active = drafts.find((item) => item.id === activeId) ?? drafts[0] ?? null;
-  const postCheck = active ? canPostZReport(active) : { ok: false as const, reason: "empty-extract" as const };
+  const postCheck = active
+    ? canPostZReport(active, { overlapReviewAcknowledged: overlapReviewAck })
+    : { ok: false as const, reason: "empty-extract" as const };
 
   function upsert(report: PosZReport) {
     setLocal((current) => {
@@ -64,46 +72,86 @@ export function PosZPanel(props: InventoryHubProps) {
   }
 
   async function upload(files: File[], attachToId?: string) {
+    if (uploadLock.current || busy) return;
+    uploadLock.current = true;
     setBusy("upload");
-    const form = new FormData();
-    files.forEach((file) => form.append("file", file));
-    if (attachToId) form.set("attachToId", attachToId);
-    const response = await authFetch("/api/admin/pos/z/upload", { method: "POST", body: form });
-    const json = await response.json();
-    setBusy(null);
-    if (json.duplicate) {
-      props.onToast(t("admin.pos.zExists"), "error");
-      if (json.existingId) setActiveId(String(json.existingId));
-      return;
+    setScreenError(null);
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("file", file));
+      if (attachToId) form.set("attachToId", attachToId);
+      const response = await authFetch("/api/admin/pos/z/upload", { method: "POST", body: form });
+      const json = await readJsonSafe(response);
+      if (json.duplicate) {
+        props.onToast(t("admin.pos.zExists"), "error");
+        if (json.existingId) setActiveId(String(json.existingId));
+        return;
+      }
+      if (!response.ok || !json.ok) {
+        const message = String(json.message || t("admin.pos.zUploadFailed"));
+        setScreenError(message);
+        props.onToast(message, "error");
+        return;
+      }
+      const next = (json.reports as PosZReport[]) ?? [];
+      next.forEach(upsert);
+      setOverlapAck(false);
+      setPeriodOverlapAck(false);
+      setOverlapReviewAck(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("admin.pos.zUploadFailed");
+      setScreenError(message);
+      props.onToast(message, "error");
+    } finally {
+      uploadLock.current = false;
+      setBusy(null);
     }
-    if (!response.ok || !json.ok) {
-      props.onToast(json.message || t("admin.pos.zUploadFailed"), "error");
-      return;
-    }
-    const next = (json.reports as PosZReport[]) ?? [];
-    next.forEach(upsert);
-    setOverlapAck(false);
-    setPeriodOverlapAck(false);
   }
 
-  async function scan(report: PosZReport) {
+  async function scan(report: PosZReport, options?: { recheckOverlap?: boolean; forceAi?: boolean }) {
+    if (busy || scanLock.current === report.id) return;
+    scanLock.current = report.id;
     setBusy("scan");
+    setScreenError(null);
     upsert({ ...report, scanStatus: "scanning", lastScanError: null, updatedAt: new Date().toISOString() });
-    const response = await authFetch("/api/admin/pos/z/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reportId: report.id }),
-    });
-    const json = await response.json();
-    setBusy(null);
-    const scanned = (json.report ?? json.reports?.[0]) as PosZReport | undefined;
-    if (scanned) upsert(refreshZDerived(scanned));
-    if (!response.ok || !json.ok) {
-      props.onToast(json.message || (json.error === "empty-extract" ? t("admin.pos.scanEmpty") : t("admin.pos.scanErrorKeepDraft")), "error");
-      return;
+    try {
+      const response = await authFetch("/api/admin/pos/z/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reportId: report.id,
+          recheckOverlap: options?.recheckOverlap === true,
+          forceAi: options?.forceAi === true,
+        }),
+      });
+      const json = await readJsonSafe(response);
+      const scanned = (json.report ?? (Array.isArray(json.reports) ? json.reports[0] : undefined)) as PosZReport | undefined;
+      if (scanned) upsert(refreshZDerived(scanned));
+      if (!response.ok || !json.ok) {
+        const message =
+          String(json.message || "") ||
+          (json.error === "empty-extract"
+            ? t("admin.pos.scanEmpty")
+            : json.error === "empty-response" || json.error === "invalid-json"
+              ? t("admin.pos.scanBadResponse")
+              : t("admin.pos.scanErrorKeepDraft"));
+        setScreenError(message);
+        if (!scanned) upsert({ ...report, scanStatus: "failed", lastScanError: message, updatedAt: new Date().toISOString() });
+        props.onToast(message, "error");
+        return;
+      }
+      setOverlapAck(false);
+      setPeriodOverlapAck(false);
+      setOverlapReviewAck(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("admin.pos.scanErrorKeepDraft");
+      setScreenError(message);
+      upsert({ ...report, scanStatus: "failed", lastScanError: message, updatedAt: new Date().toISOString() });
+      props.onToast(message, "error");
+    } finally {
+      scanLock.current = null;
+      setBusy(null);
     }
-    setOverlapAck(false);
-    setPeriodOverlapAck(false);
   }
 
   function patch(update: Partial<PosZReport>) {
@@ -116,7 +164,7 @@ export function PosZPanel(props: InventoryHubProps) {
 
   return (
     <div className="space-y-4">
-      <label className="flex cursor-pointer flex-col items-center rounded-3xl border border-dashed border-coffee/25 px-6 py-10">
+      <label className={`flex flex-col items-center rounded-3xl border border-dashed border-coffee/25 px-6 py-10 ${busy ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
         <Upload className="h-8 w-8" />
         <p className="mt-3 font-semibold">{t("admin.pos.zUpload")}</p>
         <p className="text-sm text-coffee/55">JPG / PNG / PDF</p>
@@ -125,6 +173,7 @@ export function PosZPanel(props: InventoryHubProps) {
           accept="image/jpeg,image/png,application/pdf"
           multiple
           className="hidden"
+          disabled={Boolean(busy)}
           onChange={(e) => {
             const files = [...(e.target.files ?? [])];
             e.target.value = "";
@@ -156,12 +205,13 @@ export function PosZPanel(props: InventoryHubProps) {
               {(active.sourceFiles ?? []).map((source) => (
                 <InvoiceSourcePreview key={source.storagePath} source={source} />
               ))}
-              <label className="block cursor-pointer text-sm text-turquoise">
+              <label className={`block text-sm text-turquoise ${busy ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
                 {t("admin.pos.addImage")}
                 <input
                   type="file"
                   accept="image/jpeg,image/png,application/pdf"
                   className="hidden"
+                  disabled={Boolean(busy)}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
@@ -181,18 +231,37 @@ export function PosZPanel(props: InventoryHubProps) {
                   {t("admin.pos.scanningProgress")}
                 </p>
               )}
-              {active.lastScanError && (
-                <p className="rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800">{active.lastScanError}</p>
+              {(screenError || active.lastScanError) && !scanning && (
+                <p className="rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800">{screenError || active.lastScanError}</p>
               )}
               {active.scanStatus === "partial" && (
                 <p className="rounded-2xl bg-amber-50 px-3 py-2 text-sm">{t("admin.pos.scanPartial")}</p>
               )}
 
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="turquoise" disabled={Boolean(busy) || !active.sourceFiles?.length} onClick={() => void scan(active)}>
+                <Button
+                  type="button"
+                  variant="turquoise"
+                  disabled={Boolean(busy) || !active.sourceFiles?.length}
+                  onClick={() =>
+                    void scan(active, {
+                      forceAi: Boolean(active.fields?.length || active.payments?.length || active.salesTotal != null),
+                    })
+                  }
+                >
                   <ScanSearch className="ms-1 h-4 w-4" />
                   {active.fields?.length || active.payments?.length ? t("admin.pos.rescanAi") : t("admin.pos.startAiScan")}
                 </Button>
+                {(screenError || active.scanStatus === "failed") && (
+                  <Button type="button" variant="outline" disabled={Boolean(busy) || !active.sourceFiles?.length} onClick={() => void scan(active)}>
+                    {t("admin.pos.retryScan")}
+                  </Button>
+                )}
+                {overlapReviewRequired(active.websiteOverlap) && (active.fields?.length || active.payments?.length || active.salesTotal != null) && (
+                  <Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => void scan(active, { recheckOverlap: true })}>
+                    {t("admin.pos.recheckOverlap")}
+                  </Button>
+                )}
               </div>
 
               {(active.fields?.length || active.payments?.length || active.salesTotal != null) && (
@@ -201,6 +270,21 @@ export function PosZPanel(props: InventoryHubProps) {
             </div>
           </div>
 
+          {overlapReviewRequired(active.websiteOverlap) && (
+            <div className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-sm">
+              <p className="font-semibold">{t("admin.pos.overlapIncomplete")}</p>
+              <p className="mt-1">{t("admin.pos.overlapIncompleteDetail")}</p>
+              {(active.websiteOverlap?.invalidOrderCount ?? 0) > 0 && (
+                <p className="mt-1 text-xs text-coffee/70">
+                  {active.websiteOverlap?.invalidOrderCount} · {(active.websiteOverlap?.invalidOrderIds ?? []).join(", ")}
+                </p>
+              )}
+              <label className="mt-2 flex items-start gap-2">
+                <input type="checkbox" checked={overlapReviewAck} onChange={(e) => setOverlapReviewAck(e.target.checked)} />
+                <span>{t("admin.pos.overlapIncompleteAck")}</span>
+              </label>
+            </div>
+          )}
           {overlapRequiresAck(active.websiteOverlap) && (
             <label className="mt-3 flex items-start gap-2 text-sm">
               <input type="checkbox" checked={overlapAck} onChange={(e) => setOverlapAck(e.target.checked)} />
@@ -227,10 +311,22 @@ export function PosZPanel(props: InventoryHubProps) {
               disabled={Boolean(busy)}
               onClick={async () => {
                 setBusy("save");
-                const saved = await saveZDraft({ ...active, status: "draft" });
-                setBusy(null);
-                if (!saved.success) props.onToast(saved.error, "error");
-                else props.onToast(t("admin.pos.draftSaved"));
+                setScreenError(null);
+                try {
+                  const saved = await saveZDraft({ ...active, status: "draft" });
+                  if (!saved.success) {
+                    setScreenError(saved.error);
+                    props.onToast(saved.error, "error");
+                  } else {
+                    props.onToast(t("admin.pos.draftSaved"));
+                  }
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : t("admin.pos.postFailed");
+                  setScreenError(message);
+                  props.onToast(message, "error");
+                } finally {
+                  setBusy(null);
+                }
               }}
             >
               {t("admin.pos.saveDraft")}
@@ -246,43 +342,62 @@ export function PosZPanel(props: InventoryHubProps) {
                 );
                 if (!previewOk) return;
                 setBusy("post");
-                const response = await authFetch("/api/admin/pos/z/approve", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    reportId: active.id,
-                    report: active,
-                    overlapAcknowledged: overlapAck,
-                    periodOverlapAcknowledged: periodOverlapAck,
-                  }),
-                });
-                const json = await response.json();
-                setBusy(null);
-                if (!response.ok || !json.ok) {
-                  props.onToast(
-                    json.error === "already-posted"
-                      ? t("admin.pos.alreadyPosted")
-                      : json.error === "website-overlap"
-                        ? t("admin.pos.websiteOverlap")
-                        : json.error === "period-overlap"
-                          ? t("admin.pos.periodOverlap")
-                          : json.error === "duplicate"
-                            ? t("admin.pos.zExists")
-                            : json.error === "period-unconfirmed"
-                              ? t("admin.pos.confirmPeriod")
-                              : t("admin.pos.postFailed"),
-                    "error"
-                  );
-                  return;
+                setScreenError(null);
+                try {
+                  const response = await authFetch("/api/admin/pos/z/approve", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      reportId: active.id,
+                      report: active,
+                      overlapAcknowledged: overlapAck,
+                      periodOverlapAcknowledged: periodOverlapAck,
+                      overlapReviewAcknowledged: overlapReviewAck,
+                    }),
+                  });
+                  const json = await readJsonSafe(response);
+                  if (!response.ok || !json.ok) {
+                    const message =
+                      json.error === "already-posted"
+                        ? t("admin.pos.alreadyPosted")
+                        : json.error === "website-overlap"
+                          ? t("admin.pos.websiteOverlap")
+                          : json.error === "period-overlap"
+                            ? t("admin.pos.periodOverlap")
+                            : json.error === "overlap-incomplete"
+                              ? t("admin.pos.overlapIncomplete")
+                              : json.error === "duplicate"
+                                ? t("admin.pos.zExists")
+                                : json.error === "period-unconfirmed"
+                                  ? t("admin.pos.confirmPeriod")
+                                  : String(json.message || t("admin.pos.postFailed"));
+                    setScreenError(message);
+                    props.onToast(message, "error");
+                    return;
+                  }
+                  props.onToast(t("admin.pos.zPostedOk"));
+                  upsert({
+                    ...active,
+                    status: "posted",
+                    financeEntryId: typeof json.financeEntryId === "string" ? json.financeEntryId : active.financeEntryId,
+                    updatedAt: new Date().toISOString(),
+                  });
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : t("admin.pos.postFailed");
+                  setScreenError(message);
+                  props.onToast(message, "error");
+                } finally {
+                  setBusy(null);
                 }
-                props.onToast(t("admin.pos.zPostedOk"));
-                upsert({ ...active, status: "posted", financeEntryId: json.financeEntryId, updatedAt: new Date().toISOString() });
               }}
             >
               {t("admin.pos.approveFinance")}
             </Button>
             {!postCheck.ok && postCheck.reason === "period-unconfirmed" && (
               <span className="self-center text-xs text-coffee/60">{t("admin.pos.confirmPeriod")}</span>
+            )}
+            {!postCheck.ok && postCheck.reason === "overlap-incomplete" && (
+              <span className="self-center text-xs text-coffee/60">{t("admin.pos.overlapIncomplete")}</span>
             )}
           </div>
         </AdminCard>

@@ -452,6 +452,14 @@ export type PosZCheck = {
   ok: boolean;
 };
 
+export type WebsiteSalesOverlap = {
+  orderCount: number;
+  amount: number;
+  status: "ok" | "incomplete";
+  invalidOrderCount?: number;
+  invalidOrderIds?: string[];
+};
+
 export type PosZReport = {
   id: string;
   reportNumber?: string | null;
@@ -487,7 +495,8 @@ export type PosZReport = {
   sourceFiles?: InvoiceSourceFile[];
   fileHash?: string;
   duplicateOf?: string | null;
-  websiteOverlap?: { orderCount: number; amount: number } | null;
+  websiteOverlap?: WebsiteSalesOverlap | null;
+  overlapReviewResolved?: boolean;
   periodOverlapIds?: string[];
   createdAt: string;
   updatedAt?: string;

@@ -42,15 +42,26 @@ export function InvoiceStockTransfer({
   const alreadyPosted = invoiceStockStatus(invoice) === "posted";
 
   const postStock = async () => {
+    if (saving) return;
     setSaving(true);
     const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys, {
       skipFinanceSave,
     });
     setSaving(false);
     if (!result.success) {
-      onToast(result.error === "NO_STOCK_LINES" ? t("admin.finance.noStockLines") : result.error, "error");
+      onToast(
+        result.error === "PERMISSION_DENIED"
+          ? t("admin.inventory.smart.permissionSystem")
+          : result.error === "NO_STOCK_LINES"
+            ? t("admin.finance.noStockLines")
+            : result.error === "ALREADY_POSTED"
+              ? t("admin.finance.alreadyPosted")
+              : t("admin.inventory.smart.stockNotPosted"),
+        "error"
+      );
       return;
     }
+    if (result.data?.lines) setLines(result.data.lines);
     onToast(t("admin.finance.stockTransferred"));
     onClose();
   };

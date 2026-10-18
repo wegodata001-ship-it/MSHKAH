@@ -16,11 +16,13 @@ import {
 } from "firebase/firestore";
 import { getDb } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firebase/collections";
+import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { failure, success, type ServiceResult } from "@/lib/errors";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { nowTimestamp, timestampToIso } from "@/types/firestore";
 import { toDateOnly } from "@/lib/dates/normalize";
 import { invoiceLineQuantityBase, planIngredientMerge } from "@/lib/inventory/ingredient-core";
+import { sanitizeInventoryDocId } from "@/lib/inventory/invoice-stock-post";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { costPerBaseUnit } from "@/lib/costing/units";
 import { createIngredient } from "@/services/costingService";
@@ -34,7 +36,7 @@ import {
   supplierAliasesFor,
   type PurchaseListDecision,
 } from "@/lib/inventory/purchase-list";
-import { newCompareGroupId, reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
+import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
 import { splitVat } from "@/lib/inventory/vat";
 import { currentStockBase, movementSignedBase, unitCostFromPackage } from "@/lib/inventory/stock";
 import { excelImportPayload, periodReviewCleared } from "@/lib/inventory/pos-excel";
@@ -182,7 +184,7 @@ async function commitStockMovement(input: {
 }): Promise<{ id: string; reused: boolean }> {
   const db = getDb();
   const movementRef = input.movementId
-    ? doc(db, COLLECTIONS.inventoryMovements, input.movementId)
+    ? doc(db, COLLECTIONS.inventoryMovements, sanitizeInventoryDocId(input.movementId))
     : doc(collection(db, COLLECTIONS.inventoryMovements));
   let reused = false;
   await runTransaction(db, async (tx) => {
@@ -765,6 +767,14 @@ export async function savePurchaseInvoiceDraft(
   invoice: Omit<PurchaseInvoice, "id" | "createdAt"> & { id?: string; status?: PurchaseInvoiceStatus }
 ): Promise<ServiceResult<string>> {
   try {
+    const viaApi = await clientAdminFetch<{ id: string }>("/api/admin/inventory/invoice/save", {
+      invoice,
+      mode: "draft",
+    });
+    if (viaApi.ok && viaApi.data?.id) return success(viaApi.data.id);
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
+    }
     const now = nowTimestamp();
     const payload = sanitizeFirestoreData({
       ...invoice,
@@ -786,6 +796,17 @@ export async function savePurchaseInvoiceDraft(
 
 export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<ServiceResult<string>> {
   try {
+    const viaApi = await clientAdminFetch<{ id: string; invoice?: PurchaseInvoice }>("/api/admin/inventory/invoice/save", {
+      invoice,
+      mode: "finance",
+    });
+    if (viaApi.ok && viaApi.data?.id) return success(viaApi.data.id);
+    if (viaApi.code === "DUPLICATE_INVOICE" || viaApi.error === "DUPLICATE_INVOICE") {
+      return failure(new Error("DUPLICATE_INVOICE"), "DUPLICATE_INVOICE");
+    }
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
+    }
     const synced = syncInvoiceTotals(invoice);
     const existingSnap = await getDocs(collection(getDb(), COLLECTIONS.purchaseInvoices));
     const existing = existingSnap.docs.map((item) => ({ id: item.id, ...item.data() }) as PurchaseInvoice);
@@ -894,152 +915,22 @@ export async function transferInvoiceLinesToStock(
   invoice: PurchaseInvoice,
   lineKeys?: string[],
   options?: { skipFinanceSave?: boolean }
-): Promise<ServiceResult<void>> {
+): Promise<ServiceResult<PurchaseInvoice | void>> {
   try {
     if (!invoice.id) return failure(new Error("Invoice required"), "Invoice required");
     if (invoice.inventoryPostedAt && invoice.stockStatus === "posted") {
       return failure(new Error("ALREADY_POSTED"), "ALREADY_POSTED");
     }
-    let current = invoice;
-    if (current.status !== "saved" && current.status !== "approved") {
-      if (options?.skipFinanceSave) {
-        current = { ...current, status: "saved" };
-      } else {
-        const saved = await saveFinanceInvoice(current);
-        if (!saved.success) return failure(new Error(saved.error), saved.error);
-        current = { ...current, id: saved.data, status: "saved" };
-      }
-    }
-    const selected = (lineKeys?.length ? current.lines.filter((line) => lineKeys.includes(line.key)) : transferableLines(current.lines)).filter(
-      (line) => !line.postedToStock && !line.skipInventory && line.productId && line.quantity && line.unit
-    );
-    if (!selected.length) return failure(new Error("NO_STOCK_LINES"), "NO_STOCK_LINES");
-
-    const db = getDb();
-    const existingMoves = await getDocs(
-      query(collection(db, COLLECTIONS.inventoryMovements), where("invoiceId", "==", current.id))
-    );
-    const postedKeys = new Set(
-      existingMoves.docs.map((item) => String(item.data().invoiceLineKey || "")).filter(Boolean)
-    );
-    const now = nowTimestamp();
-    const nextLines = current.lines.map((line) => ({ ...line }));
-
-    for (const line of selected) {
-      if (postedKeys.has(line.key) || existingMoves.docs.some((item) => item.data().invoiceLineKey === line.key)) {
-        const idx = nextLines.findIndex((item) => item.key === line.key);
-        if (idx >= 0) nextLines[idx] = { ...nextLines[idx], postedToStock: true };
-        continue;
-      }
-      const productMoves = await getDocs(
-        query(collection(db, COLLECTIONS.inventoryMovements), where("productId", "==", line.productId))
-      );
-      const before = currentStockBase(
-        productMoves.docs.map((item) => ({ id: item.id, ...item.data() }) as InventoryMovement),
-        line.productId!
-      );
-      const qtyBase = invoiceLineQuantityBase(line);
-      if (qtyBase == null) continue;
-      const net = line.netAmount ?? line.priceBeforeVat ?? 0;
-      const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
-      await commitStockMovement({
-        movementId: `in-${current.id}-${line.key}`,
-        productId: line.productId!,
-        deltaBase: qtyBase,
-        fallbackAvailable: before,
-        payload: {
-          productId: line.productId,
-          type: "PURCHASE_IN",
-          quantity: line.quantity,
-          unit: line.unit,
-          quantityBase: qtyBase,
-          supplierId: current.supplierId || null,
-          invoiceId: current.id,
-          invoiceLineKey: line.key,
-          unitCost: qtyBase > 0 ? (net || gross) / qtyBase : 0,
-          unitCostNet: qtyBase > 0 ? net / qtyBase : 0,
-          unitCostGross: qtyBase > 0 ? gross / qtyBase : 0,
-          vatRate: line.vatRate,
-          quantityIn: qtyBase,
-          invoiceDate: current.invoiceDate,
-          receivedAt: current.receivedAt,
-          createdAt: now,
-        },
-      });
-      await updateDoc(doc(db, COLLECTIONS.ingredients, line.productId!), {
-        purchasePrice: gross || net,
-        purchaseQuantity: line.quantity,
-        purchaseUnit: line.unit,
-        costPerBaseUnit: qtyBase > 0 ? (net || gross) / qtyBase : costPerBaseUnit(net || gross, line.quantity!, line.unit!),
-        lastSupplierId: current.supplierId || null,
-        lastReceivedAt: current.receivedAt,
-        updatedAt: now,
-      });
-      if (current.supplierId) {
-        await recordSupplierPurchase({
-          productId: line.productId!,
-          supplierId: current.supplierId,
-          priceIncludingVat: gross,
-          priceBeforeVat: net,
-          packageQuantity: line.quantity!,
-          purchaseUnit: line.unit!,
-          purchasedAt: current.invoiceDate || current.receivedAt,
-          vatType: line.vatType,
-          vatRate: line.vatRate ?? undefined,
-          invoiceId: current.id,
-          invoiceNumber: current.invoiceNumber,
-          invoiceLineId: line.key,
-          unitPriceNet: line.unitPriceNet ?? undefined,
-          unitPriceGross: line.unitPriceGross ?? undefined,
-          lineTotalNet: net,
-          lineTotalVat: line.vatAmount ?? 0,
-          lineTotalGross: gross,
-        });
-        if (line.rawName) {
-          await saveSupplierItemMap({
-            supplierId: current.supplierId,
-            supplierProductName: line.rawName,
-            supplierSku: line.sku,
-            inventoryProductId: line.productId!,
-            purchaseUnit: line.unit ?? undefined,
-            packageQuantity: line.quantity ?? undefined,
-            conversion: line.conversionFactor ?? undefined,
-          });
-        }
-      }
-      const idx = nextLines.findIndex((item) => item.key === line.key);
-      if (idx >= 0) {
-        nextLines[idx] = {
-          ...nextLines[idx],
-          postedToStock: true,
-          quantityBefore: before,
-          quantityIn: qtyBase,
-          quantityAfter: before + qtyBase,
-        };
-      }
-    }
-
-    const stockStatus = nextLines.some((line) => line.postedToStock)
-      ? nextLines.some((line) => !line.postedToStock && !line.skipInventory && line.productId)
-        ? "partial"
-        : "posted"
-      : "none";
-    const postingId = current.inventoryPostingId || `post-${current.id}`;
-    await updateDoc(doc(db, COLLECTIONS.purchaseInvoices, current.id), {
-      status: "saved",
-      scanStatus: stockStatus === "posted" ? "posted" : current.scanStatus || "approved",
-      stockStatus,
-      lines: nextLines,
-      inventoryPostedAt: stockStatus === "posted" ? new Date().toISOString() : current.inventoryPostedAt || null,
-      inventoryPostedBy: current.approvedBy || current.createdBy || null,
-      inventoryPostingId: stockStatus === "posted" ? postingId : current.inventoryPostingId || null,
-      audit: [
-        ...(current.audit ?? []),
-        { at: new Date().toISOString(), actor: current.approvedBy, action: "INVENTORY_POSTED", detail: stockStatus },
-      ],
-      updatedAt: now,
+    const viaApi = await clientAdminFetch<{ invoice: PurchaseInvoice }>("/api/admin/inventory/invoice/stock-post", {
+      invoice,
+      lineKeys,
+      skipFinanceSave: options?.skipFinanceSave,
     });
-    return success(undefined);
+    if (viaApi.ok && viaApi.data?.invoice) return success(viaApi.data.invoice);
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
+    }
+    return failure(new Error(viaApi.error || "STOCK_POST_FAILED"), viaApi.error || "STOCK_POST_FAILED");
   } catch (error) {
     return failure(error, "Failed to transfer invoice to stock");
   }
@@ -2128,39 +2019,27 @@ export async function saveIngredientCompareGroup(input: {
   groupId?: string;
   name: string;
   memberIds: string[];
-}): Promise<ServiceResult<{ id: string; name: string }>> {
+}): Promise<ServiceResult<{ id: string; name: string; memberIds: string[] }>> {
+  const memberIds = [...new Set(input.memberIds.filter(Boolean))];
   try {
-    const id = input.groupId || newCompareGroupId(input.name);
-    const name = input.name.trim();
-    const now = nowTimestamp();
-    const nextIds = [...new Set(input.memberIds.filter(Boolean))];
-    const currentSnap = await getDocs(query(collection(getDb(), COLLECTIONS.ingredients), where("compareGroupId", "==", id)));
-    for (const item of currentSnap.docs) {
-      if (!nextIds.includes(item.id)) {
-        await updateDoc(item.ref, { compareGroupId: deleteField(), compareGroupName: deleteField(), updatedAt: now });
-      }
+    const viaApi = await clientAdminFetch<{ id: string; name: string; memberIds: string[] }>("/api/admin/inventory/compare-group", {
+      action: "save-group",
+      groupId: input.groupId,
+      name: input.name.trim(),
+      memberIds,
+    });
+    if (
+      viaApi.ok &&
+      viaApi.data?.id &&
+      Array.isArray(viaApi.data.memberIds) &&
+      viaApi.data.memberIds.length === memberIds.length
+    ) {
+      return success({ id: viaApi.data.id, name: viaApi.data.name, memberIds: viaApi.data.memberIds });
     }
-    for (const memberId of nextIds) {
-      await updateDoc(doc(getDb(), COLLECTIONS.ingredients, memberId), {
-        compareGroupId: id,
-        compareGroupName: name,
-        updatedAt: now,
-      });
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
     }
-    const oldMaps = await getDocs(query(collection(getDb(), COLLECTIONS.supplierItemMaps), where("compareGroupId", "==", id)));
-    for (const item of oldMaps.docs) {
-      const productId = String(item.data().inventoryProductId ?? "");
-      if (!nextIds.includes(productId)) {
-        await updateDoc(item.ref, { compareGroupId: deleteField(), compareGroupName: deleteField(), updatedAt: now });
-      }
-    }
-    for (const memberId of nextIds) {
-      const maps = await getDocs(query(collection(getDb(), COLLECTIONS.supplierItemMaps), where("inventoryProductId", "==", memberId)));
-      for (const item of maps.docs) {
-        await updateDoc(item.ref, { compareGroupId: id, compareGroupName: name, updatedAt: now });
-      }
-    }
-    return success({ id, name });
+    return failure(new Error(viaApi.error || "SAVE_FAILED"), viaApi.code || "SAVE_FAILED");
   } catch (error) {
     return failure(error, "Failed to save compare group");
   }
@@ -2173,33 +2052,42 @@ export async function saveComparePack(input: {
   purchaseUnit: PurchaseUnit;
 }): Promise<ServiceResult<void>> {
   try {
-    const now = nowTimestamp();
-    const existing = await findOfferDocs(input.productId, input.supplierId);
-    if (existing.docs[0]) {
-      await updateDoc(existing.docs[0].ref, {
-        packageQuantity: input.packageQuantity,
-        purchaseUnit: input.purchaseUnit,
-        lastPackageQuantity: input.packageQuantity,
-        lastUnit: input.purchaseUnit,
-        updatedAt: now,
-      });
+    const viaApi = await clientAdminFetch<{ ok: boolean }>("/api/admin/inventory/compare-group", {
+      action: "save-pack",
+      productId: input.productId,
+      supplierId: input.supplierId,
+      packageQuantity: input.packageQuantity,
+      purchaseUnit: input.purchaseUnit,
+    });
+    if (viaApi.ok) return success(undefined);
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
     }
-    const maps = await getDocs(
-      query(
-        collection(getDb(), COLLECTIONS.supplierItemMaps),
-        where("supplierId", "==", input.supplierId),
-        where("inventoryProductId", "==", input.productId)
-      )
-    );
-    for (const item of maps.docs) {
-      await updateDoc(item.ref, {
-        packageQuantity: input.packageQuantity,
-        purchaseUnit: input.purchaseUnit,
-        updatedAt: now,
-      });
-    }
-    return success(undefined);
+    return failure(new Error(viaApi.error || "SAVE_FAILED"), viaApi.code || "SAVE_FAILED");
   } catch (error) {
     return failure(error, "Failed to save pack for compare");
+  }
+}
+
+export async function saveComparePurchaseBasis(input: {
+  productId: string;
+  supplierId: string;
+  price: number;
+  packageQuantity: number;
+  purchaseUnit: PurchaseUnit;
+  vatMode: "net" | "gross";
+}): Promise<ServiceResult<void>> {
+  try {
+    const viaApi = await clientAdminFetch<{ ok: boolean }>("/api/admin/inventory/compare-group", {
+      action: "complete-basis",
+      ...input,
+    });
+    if (viaApi.ok) return success(undefined);
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
+    }
+    return failure(new Error(viaApi.error || "SAVE_FAILED"), viaApi.code || "SAVE_FAILED");
+  } catch (error) {
+    return failure(error, "Failed to save compare purchase basis");
   }
 }

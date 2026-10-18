@@ -203,6 +203,24 @@ describe("real sales connection", () => {
     expect(sales.revenue).toBe(50);
     expect(sales.orders).toBe(1);
   });
+
+  it("uses Firestore Timestamp business dates and skips orders without a valid day", () => {
+    const timestamp = {
+      toDate: () => new Date("2026-10-04T21:30:00.000Z"),
+      seconds: Math.floor(Date.parse("2026-10-04T21:30:00.000Z") / 1000),
+      nanoseconds: 0,
+    };
+    const sales = salesInRange(
+      [
+        order(50, { id: "ts", createdAt: timestamp as unknown as string, paidAt: timestamp as unknown as string }),
+        order(80, { id: "nodate", createdAt: "" as unknown as string, paidAt: null, completedAt: null }),
+      ],
+      "2026-10-01",
+      "2026-10-31"
+    );
+    expect(sales.revenue).toBe(50);
+    expect(sales.orders).toBe(1);
+  });
 });
 
 describe("missing data", () => {
