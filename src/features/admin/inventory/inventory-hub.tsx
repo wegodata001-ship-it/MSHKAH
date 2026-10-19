@@ -358,7 +358,7 @@ function LedgerPane({
   );
 }
 
-export function PurchaseSection(props: InventoryHubProps & { pane: PurchasePane }) {
+export function PurchaseSection(props: InventoryHubProps & { pane: PurchasePane; onViewInventory?: () => void }) {
   if (props.pane === "suppliers") return <SuppliersPane {...props} />;
   if (props.pane === "compare") return <ComparePane {...props} />;
   return <InvoicesPane {...props} />;
@@ -403,7 +403,7 @@ function SuppliersPane({ suppliers, onToast }: InventoryHubProps) {
   );
 }
 
-function InvoicesPane(props: InventoryHubProps) {
+function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void }) {
   const t = useT();
   const ai = useSmartInvoiceEnabled();
   const [draft, setDraft] = useState<PurchaseInvoice | "new" | null>(null);
@@ -434,6 +434,7 @@ function InvoicesPane(props: InventoryHubProps) {
         vatRate={props.settingsVatRate}
         initialInvoice={smartInvoice}
         onToast={props.onToast}
+        onViewInventory={props.onViewInventory}
         onOpenExisting={(invoice) => setSmartInvoice(invoice)}
         onClose={() => {
           setSmart(false);

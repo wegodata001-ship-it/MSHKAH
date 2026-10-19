@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Camera, FileUp, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,14 +15,15 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import type { CostingIngredient } from "@/lib/costing/types";
 import { finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
-import { invoiceCreateProductDraft, newInvoiceProductPatch } from "@/lib/inventory/invoice-line-review";
+import { applyInvoiceLineSave, existingProductForInvoiceName, invoiceAssignmentPlan, invoiceCreateProductDraft, newInvoiceProductPatch, plannedCreateGroups, plannedIngredientName, preferredSupplierAssignments } from "@/lib/inventory/invoice-line-review";
+import { createIngredient } from "@/services/costingService";
 import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap, transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
-import { applyComputedTotals, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
+import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
 import { invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
@@ -86,6 +88,7 @@ export function SmartInvoiceFlow({
   onToast,
   onManual,
   onOpenExisting,
+  onViewInventory,
 }: {
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
@@ -98,6 +101,7 @@ export function SmartInvoiceFlow({
   onToast: (message: string, variant?: "success" | "error") => void;
   onManual: () => void;
   onOpenExisting?: (invoice: PurchaseInvoice) => void;
+  onViewInventory?: () => void;
 }) {
   const t = useT();
   const authFetch = useAuthFetch();
@@ -106,6 +110,25 @@ export function SmartInvoiceFlow({
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [invoice, setInvoice] = useState<PurchaseInvoice | null>(initialInvoice ?? null);
+  const invoiceRef = useRef(invoice);
+  useEffect(() => {
+    const current = invoiceRef.current;
+    if (!current || !invoice || current === invoice) {
+      invoiceRef.current = invoice;
+      return;
+    }
+    const score = (doc: PurchaseInvoice) =>
+      doc.lines.filter((line) => Boolean(line.productId) && line.matchConfirmed !== false).length + (doc.id ? 1000 : 0);
+    if (score(invoice) >= score(current)) invoiceRef.current = invoice;
+  }, [invoice]);
+  const invoicesRef = useRef(invoices);
+  invoicesRef.current = invoices;
+  const ingredientsRef = useRef(ingredients);
+  ingredientsRef.current = ingredients;
+  const savingRef = useRef(false);
+  const [phase, setPhase] = useState<"idle" | "checking" | "posting" | "creating">("idle");
+  const [holdIntake, setHoldIntake] = useState(false);
+  const [intakeError, setIntakeError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -188,23 +211,16 @@ export function SmartInvoiceFlow({
   };
 
   const update = (patch: Partial<PurchaseInvoice>) => {
-    if (!invoice) return;
-    setEditedKeys((current) => new Set([...current, ...Object.keys(patch)]));
-    setInvoice({
-      ...invoice,
+    const current = invoiceRef.current;
+    if (!current) return;
+    const next = {
+      ...current,
       ...patch,
-      audit: [...(invoice.audit ?? []), { at: new Date().toISOString(), action: "edit", detail: Object.keys(patch).join(",") }],
-    });
-  };
-
-  const updateLine = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
-    if (!invoice) return;
-    setEditedKeys((current) => new Set([...current, `line:${key}`]));
-    setInvoice({
-      ...invoice,
-      lines: invoice.lines.map((line) => (line.key === key ? finalizeInvoiceLine({ ...line, ...patch }, vatRate) : line)),
-      audit: [...(invoice.audit ?? []), { at: new Date().toISOString(), action: "edit", detail: `line:${key}` }],
-    });
+      audit: [...(current.audit ?? []), { at: new Date().toISOString(), action: "edit", detail: Object.keys(patch).join(",") }],
+    };
+    invoiceRef.current = next;
+    setEditedKeys((keys) => new Set([...keys, ...Object.keys(patch)]));
+    setInvoice(next);
   };
 
   if (!invoice) {
@@ -312,7 +328,8 @@ export function SmartInvoiceFlow({
     );
   }
 
-  const locked = invoice.status === "saved" || invoice.status === "approved" || isPostedInvoice(invoice);
+  const stockPosted = invoice.stockStatus === "posted" || Boolean(invoice.inventoryPostedAt);
+  const locked = stockPosted;
   const postedDuplicate = Boolean(invoice.duplicateSnapshot?.posted || (invoice.duplicateOf && invoices.find((item) => item.id === invoice.duplicateOf && isPostedInvoice(item))));
   const mismatch = invoiceMismatch(applyComputedTotals(invoice));
   const invoiceDate = toDateOnly(invoice.invoiceDate) || "";
@@ -323,6 +340,7 @@ export function SmartInvoiceFlow({
   const reviewLines = workingLines.length ? workingLines : invoice.lines;
   const blockers = invoiceApproveBlockers({ ...invoice, lines: reviewLines }, { dirtyKeys });
   const lineBlockers = invoiceLineBlockers(reviewLines, { dirtyKeys });
+  const assignmentPlan = invoiceAssignmentPlan(reviewLines, ingredients);
   const supplierGuess = !invoice.supplierId && invoice.supplierName
     ? matchSupplier(invoice.supplierName, invoice.supplierTaxId, suppliers)
     : null;
@@ -345,6 +363,188 @@ export function SmartInvoiceFlow({
       id: current.id || undefined,
       status: current.status === "saved" || current.status === "approved" ? current.status : "draft",
     });
+  };
+
+  const saveWorkingLine = async (line: PurchaseInvoiceLine) => {
+    const current = invoiceRef.current;
+    if (!current) throw new Error(t("admin.inventory.smart.lineUpdateFailed"));
+    const next = applyComputedTotals(applyInvoiceLineSave(current, finalizeInvoiceLine(line, vatRate)));
+    invoiceRef.current = next;
+    setInvoice(next);
+    const saved = await persistDraft(next);
+    if (!saved.success) {
+      throw new Error(
+        saved.error === "PERMISSION_DENIED"
+          ? t("admin.inventory.smart.permissionSystem")
+          : t("admin.inventory.smart.lineUpdateFailed")
+      );
+    }
+    const stored = { ...next, id: saved.data };
+    invoiceRef.current = stored;
+    setInvoice(stored);
+    if (stored.supplierId && line.productId && (line.originalDescription || line.rawName)) {
+      await saveSupplierItemMap({
+        supplierId: stored.supplierId,
+        supplierProductName: line.originalDescription || line.rawName,
+        supplierSku: line.sku,
+        inventoryProductId: line.productId,
+        purchaseUnit: line.unit ?? undefined,
+        packageQuantity: line.quantity ?? undefined,
+        conversion: line.conversionFactor ?? undefined,
+      });
+    }
+  };
+
+  const materializePlannedLines = async (source: PurchaseInvoiceLine[], supplierName?: string) => {
+    const groups = plannedCreateGroups(source);
+    if (!groups.length) return source;
+    setPhase("creating");
+    const catalog = [...ingredientsRef.current];
+    const linked = new Map<string, { id: string; category?: string }>();
+    for (const group of groups) {
+      if (!group.name.trim()) throw new Error("CREATE_FAILED");
+      const sample = source.find((line) => line.key === group.lineKeys[0]);
+      if (!sample) throw new Error("CREATE_FAILED");
+      const found = existingProductForInvoiceName(group.name, catalog);
+      const product = found ?? (await (async () => {
+        const created = await createIngredient({
+          ...invoiceCreateProductDraft({ ...sample, rawName: group.name }, supplierName),
+          category: sample.category,
+        });
+        if (!created.success || !created.data) throw new Error(created.error || "CREATE_FAILED");
+        catalog.push(created.data);
+        return created.data;
+      })());
+      linked.set(group.key, { id: product.id, category: product.category });
+    }
+    return source.map((line) => {
+      const group = groups.find((item) => item.lineKeys.includes(line.key));
+      const product = group ? linked.get(group.key) : undefined;
+      if (!product) return line;
+      return {
+        ...line,
+        ...newInvoiceProductPatch({ id: product.id, category: product.category }, line.category || product.category),
+        rawName: line.rawName,
+        originalDescription: line.originalDescription,
+        plannedProductName: plannedIngredientName(line),
+      };
+    });
+  };
+
+  const rememberAssignments = async (lines: PurchaseInvoiceLine[], supplierId?: string) => {
+    if (!supplierId) return;
+    for (const line of preferredSupplierAssignments(lines)) {
+      const supplierProductName = (line.originalDescription || line.rawName || "").trim();
+      if (!supplierProductName) continue;
+      const saved = await saveSupplierItemMap({
+        supplierId,
+        supplierProductName,
+        supplierSku: line.sku,
+        inventoryProductId: line.productId,
+        purchaseUnit: line.unit ?? undefined,
+        packageQuantity: line.quantity ?? undefined,
+        conversion: line.conversionFactor ?? undefined,
+      });
+      if (!saved.success) throw new Error("ASSIGN_FAILED");
+    }
+  };
+
+  const postedInvoiceNow = (id?: string | null) => {
+    if (!id) return null;
+    const found = invoicesRef.current.find((row) => row.id === id);
+    if (!found) return null;
+    const postedCount = found.lines.filter((line) => line.postedToStock).length;
+    if ((found.stockStatus === "posted" || found.stockStatus === "partial") && postedCount > 0) return found;
+    return null;
+  };
+
+  const recoverPostedInvoice = async (id?: string | null) => {
+    const immediate = postedInvoiceNow(id);
+    if (immediate) return immediate;
+    if (!id) return null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const found = postedInvoiceNow(id);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const focusBlocker = (lineKey: string, field: string) => {
+    setHighlightKey(lineKey);
+    setHighlightField(field);
+    setFocusField("lines");
+    window.setTimeout(() => {
+      const visible = (id: string) => {
+        const nodes = document.querySelectorAll<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+        for (const node of nodes) {
+          const rect = node.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) return node;
+        }
+        return null;
+      };
+      const row = visible(`invoice-line-${lineKey}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const node = visible(`invoice-line-${lineKey}-${field}`);
+      const target =
+        node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement
+          ? node
+          : node?.querySelector("select, input, textarea");
+      if (target instanceof HTMLElement) target.focus();
+    }, 60);
+  };
+
+  const finishPosted = (postedInvoice: PurchaseInvoice) => {
+    invoiceRef.current = postedInvoice;
+    setInvoice(postedInvoice);
+    setReceipt(postedInvoice);
+    setIntakeError(null);
+    setHoldIntake(false);
+    const postedCount = postedInvoice.lines.filter((line) => line.postedToStock).length;
+    onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
+  };
+
+  const failIntake = (code?: string) => {
+    setPhase("idle");
+    const key =
+      code === "LINE_SAVE_FAILED"
+        ? "admin.inventory.smart.lineUpdateFailed"
+        :       code === "DRAFT_FAILED"
+          ? "admin.costing.saveFailed"
+          : code === "CREATE_FAILED" || code === "ASSIGN_FAILED"
+            ? "admin.inventory.smart.ingredientCreateFailed"
+            : intakeFailureMessageKey(code);
+    const message = t(key);
+    onToast(message, "error");
+    setIntakeError(message);
+  };
+
+  const postReadyInvoice = async (ready: PurchaseInvoice) => {
+    const already = postedInvoiceNow(ready.id);
+    if (already) {
+      finishPosted(already);
+      return;
+    }
+    setPhase("posting");
+    const stock = await transferInvoiceLinesToStock(ready, undefined, { skipFinanceSave: true });
+    if (!stock.success && (stock.error === "ALREADY_POSTED" || intakeStatusUncertain(stock.error))) {
+      const recovered = await recoverPostedInvoice(ready.id);
+      if (recovered) {
+        finishPosted(recovered);
+        return;
+      }
+      if (stock.error === "ALREADY_POSTED") {
+        failIntake("ALREADY_POSTED");
+        return;
+      }
+    }
+    const postedInvoice = stock.success && stock.data ? stock.data : undefined;
+    const postedCount = postedInvoice?.lines.filter((line) => line.postedToStock).length ?? 0;
+    if (!stock.success || !postedInvoice || (postedInvoice.stockStatus !== "posted" && postedInvoice.stockStatus !== "partial") || postedCount === 0) {
+      failIntake(stock.success ? "STOCK_POST_FAILED" : stock.error);
+      return;
+    }
+    finishPosted(postedInvoice);
   };
 
   return (
@@ -503,35 +703,8 @@ export function SmartInvoiceFlow({
               setWorkingLines(lines);
               setDirtyKeys(keys);
             }}
-            onChangeLine={updateLine}
             onChangeLines={(lines) => update({ lines: lines.map((line) => finalizeInvoiceLine(line, vatRate)) })}
-            onUpdateLine={async (line) => {
-              const next = applyComputedTotals({
-                ...invoice,
-                lines: invoice.lines.map((row) => (row.key === line.key ? finalizeInvoiceLine(line, vatRate) : row)),
-              });
-              setInvoice(next);
-              const saved = await persistDraft(next);
-              if (!saved.success) {
-                throw new Error(
-                  saved.error === "PERMISSION_DENIED"
-                    ? t("admin.inventory.smart.permissionSystem")
-                    : saved.error || t("admin.inventory.smart.lineUpdateFailed")
-                );
-              }
-              setInvoice({ ...next, id: saved.data });
-              if (next.supplierId && line.productId && line.rawName) {
-                await saveSupplierItemMap({
-                  supplierId: next.supplierId,
-                  supplierProductName: line.rawName,
-                  supplierSku: line.sku,
-                  inventoryProductId: line.productId,
-                  purchaseUnit: line.unit ?? undefined,
-                  packageQuantity: line.quantity ?? undefined,
-                  conversion: line.conversionFactor ?? undefined,
-                });
-              }
-            }}
+            onUpdateLine={saveWorkingLine}
           />
           {summary && (
             <div className="mt-3 grid gap-1 rounded-xl bg-beige/40 p-2.5 text-sm sm:grid-cols-2">
@@ -549,7 +722,7 @@ export function SmartInvoiceFlow({
         </div>
       </AdminCard>
 
-      <div className="flex flex-wrap items-end justify-end gap-3">
+      <div id="invoice-approve-bar" className="relative z-30 flex w-full flex-col gap-3 bg-cream sm:flex-row sm:flex-wrap sm:items-end sm:justify-end">
         <Button type="button" variant="outline" onClick={() => {
           if (linesRef.current?.dirtyCount()) {
             const ok = window.confirm(t("admin.inventory.smart.unsavedLines"));
@@ -582,24 +755,24 @@ export function SmartInvoiceFlow({
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.saveDraft")}
         </Button>
-        <div className="max-w-md space-y-1 text-end">
+        <div id="invoice-intake-notice" className="w-full space-y-1 text-end sm:max-w-md">
+          <p className="text-xs text-coffee/70">
+            {t("admin.inventory.smart.assignmentSummary")
+              .replace("{create}", String(assignmentPlan.createCount))
+              .replace("{existing}", String(assignmentPlan.existingRows))}
+          </p>
+          {intakeError && <p className="text-sm font-medium text-red-700">{intakeError}</p>}
           {lineBlockers.length > 0 && (
             <div className="rounded-xl bg-amber-50 px-3 py-2 text-start text-xs text-amber-950">
-              <p className="font-medium">{t("admin.inventory.smart.needsTreatment").replace("{count}", String(lineBlockers.length))}</p>
+              <p className="font-medium">
+                {holdIntake
+                  ? t("admin.inventory.smart.intakeNotStarted").replace("{count}", String(lineBlockers.length))
+                  : t("admin.inventory.smart.needsTreatment").replace("{count}", String(lineBlockers.length))}
+              </p>
               <ul className="mt-1 space-y-1">
                 {lineBlockers.map((item) => (
                   <li key={item.lineKey}>
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={() => {
-                        setHighlightKey(item.lineKey);
-                        setHighlightField(item.field);
-                        setFocusField("lines");
-                        document.getElementById(`invoice-line-${item.lineKey}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                        document.getElementById(`invoice-line-${item.lineKey}-${item.field}`)?.focus?.();
-                      }}
-                    >
+                    <button type="button" className="underline" onClick={() => focusBlocker(item.lineKey, item.field)}>
                       {item.lineIndex}. {item.productName || "—"} — {t(item.labelKey)}
                     </button>
                   </li>
@@ -620,33 +793,69 @@ export function SmartInvoiceFlow({
               {t(item.labelKey).replace("{count}", String(item.count ?? 0))}
             </button>
           ))}
+          {(stockPosted || postedDuplicate) && (
+            <p className="text-xs font-medium text-coffee">{t("admin.inventory.smart.alreadyPosted")}</p>
+          )}
           <Button
             type="button"
             variant="turquoise"
-            disabled={saving || locked || postedDuplicate}
+            data-intake-phase={phase}
+            className="relative z-30 min-h-11 w-full touch-manipulation sm:w-auto"
+            disabled={saving || stockPosted || postedDuplicate}
             onClick={async () => {
-              if (!invoice || saving) return;
-              setSaving(true);
-              try {
-                if (linesRef.current?.dirtyCount()) {
-                  await linesRef.current.saveAll();
-                }
-                const current = flushLines();
-                if (!current) return;
-                const nextLineBlockers = invoiceLineBlockers(current.lines);
-                const nextHeader = invoiceApproveBlockers(current);
-                setWorkingLines(current.lines);
-                setDirtyKeys([]);
-                if (nextLineBlockers.length || nextHeader.length) return;
-                const draft = await persistDraft(current);
-                if (!draft.success) {
-                  onToast(
-                    draft.error === "PERMISSION_DENIED" ? t("admin.inventory.smart.permissionSystem") : t("admin.costing.saveFailed"),
-                    "error"
-                  );
+              if (!invoice || savingRef.current) return;
+    savingRef.current = true;
+    flushSync(() => {
+      setSaving(true);
+      setPhase("checking");
+      setIntakeError(null);
+    });
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    try {
+                try {
+                  if (linesRef.current?.dirtyCount()) await linesRef.current.saveAll();
+                } catch {
+                  failIntake("LINE_SAVE_FAILED");
                   return;
                 }
-                const withId = { ...current, id: draft.data };
+                const savedLines = invoiceRef.current?.lines ?? linesRef.current?.preview() ?? invoice.lines;
+                const base = invoiceRef.current ?? invoice;
+                const current = applyComputedTotals({ ...base, lines: savedLines });
+                invoiceRef.current = current;
+                setInvoice(current);
+                setWorkingLines(current.lines);
+                setDirtyKeys([]);
+                const nextLineBlockers = invoiceLineBlockers(current.lines);
+                const nextHeader = invoiceApproveBlockers(current);
+      if (nextLineBlockers.length || nextHeader.length) {
+        setHoldIntake(true);
+        const count = nextLineBlockers.length || nextHeader.length;
+        setIntakeError(t("admin.inventory.smart.intakeNotStarted").replace("{count}", String(count)));
+        const first = nextLineBlockers[0];
+        if (first) focusBlocker(first.lineKey, first.field);
+        else document.getElementById("invoice-intake-notice")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+                let createdLines = current.lines;
+                try {
+                  createdLines = await materializePlannedLines(current.lines, current.supplierName);
+                } catch (error) {
+                  const code = error instanceof Error ? error.message : "CREATE_FAILED";
+                  failIntake(code === "PERMISSION_DENIED" ? "PERMISSION_DENIED" : "CREATE_FAILED");
+                  return;
+                }
+                const withProducts = applyComputedTotals({ ...current, lines: createdLines });
+                invoiceRef.current = withProducts;
+                setInvoice(withProducts);
+                const draft = await persistDraft(withProducts);
+                if (!draft.success) {
+                  failIntake(draft.error === "PERMISSION_DENIED" ? "PERMISSION_DENIED" : "DRAFT_FAILED");
+                  return;
+                }
+                const withId = { ...withProducts, id: draft.data };
+                invoiceRef.current = withId;
                 setInvoice(withId);
                 const finance = await saveFinanceInvoice({
                   ...withId,
@@ -654,47 +863,41 @@ export function SmartInvoiceFlow({
                   approvedBy: "admin",
                 });
                 if (!finance.success) {
-                  onToast(
-                    finance.error === "PERMISSION_DENIED"
-                      ? t("admin.inventory.smart.permissionSystem")
-                      : finance.error === "DUPLICATE_INVOICE"
-                        ? t("admin.inventory.smart.duplicate")
-                        : finance.error,
-                    "error"
-                  );
+                  failIntake(finance.error);
                   return;
                 }
-                let ready = { ...withId, id: finance.data, status: "saved" as const, stockStatus: "none" as const };
+                let ready = { ...withId, id: finance.data, status: "saved" as const, stockStatus: withId.stockStatus ?? ("none" as const) };
                 if (!ready.supplierId && ready.supplierName) {
                   const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);
                   if (match.kind === "exact" && match.supplier) {
                     ready = { ...ready, supplierId: match.supplier.id, supplierName: match.supplier.name };
                   }
                 }
+                invoiceRef.current = ready;
                 setInvoice(ready);
-                const stock = await transferInvoiceLinesToStock(ready, undefined, { skipFinanceSave: true });
-                const postedInvoice = stock.success && stock.data ? stock.data : undefined;
-                const postedCount = postedInvoice?.lines.filter((line) => line.postedToStock).length ?? 0;
-                if (!stock.success || !postedInvoice || (postedInvoice.stockStatus !== "posted" && postedInvoice.stockStatus !== "partial") || postedCount === 0) {
-                  onToast(
-                    !stock.success && stock.error === "PERMISSION_DENIED"
-                      ? t("admin.inventory.smart.permissionSystem")
-                      : !stock.success && stock.error === "NO_STOCK_LINES"
-                        ? t("admin.finance.noStockLines")
-                        : t("admin.inventory.smart.stockNotPosted"),
-                    "error"
-                  );
+                try {
+                  await rememberAssignments(ready.lines, ready.supplierId);
+                } catch {
+                  failIntake("ASSIGN_FAILED");
                   return;
                 }
-                setInvoice(postedInvoice);
-                setReceipt(postedInvoice);
-                onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
+                await postReadyInvoice(ready);
               } finally {
+                savingRef.current = false;
                 setSaving(false);
+                setPhase("idle");
               }
             }}
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.approveStock")}
+            {phase === "checking" ? (
+              <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.checkingLines")}</>
+            ) : phase === "creating" ? (
+              <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.creatingIngredients")}</>
+            ) : phase === "posting" ? (
+              <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.postingStock")}</>
+            ) : (
+              t("admin.inventory.smart.approveStock")
+            )}
           </Button>
           {invoice && (invoice.status === "saved" || invoice.status === "approved") && invoice.stockStatus !== "posted" && (
             <Button
@@ -702,38 +905,58 @@ export function SmartInvoiceFlow({
               variant="turquoise"
               disabled={saving}
               onClick={async () => {
-                if (saving) return;
-                setSaving(true);
+                if (!invoice || savingRef.current) return;
+                savingRef.current = true;
+                flushSync(() => {
+                  setSaving(true);
+                  setPhase("posting");
+                  setIntakeError(null);
+                });
                 try {
-                  let ready = invoice;
+                  let ready = invoiceRef.current ?? invoice;
                   if (!ready.supplierId && ready.supplierName) {
                     const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);
                     if (match.kind === "exact" && match.supplier) {
                       ready = { ...ready, supplierId: match.supplier.id, supplierName: match.supplier.name };
                     }
                   }
-                  const stock = await transferInvoiceLinesToStock(ready, undefined, { skipFinanceSave: true });
-                  const postedInvoice = stock.success && stock.data ? stock.data : undefined;
-                  const postedCount = postedInvoice?.lines.filter((line) => line.postedToStock).length ?? 0;
-                  if (!stock.success || !postedInvoice || postedCount === 0) {
-                    onToast(t("admin.inventory.smart.stockNotPosted"), "error");
+                  try {
+                    const createdLines = await materializePlannedLines(ready.lines, ready.supplierName);
+                    ready = { ...ready, lines: createdLines };
+                    const saved = await persistDraft(ready);
+                    if (!saved.success) {
+                      failIntake(saved.error === "PERMISSION_DENIED" ? "PERMISSION_DENIED" : "DRAFT_FAILED");
+                      return;
+                    }
+                    ready = { ...ready, id: saved.data };
+                    invoiceRef.current = ready;
+                    setInvoice(ready);
+                    await rememberAssignments(ready.lines, ready.supplierId);
+                  } catch {
+                    failIntake("CREATE_FAILED");
                     return;
                   }
-                  setInvoice(postedInvoice);
-                  setReceipt(postedInvoice);
-                  onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
+                  await postReadyInvoice(ready);
                 } finally {
+                  savingRef.current = false;
                   setSaving(false);
+                  setPhase("idle");
                 }
               }}
             >
-              {t("admin.inventory.postSavedStock")}
+              {phase === "creating" ? (
+                <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.creatingIngredients")}</>
+              ) : phase === "posting" ? (
+                <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.postingStock")}</>
+              ) : (
+                t("admin.inventory.postSavedStock")
+              )}
             </Button>
           )}
         </div>
       </div>
       {receipt && (
-        <AdminCard title={t("admin.inventory.smart.rowPosted")}>
+        <AdminCard title={t("admin.inventory.smart.intakeComplete")}>
           <p className="mb-2 text-sm text-coffee/70">
             {t("admin.inventory.smart.postedSummary").replace("{count}", String(receipt.lines.filter((line) => line.postedToStock).length))}
             {receipt.invoiceNumber ? ` · ${receipt.invoiceNumber}` : ""}
@@ -753,6 +976,11 @@ export function SmartInvoiceFlow({
               );
             })}
           </ul>
+          {onViewInventory && (
+            <Button type="button" variant="turquoise" className="mt-3" onClick={onViewInventory}>
+              {t("admin.inventory.smart.viewInventory")}
+            </Button>
+          )}
         </AdminCard>
       )}
       {askStock && invoice && (
@@ -791,14 +1019,26 @@ export function SmartInvoiceFlow({
         initial={createKey ? invoiceCreateProductDraft(invoice.lines.find((line) => line.key === createKey) ?? invoice.lines[0], invoice.supplierName) : undefined}
         onClose={() => setCreateKey(null)}
         onCreated={(item) => {
-          if (createKey) {
-            const line = invoice.lines.find((row) => row.key === createKey);
-            updateLine(createKey, newInvoiceProductPatch(item, line?.category || item.category));
+          const current = invoiceRef.current;
+          const line = current?.lines.find((row) => row.key === createKey);
+          if (line) {
+            void saveWorkingLine(
+              finalizeInvoiceLine({ ...line, ...newInvoiceProductPatch(item, line.category || item.category) }, vatRate)
+            );
           }
           setCreateKey(null);
         }}
         onUseExisting={(item) => {
-          if (createKey) updateLine(createKey, { productId: item.id, matchKind: "exact", matchConfirmed: true, rowStatus: "matched", category: item.category });
+          const current = invoiceRef.current;
+          const line = current?.lines.find((row) => row.key === createKey);
+          if (line) {
+            void saveWorkingLine(
+              finalizeInvoiceLine(
+                { ...line, productId: item.id, matchKind: "exact", matchConfirmed: true, rowStatus: "matched", category: item.category },
+                vatRate
+              )
+            );
+          }
           setCreateKey(null);
         }}
       />

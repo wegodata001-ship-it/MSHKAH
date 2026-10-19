@@ -934,7 +934,8 @@ export async function transferInvoiceLinesToStock(
     if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
       return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
     }
-    return failure(new Error(viaApi.error || "STOCK_POST_FAILED"), viaApi.error || "STOCK_POST_FAILED");
+    const code = viaApi.code || viaApi.error || "STOCK_POST_FAILED";
+    return failure(new Error(code), code);
   } catch (error) {
     return failure(error, "Failed to transfer invoice to stock");
   }

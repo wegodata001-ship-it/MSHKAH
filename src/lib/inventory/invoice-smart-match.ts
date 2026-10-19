@@ -178,19 +178,18 @@ export function buildReviewedInvoice(input: {
         ? cheap
         : undefined;
     const confidence = line.confidence;
-    let rowStatus: PurchaseInvoiceLine["rowStatus"] = confirmed ? "matched" : "review";
-    if (!match.item) rowStatus = match.kind === "new" ? "new" : "unmapped";
-    else if (!confirmed) rowStatus = "review";
-    else if (!unit || qty == null || unitPrice == null || !detectedVat) rowStatus = "review";
-    else if (match.packConflict) rowStatus = "review";
-    else if (change != null && Math.abs(change) >= PRICE_ANOMALY_RATIO) rowStatus = "price-anomaly";
-    else if (needsReview(confidence) || needsReview(matchConfidence)) rowStatus = "review";
+    let rowStatus: PurchaseInvoiceLine["rowStatus"] = confirmed ? "matched" : "new";
+    if (!unit || qty == null || unitPrice == null || !detectedVat) rowStatus = confirmed ? "review" : "new";
+    else if (confirmed && match.packConflict) rowStatus = "review";
+    else if (confirmed && change != null && Math.abs(change) >= PRICE_ANOMALY_RATIO) rowStatus = "price-anomaly";
+    else if (confirmed && (needsReview(confidence) || needsReview(matchConfidence))) rowStatus = "review";
     return finalizeInvoiceLine(
       {
         key: newInvoiceLineKey(),
         rawName: line.originalDescription || line.name,
         originalDescription: line.originalDescription || line.name,
-        productId: match.item?.id,
+        productId: confirmed ? match.item?.id : undefined,
+        plannedProductName: confirmed ? undefined : line.originalDescription || line.name,
         quantity: qty,
         unit,
         unitPrice: line.unitPriceNet ?? unitPrice,
@@ -215,7 +214,7 @@ export function buildReviewedInvoice(input: {
         barcode: line.barcode ?? undefined,
         conversionNote: match.packConflict ? "pack-conflict" : line.conversionNote ?? undefined,
         conversionFactor: line.conversionFactor,
-        needsReview: rowStatus !== "matched" || vatType === "unknown" || Boolean(match.packConflict),
+        needsReview: Boolean(match.packConflict) || vatType === "unknown" || rowStatus === "review" || rowStatus === "price-anomaly",
         rowStatus: vatType === "unknown" && rowStatus === "matched" ? "review" : rowStatus,
         previousNormalized,
         newNormalized: normalized,

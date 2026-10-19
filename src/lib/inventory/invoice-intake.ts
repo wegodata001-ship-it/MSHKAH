@@ -33,6 +33,21 @@ export function invoiceNeedsAttention(
   return !invoiceLineReviewStatus(line, options).ready;
 }
 
+export function intakeFailureMessageKey(code?: string): string {
+  if (code === "PERMISSION_DENIED") return "admin.inventory.smart.permissionSystem";
+  if (code === "NETWORK") return "admin.inventory.smart.networkError";
+  if (code === "INVALID_RESPONSE") return "admin.inventory.smart.invalidResponse";
+  if (code === "POSTING_IN_PROGRESS") return "admin.inventory.smart.postingInProgress";
+  if (code === "NO_STOCK_LINES") return "admin.finance.noStockLines";
+  if (code === "DUPLICATE_INVOICE") return "admin.inventory.smart.duplicate";
+  if (code === "ALREADY_POSTED") return "admin.inventory.smart.alreadyPosted";
+  return "admin.inventory.smart.stockNotPosted";
+}
+
+export function intakeStatusUncertain(code?: string): boolean {
+  return code === "NETWORK" || code === "INVALID_RESPONSE";
+}
+
 export function attentionLineCount(
   lines: PurchaseInvoiceLine[],
   dirtyKeys?: Iterable<string>

@@ -251,6 +251,7 @@ export type PurchaseInvoiceLine = {
   category?: string;
   note?: string;
   matchConfirmed?: boolean;
+  plannedProductName?: string;
   candidates?: { productId: string; name: string; score: number }[];
   unitPriceNet?: number | null;
   unitPriceGross?: number | null;

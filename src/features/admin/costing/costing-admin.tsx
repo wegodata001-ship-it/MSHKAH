@@ -521,7 +521,14 @@ export function CostingAdmin() {
       )}
 
       {(tab === "invoices" || tab === "suppliers" || tab === "compare") && (
-        <PurchaseSection {...hubProps} pane={tab === "invoices" ? "invoices" : tab === "suppliers" ? "suppliers" : "compare"} />
+        <PurchaseSection
+          {...hubProps}
+          pane={tab === "invoices" ? "invoices" : tab === "suppliers" ? "suppliers" : "compare"}
+          onViewInventory={() => {
+            setHub("inventory");
+            setTab("products");
+          }}
+        />
       )}
 
       {tab === "breakeven" && (

@@ -288,7 +288,8 @@ describe("smart invoice matching", () => {
     expect(invoice.lines).toHaveLength(30);
     expect(invoice.lines.every((line) => line.rawName && line.key)).toBe(true);
     const fuzzy = invoice.lines.find((line) => line.rawName.includes("פסטה ברילה"));
-    expect(fuzzy?.productId).toBe("barilla");
+    expect(fuzzy?.productId).toBeUndefined();
+    expect(fuzzy?.candidates?.some((item) => item.productId === "barilla")).toBe(true);
     expect(fuzzy?.matchConfirmed).toBe(false);
     expect(invoiceLineMatchStatus(fuzzy!)).toBe("possible");
     const exact = invoice.lines.find((line) => line.rawName === "חלב 3%");

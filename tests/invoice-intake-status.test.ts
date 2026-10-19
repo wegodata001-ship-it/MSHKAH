@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { findCategoryByNormalizedName, mergeCategoryNames, normalizeCategoryName } from "@/lib/inventory/category-name";
 import { applyInvoiceUnitChange, invoiceLineBlockers, invoiceLineReviewStatus } from "@/lib/inventory/invoice-line-status";
-import { invoiceApproveBlockers, invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
+import { intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers, invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
+import { applyInvoiceLineSave, isConfirmedInvoiceMatch, isPlannedNewIngredient } from "@/lib/inventory/invoice-line-review";
 import { emptyInvoiceLine } from "@/lib/inventory/invoice-lines";
 import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
@@ -50,13 +51,13 @@ describe("ingredient category names", () => {
 });
 
 describe("invoice line review status", () => {
-  it("does not call a row ready when it still needs a material", () => {
-    const unmatched = line({ productId: undefined, matchKind: "suggest", matchConfirmed: false });
-    const status = invoiceLineReviewStatus(unmatched);
-    expect(status.kind).toBe("missing-material");
-    expect(status.ready).toBe(false);
-    expect(invoiceNeedsAttention(unmatched)).toBe(true);
-    expect(invoiceLineCareStatus(unmatched)).toBe("needs-match");
+  it("treats an unnamed row as missing a material and a named new row as ready", () => {
+    const blank = line({ rawName: "", originalDescription: "", productId: undefined, matchKind: "none", matchConfirmed: false });
+    const named = line({ rawName: "קמח", productId: undefined, matchKind: "suggest", matchConfirmed: false });
+    expect(invoiceLineReviewStatus(blank).kind).toBe("missing-material");
+    expect(invoiceLineReviewStatus(named).kind).toBe("ready");
+    expect(invoiceNeedsAttention(named)).toBe(false);
+    expect(invoiceLineCareStatus(blank)).toBe("needs-match");
   });
 
   it("shows unsaved changes instead of ready", () => {
@@ -78,7 +79,7 @@ describe("invoice line review status", () => {
 
   it("keeps footer blockers aligned with per-row reasons", () => {
     const ready = line({ key: "a", productId: "p1", matchKind: "exact", matchConfirmed: true });
-    const missing = line({ key: "b", productId: undefined, matchKind: "none", matchConfirmed: false });
+    const missing = line({ key: "b", rawName: "", originalDescription: "", productId: undefined, matchKind: "none", matchConfirmed: false });
     const blockers = invoiceLineBlockers([ready, missing]);
     expect(blockers).toHaveLength(1);
     expect(blockers[0]?.lineIndex).toBe(2);
@@ -141,5 +142,40 @@ describe("stock post identity", () => {
     expect(selectStockPostLines(invoice([unmatched]))).toEqual([]);
     const matched = line({ productId: "p1", matchKind: "exact", matchConfirmed: true, postedToStock: true });
     expect(stockPostableLine(matched)).toBe(false);
+  });
+});
+
+describe("approve intake", () => {
+  it("keeps every saved material when lines are written one after another", () => {
+    const first = line({ key: "a", rawName: "חסה", productId: undefined, matchConfirmed: false });
+    const second = line({ key: "b", rawName: "עגבניה", productId: undefined, matchConfirmed: false });
+    let current = invoice([first, second]);
+    current = applyInvoiceLineSave(current, { ...first, productId: "lettuce", matchKind: "exact", matchConfirmed: true });
+    current = applyInvoiceLineSave(current, { ...second, productId: "tomato", matchKind: "exact", matchConfirmed: true });
+    expect(current.lines.map((row) => row.productId)).toEqual(["lettuce", "tomato"]);
+    expect(invoiceLineBlockers(current.lines)).toEqual([]);
+  });
+
+  it("does not ask again for a saved match and does not treat a suggestion as saved", () => {
+    const saved = line({ key: "a", rawName: "חסה", productId: "lettuce", matchKind: "mapped", matchConfirmed: true });
+    const suggestion = line({ key: "b", rawName: "עגבניה", productId: "tomato", matchKind: "suggest", matchConfirmed: false });
+    const missingUnit = line({ key: "c", rawName: "מלפפון", productId: "cucumber", matchKind: "exact", matchConfirmed: true, unit: null });
+    expect(isConfirmedInvoiceMatch(saved)).toBe(true);
+    expect(isConfirmedInvoiceMatch(suggestion)).toBe(false);
+    expect(isPlannedNewIngredient(suggestion)).toBe(true);
+    const blockers = invoiceLineBlockers([saved, suggestion, missingUnit]);
+    expect(blockers.map((item) => item.lineKey)).toEqual(["c"]);
+    expect(blockers[0]?.field).toBe("unit");
+  });
+
+  it("names permission, disconnect, and unreadable responses without pretending success", () => {
+    expect(intakeFailureMessageKey("PERMISSION_DENIED")).toBe("admin.inventory.smart.permissionSystem");
+    expect(intakeFailureMessageKey("NETWORK")).toBe("admin.inventory.smart.networkError");
+    expect(intakeFailureMessageKey("INVALID_RESPONSE")).toBe("admin.inventory.smart.invalidResponse");
+    expect(intakeFailureMessageKey("POSTING_IN_PROGRESS")).toBe("admin.inventory.smart.postingInProgress");
+    expect(intakeStatusUncertain("NETWORK")).toBe(true);
+    expect(intakeStatusUncertain("INVALID_RESPONSE")).toBe(true);
+    expect(intakeStatusUncertain("PERMISSION_DENIED")).toBe(false);
+    expect(intakeFailureMessageKey("STOCK_POST_FAILED")).not.toBe("admin.inventory.smart.intakeComplete");
   });
 });

@@ -14,13 +14,14 @@ import {
   invoicePriceIncrease,
 } from "@/lib/inventory/ingredient-core";
 import {
-  clearInvoiceMatchPatch,
   confirmInvoiceMatchPatch,
   confirmSafeInvoiceMatches,
+  isExistingIngredientAssignment,
+  planNewIngredientPatch,
+  plannedIngredientName,
   existingProductForInvoiceName,
   invoiceCreateProductDraft,
   invoiceLineMatchesFilter,
-  invoiceLineMatchStatus,
   invoiceReviewCounts,
   newInvoiceProductPatch,
   type InvoiceReviewFilter,
@@ -28,6 +29,7 @@ import {
 import { finalizeInvoiceLine, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
 import { applyInvoiceUnitChange, invoiceLineReviewStatus, workingInvoiceLines } from "@/lib/inventory/invoice-line-status";
 import { invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
+import { filterIngredientsByQuery } from "@/lib/costing/names";
 import { inventoryCategories } from "@/lib/inventory/product-match";
 import type { PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { MaterialGroupSuggest } from "@/features/admin/inventory/material-group-suggest";
@@ -53,7 +55,6 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   locked?: boolean;
   highlightKey?: string | null;
   highlightField?: string | null;
-  onChangeLine: (key: string, patch: Partial<PurchaseInvoiceLine>) => void;
   onChangeLines: (lines: PurchaseInvoiceLine[]) => void;
   onUpdateLine: (line: PurchaseInvoiceLine) => Promise<void> | void;
   onWorkingChange?: (lines: PurchaseInvoiceLine[], dirtyKeys: string[]) => void;
@@ -69,7 +70,6 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   locked,
   highlightKey,
   highlightField,
-  onChangeLine,
   onChangeLines,
   onUpdateLine,
   onWorkingChange,
@@ -79,6 +79,12 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   const [query, setQuery] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, PurchaseInvoiceLine>>({});
+  const draftsRef = useRef(drafts);
+  const replaceDrafts = (next: Record<string, PurchaseInvoiceLine> | ((current: Record<string, PurchaseInvoiceLine>) => Record<string, PurchaseInvoiceLine>)) => {
+    const resolved = typeof next === "function" ? next(draftsRef.current) : next;
+    draftsRef.current = resolved;
+    setDrafts(resolved);
+  };
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -93,13 +99,15 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   onWorkingChangeRef.current = onWorkingChange;
 
   useEffect(() => {
-    setDrafts((current) => {
-      const next = { ...current };
-      for (const key of Object.keys(next)) {
-        if (!lines.some((line) => line.key === key)) delete next[key];
+    const next = { ...draftsRef.current };
+    let changed = false;
+    for (const key of Object.keys(next)) {
+      if (!lines.some((line) => line.key === key)) {
+        delete next[key];
+        changed = true;
       }
-      return next;
-    });
+    }
+    if (changed) replaceDrafts(next);
   }, [lines]);
 
   useEffect(() => {
@@ -116,15 +124,15 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     [working, filter, query, drafts]
   );
 
-  const current = (key: string) => drafts[key] ?? lines.find((line) => line.key === key);
+  const current = (key: string) => draftsRef.current[key] ?? lines.find((line) => line.key === key);
 
   const flush = () => {
-    const dirty = Object.values(drafts);
+    const dirty = Object.values(draftsRef.current);
     if (!dirty.length) return lines;
     const byKey = new Map(dirty.map((line) => [line.key, line]));
     const next = lines.map((line) => byKey.get(line.key) ?? line);
     onChangeLines(next);
-    setDrafts({});
+    replaceDrafts({});
     return next;
   };
 
@@ -134,9 +142,8 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     setSavingKey(key);
     setErrorKey(null);
     try {
-      onChangeLine(key, line);
       await onUpdateLine(line);
-      setDrafts((prev) => {
+      replaceDrafts((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
@@ -152,24 +159,58 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     }
   };
 
-  const saveAll = async () => {
-    for (const key of Object.keys(drafts)) {
-      await updateRow(key);
+  const commit = async (key: string, patch: Partial<PurchaseInvoiceLine>) => {
+    const base = current(key);
+    if (!base || locked) return;
+    const next = finalizeInvoiceLine({ ...base, ...patch }, vatRate);
+    replaceDrafts((prev) => ({ ...prev, [key]: next }));
+    setSavingKey(key);
+    setErrorKey(null);
+    try {
+      await onUpdateLine(next);
+      replaceDrafts((prev) => {
+        const copy = { ...prev };
+        const pending = copy[key];
+        if (
+          pending &&
+          pending.productId === next.productId &&
+          pending.matchConfirmed === next.matchConfirmed &&
+          pending.matchKind === next.matchKind
+        ) {
+          delete copy[key];
+        }
+        return copy;
+      });
+      setSavedKey(key);
+    } catch (error) {
+      setErrorKey(key);
+      setErrorText(error instanceof Error ? error.message : t("admin.inventory.smart.lineUpdateFailed"));
+    } finally {
+      setSavingKey(null);
     }
-    return flush();
+  };
+
+  const saveAll = async () => {
+    const keys = Object.keys(draftsRef.current);
+    let merged = workingInvoiceLines(lines, draftsRef.current);
+    for (const key of keys) {
+      const saved = await updateRow(key);
+      if (saved) merged = merged.map((row) => (row.key === key ? saved : row));
+    }
+    return merged;
   };
 
   useImperativeHandle(ref, () => ({
     flush,
-    dirtyCount: () => Object.keys(drafts).length,
-    preview: () => working,
+    dirtyCount: () => Object.keys(draftsRef.current).length,
+    preview: () => workingInvoiceLines(lines, draftsRef.current),
     saveAll,
   }));
 
   const edit = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
     const base = current(key);
     if (!base) return;
-    setDrafts((prev) => ({ ...prev, [key]: finalizeInvoiceLine({ ...base, ...patch }, vatRate) }));
+    replaceDrafts((prev) => ({ ...prev, [key]: finalizeInvoiceLine({ ...base, ...patch }, vatRate) }));
     setSavedKey((value) => (value === key ? null : value));
     setErrorKey((value) => (value === key ? null : value));
   };
@@ -181,15 +222,15 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     try {
       const existing = existingProductForInvoiceName(name, ingredients);
       if (existing) {
-        edit(key, confirmInvoiceMatchPatch(existing));
         setOpenCreate(null);
+        await commit(key, confirmInvoiceMatchPatch(existing));
         return;
       }
       const draft = { ...invoiceCreateProductDraft({ ...line, rawName: name, category }, supplierName), category };
       const result = await createIngredient(draft);
       if (!result.success) throw new Error(result.error);
-      edit(key, newInvoiceProductPatch(result.data, category || result.data.category));
       setOpenCreate(null);
+      await commit(key, newInvoiceProductPatch(result.data, category || result.data.category));
     } catch (error) {
       setErrorKey(key);
       setErrorText(error instanceof Error ? error.message : t("admin.inventory.smart.lineUpdateFailed"));
@@ -290,6 +331,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 highlightField={highlightKey === line.key ? highlightField : null}
                 onOpenCreate={setOpenCreate}
                 onEdit={(patch) => edit(line.key, patch)}
+                onCommit={(patch) => void commit(line.key, patch)}
                 onUpdate={() => void updateRow(line.key)}
                 onCreate={(name, category) => void createInline(line.key, name, category)}
               />
@@ -321,6 +363,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
               highlightField={highlightKey === line.key ? highlightField : null}
               onOpenCreate={setOpenCreate}
               onEdit={(patch) => edit(line.key, patch)}
+              onCommit={(patch) => void commit(line.key, patch)}
               onUpdate={() => void updateRow(line.key)}
               onCreate={(name, category) => void createInline(line.key, name, category)}
               card
@@ -352,6 +395,7 @@ function LineEditor({
   highlightField,
   onOpenCreate,
   onEdit,
+  onCommit,
   onUpdate,
   onCreate,
   card,
@@ -375,6 +419,7 @@ function LineEditor({
   highlightField?: string | null;
   onOpenCreate: (key: string | null) => void;
   onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
+  onCommit: (patch: Partial<PurchaseInvoiceLine>) => void;
   onUpdate: () => void;
   onCreate: (name: string, category: string) => void;
   card?: boolean;
@@ -404,9 +449,11 @@ function LineEditor({
       )}
       {status.kind === "missing-pack" && (
         <div className="mb-2 grid gap-2 sm:grid-cols-2">
+          <p className="sm:col-span-2 text-[11px] text-amber-800">{t(status.labelKey)}</p>
           <Input
             id={`invoice-line-${line.key}-pack`}
-            value={line.conversionNote ?? ""}
+            className={cn(highlightField === "pack" && "ring-2 ring-amber-500")}
+            value={line.conversionNote === "pack-conflict" ? "" : (line.conversionNote ?? "")}
             disabled={locked}
             placeholder={t("admin.inventory.smart.packConversion")}
             onChange={(e) => onEdit({ conversionNote: e.target.value })}
@@ -436,7 +483,7 @@ function LineEditor({
         suppliers={suppliers}
         supplierId={supplierId}
         locked={locked}
-        onAssignSame={(item) => onEdit(confirmInvoiceMatchPatch(item))}
+        onAssignSame={(item) => onCommit(confirmInvoiceMatchPatch(item))}
         onCreateUnified={(label) => {
           onEdit({ rawName: line.rawName, category: label });
           onOpenCreate(line.key);
@@ -453,7 +500,7 @@ function LineEditor({
       locked={locked}
       highlight={highlightField === "product"}
       onEdit={onEdit}
-      onCreate={() => onOpenCreate(line.key)}
+      onCommit={onCommit}
     />
   );
   const categoryField = (
@@ -487,30 +534,33 @@ function LineEditor({
       id={`invoice-line-${line.key}-quantity`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "quantity" && "ring-2 ring-turquoise")}
+      className={cn("h-8", highlightField === "quantity" && "ring-2 ring-amber-500")}
       value={line.quantity ?? ""}
       disabled={locked}
       onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })}
     />
   );
   const unitSelect = (
-    <select
-      id={`invoice-line-${line.key}-unit`}
-      className={cn("h-8 w-full rounded-lg border px-2 text-sm", highlightField === "unit" && "ring-2 ring-turquoise")}
-      value={line.unit ?? ""}
-      disabled={locked}
-      onChange={(e) => onEdit(applyInvoiceUnitChange(line, (e.target.value || null) as PurchaseUnit | null))}
-    >
-      <option value="">{t("admin.inventory.smart.unitPick")}</option>
-      {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
-    </select>
+    <div>
+      <select
+        id={`invoice-line-${line.key}-unit`}
+        className={cn("h-8 w-full rounded-lg border px-2 text-sm", highlightField === "unit" && "ring-2 ring-amber-500")}
+        value={line.unit ?? ""}
+        disabled={locked}
+        onChange={(e) => onEdit(applyInvoiceUnitChange(line, (e.target.value || null) as PurchaseUnit | null))}
+      >
+        <option value="">{t("admin.inventory.smart.unitPick")}</option>
+        {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
+      </select>
+      {status.kind === "missing-unit" && <p className="mt-1 text-[11px] text-amber-800">{t(status.labelKey)}</p>}
+    </div>
   );
   const priceInput = (
     <Input
       id={`invoice-line-${line.key}-price`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "price" && "ring-2 ring-turquoise")}
+      className={cn("h-8", highlightField === "price" && "ring-2 ring-amber-500")}
       value={line.unitPrice ?? ""}
       disabled={locked}
       onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })}
@@ -521,7 +571,7 @@ function LineEditor({
       id={`invoice-line-${line.key}-vat`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "vat" && "ring-2 ring-turquoise")}
+      className={cn("h-8", highlightField === "vat" && "ring-2 ring-amber-500")}
       value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""}
       disabled={locked}
       onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })}
@@ -530,7 +580,7 @@ function LineEditor({
 
   if (card) {
     return (
-      <div id={`invoice-line-${line.key}`} className={cn("space-y-2", highlight && "rounded-xl ring-2 ring-turquoise")}>
+      <div id={`invoice-line-${line.key}`} className={cn("space-y-2", highlight && "rounded-xl ring-2 ring-amber-500")}>
         <div className="flex items-start justify-between gap-2">
           <label className="flex items-start gap-2">
             <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
@@ -572,7 +622,7 @@ function LineEditor({
 
   return (
     <>
-      <tr id={`invoice-line-${line.key}`} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-turquoise/8")}>
+      <tr id={`invoice-line-${line.key}`} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-amber-50")}>
         <td className="px-2 py-1.5">
           <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
         </td>
@@ -609,45 +659,96 @@ function MatchSelect({
   locked,
   highlight,
   onEdit,
-  onCreate,
+  onCommit,
 }: {
   line: PurchaseInvoiceLine;
   ingredients: CostingIngredient[];
   locked?: boolean;
   highlight?: boolean;
   onEdit: (patch: Partial<PurchaseInvoiceLine>) => void;
-  onCreate: () => void;
+  onCommit: (patch: Partial<PurchaseInvoiceLine>) => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
-  const status = invoiceLineMatchStatus(line);
-  const filtered = ingredients.filter((item) => !query || item.name.toLowerCase().includes(query.toLowerCase())).slice(0, 40);
+  const [open, setOpen] = useState(false);
+  const assigned = isExistingIngredientAssignment(line);
+  const selected = assigned ? ingredients.find((item) => item.id === line.productId) : undefined;
+  const filtered = query.trim() ? filterIngredientsByQuery(ingredients, query).slice(0, 8) : [];
+  const suggestions = (line.candidates ?? []).slice(0, 3);
+  const chooseExisting = (product: CostingIngredient, score?: number) => {
+    onCommit(confirmInvoiceMatchPatch(product, score));
+    setOpen(false);
+    setQuery("");
+  };
   return (
-    <div id={`invoice-line-${line.key}-product`} className={cn("min-w-[12rem] space-y-1", highlight && "rounded-xl ring-2 ring-turquoise")}>
-      <Input className="h-8 text-xs" value={query} placeholder={t("admin.inventory.smart.unifiedMaterial")} onChange={(e) => setQuery(e.target.value)} />
-      <select
-        className="h-9 w-full rounded-xl border px-2 text-sm"
-        value={line.productId ?? ""}
-        disabled={locked}
-        onChange={(e) => {
-          const item = ingredients.find((row) => row.id === e.target.value);
-          onEdit(item ? confirmInvoiceMatchPatch(item) : clearInvoiceMatchPatch());
-        }}
-      >
-        <option value="">{t("admin.inventory.smart.noMatch")}</option>
-        {filtered.map((item) => (
-          <option key={item.id} value={item.id}>{item.name}</option>
-        ))}
-      </select>
-      {status === "possible" && (line.candidates ?? []).slice(0, 2).map((item) => (
-        <button key={item.productId} type="button" className="block text-xs text-turquoise" disabled={locked} onClick={() => {
-          const product = ingredients.find((row) => row.id === item.productId);
-          if (product) onEdit(confirmInvoiceMatchPatch(product, item.score));
-        }}>
-          {t("admin.inventory.smart.confirmMatch")}: {item.name} · {Math.round(item.score * 100)}%
-        </button>
-      ))}
-      <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={onCreate}>+ {t("admin.inventory.smart.createInline")}</button>
+    <div id={`invoice-line-${line.key}-product`} className={cn("min-w-[12rem] space-y-1", highlight && "rounded-xl ring-2 ring-amber-500")}>
+      {assigned ? (
+        <p className="text-sm font-medium">{selected?.name || plannedIngredientName(line)}</p>
+      ) : (
+        <>
+          <p className="text-xs font-medium text-coffee">{t("admin.inventory.smart.newProductPending")}</p>
+          <Input
+            className="h-8 text-sm"
+            value={line.plannedProductName ?? line.originalDescription ?? line.rawName}
+            disabled={locked}
+            aria-label={t("admin.inventory.smart.plannedName")}
+            onChange={(e) => onEdit({
+              ...planNewIngredientPatch(line),
+              plannedProductName: e.target.value,
+            })}
+          />
+        </>
+      )}
+      {line.conversionNote === "pack-conflict" && assigned && (
+        <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.packReview")}</p>
+      )}
+      <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={() => setOpen((value) => !value)}>
+        {t("admin.inventory.smart.changeAssignment")}
+      </button>
+      {open && (
+        <div className="space-y-1 rounded-xl border bg-white p-2">
+          <Input
+            className="h-8 text-xs"
+            value={query}
+            placeholder={t("admin.inventory.smart.searchIngredient")}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {filtered.map((item) => (
+            <button key={item.id} type="button" className="block w-full rounded-lg px-2 py-1 text-start text-sm hover:bg-beige/60" onClick={() => chooseExisting(item)}>
+              {item.name}
+            </button>
+          ))}
+          {suggestions.length > 0 && (
+            <div className="pt-1">
+              <p className="text-[11px] text-coffee/50">{t("admin.inventory.smart.similarNames")}</p>
+              {suggestions.map((item) => (
+                <button
+                  key={item.productId}
+                  type="button"
+                  className="block w-full rounded-lg px-2 py-1 text-start text-xs text-turquoise hover:bg-beige/60"
+                  onClick={() => {
+                    const product = ingredients.find((row) => row.id === item.productId);
+                    if (product) chooseExisting(product, item.score);
+                  }}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            className="block w-full rounded-lg px-2 py-1 text-start text-xs text-turquoise hover:bg-beige/60"
+            onClick={() => {
+              onEdit(planNewIngredientPatch({ ...line, plannedProductName: line.originalDescription || line.rawName }));
+              setOpen(false);
+              setQuery("");
+            }}
+          >
+            {t("admin.inventory.smart.createNewChoice")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -669,7 +770,7 @@ function RowActions({
 }) {
   const t = useT();
   return (
-    <div className={cn("space-y-1", highlight && "rounded-xl ring-2 ring-turquoise")}>
+    <div className={cn("space-y-1", highlight && "rounded-xl ring-2 ring-amber-500")}>
       <Button type="button" variant="outline" className="h-8 text-xs" disabled={locked || saving} onClick={onUpdate}>
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <><Check className="me-1 h-3.5 w-3.5" /> {t("admin.inventory.smart.lineUpdated")}</> : t("admin.inventory.smart.updateLine")}
       </Button>

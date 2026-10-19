@@ -1,7 +1,7 @@
 import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
 import { convertRecipeQuantity, unitsCompatible } from "@/lib/costing/units";
 import { packNeedsCompletion } from "@/lib/inventory/ingredient-core";
-import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
+import { isIntakeAssignmentReady } from "@/lib/inventory/invoice-line-review";
 import { lineHasAmount } from "@/lib/inventory/invoice-lines";
 import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 
@@ -55,7 +55,7 @@ export function invoiceLineReviewStatus(
   if (line.skipInventory) {
     return { kind: "excluded", ready: true, labelKey: "admin.inventory.smart.rowExcluded", field: "product" };
   }
-  if (!line.productId || !isConfirmedInvoiceMatch(line)) {
+  if (!isIntakeAssignmentReady(line)) {
     return { kind: "missing-material", ready: false, labelKey: "admin.inventory.smart.rowMissingMaterial", field: "product" };
   }
   if (!line.unit) {
@@ -71,7 +71,7 @@ export function invoiceLineReviewStatus(
     return { kind: "missing-price", ready: false, labelKey: "admin.inventory.smart.rowMissingPrice", field: "price" };
   }
   if (options?.dirty) {
-    return { kind: "unsaved", ready: false, labelKey: "admin.inventory.smart.rowUnsaved", field: "update" };
+    return { kind: "unsaved", ready: true, labelKey: "admin.inventory.smart.rowUnsaved", field: "update" };
   }
   return { kind: "ready", ready: true, labelKey: "admin.inventory.smart.rowReady", field: "product" };
 }
