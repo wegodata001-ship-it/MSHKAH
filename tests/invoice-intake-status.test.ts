@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findCategoryByNormalizedName, mergeCategoryNames, normalizeCategoryName } from "@/lib/inventory/category-name";
-import { applyInvoiceUnitChange, invoiceLineBlockers, invoiceLineReviewStatus } from "@/lib/inventory/invoice-line-status";
+import { applyInvoiceUnitChange, invoiceAfterPersist, invoiceLineBlockers, invoiceLineReviewStatus, invoiceUnitTargets, shouldClearInvoiceDraft } from "@/lib/inventory/invoice-line-status";
 import { intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers, invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
 import { applyInvoiceLineSave, isConfirmedInvoiceMatch, isPlannedNewIngredient } from "@/lib/inventory/invoice-line-review";
 import { emptyInvoiceLine } from "@/lib/inventory/invoice-lines";
@@ -89,10 +89,47 @@ describe("invoice line review status", () => {
   });
 });
 
-describe("invoice unit conversion", () => {
-  it("converts kg to g without guessing pack contents", () => {
-    expect(applyInvoiceUnitChange({ unit: "kg", quantity: 2 }, "g")).toEqual({ unit: "g", quantity: 2000 });
-    expect(applyInvoiceUnitChange({ unit: "kg", quantity: 2 }, "unit")).toEqual({ unit: "unit" });
+describe("invoice unit correction", () => {
+  it("changes only the line unit and leaves quantity and price", () => {
+    const row = { unit: "kg" as const, quantity: 2, unitPrice: 10 };
+    expect(applyInvoiceUnitChange(row, "g")).toEqual({ unit: "g" });
+    expect(applyInvoiceUnitChange(row, "unit")).toEqual({ unit: "unit" });
+    expect(applyInvoiceUnitChange(row, "g")).not.toHaveProperty("quantity");
+    expect(applyInvoiceUnitChange(row, "g")).not.toHaveProperty("unitPrice");
+  });
+
+  it("targets every line, only the selected lines, or lines missing a unit", () => {
+    const rows = [
+      line({ key: "visible", unit: "kg" }),
+      line({ key: "hidden", unit: "g" }),
+      line({ key: "blank", unit: null }),
+    ];
+    const visible = new Set(["visible"]);
+    expect(invoiceUnitTargets(rows, "all").map((item) => item.key)).toEqual(["visible", "hidden", "blank"]);
+    expect(invoiceUnitTargets(rows, "all").some((item) => !visible.has(item.key))).toBe(true);
+    expect(invoiceUnitTargets(rows, "selected", ["hidden"]).map((item) => item.key)).toEqual(["hidden"]);
+    expect(invoiceUnitTargets(rows, "missing").map((item) => item.key)).toEqual(["blank"]);
+  });
+
+  it("asks for a conversion when the unit does not match the ingredient", () => {
+    const packed = line({ productId: "p1", matchKind: "exact", matchConfirmed: true, unit: "kg" });
+    expect(invoiceLineReviewStatus(packed, { product: { purchaseUnit: "unit", baseUnit: "unit" } }).labelKey).toBe("admin.inventory.smart.unitMismatch");
+    expect(invoiceLineReviewStatus(packed, { product: { purchaseUnit: "g", baseUnit: "g" } }).kind).toBe("ready");
+  });
+
+  it("keeps the draft when saving fails or a newer edit exists", () => {
+    expect(shouldClearInvoiceDraft(false, 1, 1)).toBe(false);
+    expect(shouldClearInvoiceDraft(true, 2, 1)).toBe(false);
+    expect(shouldClearInvoiceDraft(true, 2, 2)).toBe(true);
+  });
+
+  it("keeps a newer invoice when an older save returns", () => {
+    const snapshot = invoice([line({ key: "a", quantity: 1, unit: "kg" })]);
+    const latest = invoice([line({ key: "a", quantity: 4, unit: "unit" })]);
+    const resolved = invoiceAfterPersist(latest, snapshot, "inv-1", 2, 1);
+    expect(resolved.lines[0]?.quantity).toBe(4);
+    expect(resolved.lines[0]?.unit).toBe("unit");
+    expect(resolved.id).toBe("inv-1");
   });
 });
 

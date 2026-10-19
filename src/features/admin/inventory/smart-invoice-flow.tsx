@@ -24,7 +24,7 @@ import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/i
 import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
 import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
-import { invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
+import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
@@ -151,6 +151,8 @@ export function SmartInvoiceFlow({
   const [workingLines, setWorkingLines] = useState<PurchaseInvoiceLine[]>([]);
   const [dirtyKeys, setDirtyKeys] = useState<string[]>([]);
   const linesRef = useRef<InvoiceLinesReviewHandle>(null);
+  const invoiceRevision = useRef(0);
+  const persistChain = useRef(Promise.resolve());
 
   const summary = useMemo(() => (invoice ? invoiceSummary(invoice.lines, vatRate) : null), [invoice, vatRate]);
   const missing = useMemo(() => (invoice ? missingInvoiceFields(invoice) : []), [invoice]);
@@ -343,8 +345,9 @@ export function SmartInvoiceFlow({
   const vatRateValue = invoice.vatRate == null ? "" : invoice.vatRate > 1 ? invoice.vatRate : invoice.vatRate * 100;
   const reviewState = invoiceReviewState(invoice, invoice.scanStatus === "failed" || Boolean(error));
   const reviewLines = workingLines.length ? workingLines : invoice.lines;
+  const productById = Object.fromEntries(ingredients.map((item) => [item.id, { baseUnit: item.baseUnit, purchaseUnit: item.purchaseUnit }]));
   const blockers = invoiceApproveBlockers({ ...invoice, lines: reviewLines }, { dirtyKeys });
-  const lineBlockers = invoiceLineBlockers(reviewLines, { dirtyKeys });
+  const lineBlockers = invoiceLineBlockers(reviewLines, { dirtyKeys, productById });
   const assignmentPlan = invoiceAssignmentPlan(reviewLines, ingredients);
   const supplierGuess = !invoice.supplierId && invoice.supplierName
     ? matchSupplier(invoice.supplierName, invoice.supplierTaxId, suppliers)
@@ -372,32 +375,52 @@ export function SmartInvoiceFlow({
 
   const saveWorkingLine = async (line: PurchaseInvoiceLine) => {
     const current = invoiceRef.current;
-    if (!current) throw new Error(t("admin.inventory.smart.lineUpdateFailed"));
+    if (!current) throw new Error(t("admin.inventory.smart.saveFailedRetry"));
     const next = applyComputedTotals(applyInvoiceLineSave(current, finalizeInvoiceLine(line, vatRate)));
+    invoiceRevision.current += 1;
     invoiceRef.current = next;
     setInvoice(next);
-    const saved = await persistDraft(next);
-    if (!saved.success) {
-      throw new Error(
-        saved.error === "PERMISSION_DENIED"
-          ? t("admin.inventory.smart.permissionSystem")
-          : t("admin.inventory.smart.lineUpdateFailed")
-      );
+    const job = persistChain.current.then(async () => {
+      const snapshot = invoiceRef.current;
+      const snapshotRevision = invoiceRevision.current;
+      if (!snapshot) return;
+      const saved = await persistDraft(snapshot);
+      if (!saved.success) {
+        throw new Error(
+          saved.error === "PERMISSION_DENIED"
+            ? t("admin.inventory.smart.permissionSystem")
+            : saved.error || t("admin.inventory.smart.saveFailedRetry")
+        );
+      }
+      const latest = invoiceRef.current ?? snapshot;
+      const resolved = invoiceAfterPersist(latest, snapshot, saved.data, invoiceRevision.current, snapshotRevision);
+      invoiceRef.current = resolved;
+      setInvoice(resolved);
+    });
+    persistChain.current = job.then(() => undefined, () => undefined);
+    await job;
+    const latest = invoiceRef.current;
+    const latestLine = latest?.lines.find((row) => row.key === line.key);
+    if (
+      !latest?.supplierId ||
+      !latestLine?.productId ||
+      latestLine.unit !== line.unit ||
+      latestLine.quantity !== line.quantity ||
+      latestLine.unitPrice !== line.unitPrice ||
+      latestLine.productId !== line.productId ||
+      latestLine.rawName !== line.rawName
+    ) {
+      return;
     }
-    const stored = { ...next, id: saved.data };
-    invoiceRef.current = stored;
-    setInvoice(stored);
-    if (stored.supplierId && line.productId && (line.originalDescription || line.rawName)) {
-      await saveSupplierItemMap({
-        supplierId: stored.supplierId,
-        supplierProductName: line.originalDescription || line.rawName,
-        supplierSku: line.sku,
-        inventoryProductId: line.productId,
-        purchaseUnit: line.unit ?? undefined,
-        packageQuantity: line.quantity ?? undefined,
-        conversion: line.conversionFactor ?? undefined,
-      });
-    }
+    await saveSupplierItemMap({
+      supplierId: latest.supplierId,
+      supplierProductName: latestLine.originalDescription || latestLine.rawName,
+      supplierSku: latestLine.sku,
+      inventoryProductId: latestLine.productId,
+      purchaseUnit: latestLine.unit ?? undefined,
+      packageQuantity: latestLine.quantity ?? undefined,
+      conversion: latestLine.conversionFactor ?? undefined,
+    });
   };
 
   const materializePlannedLines = async (source: PurchaseInvoiceLine[], supplierName?: string) => {
@@ -749,7 +772,17 @@ export function SmartInvoiceFlow({
           onClick={async () => {
             if (!invoice || saving) return;
             setSaving(true);
-            const current = flushLines();
+            try {
+              await linesRef.current?.saveAll();
+            } catch (error) {
+              setSaving(false);
+              const message = error instanceof Error ? error.message : t("admin.inventory.smart.saveFailedRetry");
+              onToast(message, "error");
+              setIntakeError(message);
+              if (error instanceof InvoiceLineSaveError) focusBlocker(error.lineKey, "update");
+              return;
+            }
+            const current = invoiceRef.current ? applyComputedTotals(invoiceRef.current) : flushLines();
             if (!current) {
               setSaving(false);
               return;
@@ -757,10 +790,12 @@ export function SmartInvoiceFlow({
             const result = await persistDraft(current);
             setSaving(false);
             if (!result.success) {
-              onToast(result.error === "PERMISSION_DENIED" ? t("admin.inventory.smart.permissionSystem") : t("admin.costing.saveFailed"), "error");
+              onToast(result.error === "PERMISSION_DENIED" ? t("admin.inventory.smart.permissionSystem") : result.error || t("admin.costing.saveFailed"), "error");
               return;
             }
-            setInvoice({ ...current, id: result.data, status: "draft" });
+            const stored = invoiceAfterPersist({ ...current, status: "draft" as const }, current, result.data, invoiceRevision.current, invoiceRevision.current);
+            invoiceRef.current = stored;
+            setInvoice(stored);
             onToast(t("admin.inventory.smart.saveDraft"));
           }}
         >
@@ -826,9 +861,17 @@ export function SmartInvoiceFlow({
     });
     try {
                 try {
-                  if (linesRef.current?.dirtyCount()) await linesRef.current.saveAll();
-                } catch {
-                  failIntake("LINE_SAVE_FAILED");
+                  await linesRef.current?.saveAll();
+                } catch (error) {
+                  setPhase("idle");
+                  const message = error instanceof InvoiceLineSaveError
+                    ? error.message
+                    : error instanceof Error && error.message
+                      ? error.message
+                      : t("admin.inventory.smart.saveFailedRetry");
+                  onToast(message, "error");
+                  setIntakeError(message);
+                  if (error instanceof InvoiceLineSaveError) focusBlocker(error.lineKey, "update");
                   return;
                 }
                 const savedLines = invoiceRef.current?.lines ?? linesRef.current?.preview() ?? invoice.lines;
@@ -838,7 +881,9 @@ export function SmartInvoiceFlow({
                 setInvoice(current);
                 setWorkingLines(current.lines);
                 setDirtyKeys([]);
-                const nextLineBlockers = invoiceLineBlockers(current.lines);
+                const nextLineBlockers = invoiceLineBlockers(current.lines, {
+                  productById: Object.fromEntries(ingredientsRef.current.map((item) => [item.id, { baseUnit: item.baseUnit, purchaseUnit: item.purchaseUnit }])),
+                });
                 const nextHeader = invoiceApproveBlockers(current);
       if (nextLineBlockers.length || nextHeader.length) {
         setHoldIntake(true);
@@ -924,6 +969,15 @@ export function SmartInvoiceFlow({
                   setIntakeError(null);
                 });
                 try {
+                  try {
+                    await linesRef.current?.saveAll();
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : t("admin.inventory.smart.saveFailedRetry");
+                    onToast(message, "error");
+                    setIntakeError(message);
+                    if (error instanceof InvoiceLineSaveError) focusBlocker(error.lineKey, "update");
+                    return;
+                  }
                   let ready = invoiceRef.current ?? invoice;
                   if (!ready.supplierId && ready.supplierName) {
                     const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);

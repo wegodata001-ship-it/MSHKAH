@@ -1,5 +1,5 @@
 import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
-import { convertRecipeQuantity, unitsCompatible } from "@/lib/costing/units";
+import { unitsCompatible } from "@/lib/costing/units";
 import { packNeedsCompletion } from "@/lib/inventory/ingredient-core";
 import { isIntakeAssignmentReady } from "@/lib/inventory/invoice-line-review";
 import { lineHasAmount } from "@/lib/inventory/invoice-lines";
@@ -41,7 +41,11 @@ export function isPackagingInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType
 
 export function invoiceLineReviewStatus(
   line: PurchaseInvoiceLine,
-  options?: { dirty?: boolean; productBase?: BaseUnit | null }
+  options?: {
+    dirty?: boolean;
+    productBase?: BaseUnit | null;
+    product?: { baseUnit?: BaseUnit | null; purchaseUnit?: PurchaseUnit | null } | null;
+  }
 ): InvoiceLineReviewStatus {
   if (line.postedToStock) {
     return { kind: "posted", ready: true, labelKey: "admin.inventory.smart.rowPosted", field: "product" };
@@ -64,8 +68,9 @@ export function invoiceLineReviewStatus(
   if (line.quantity == null || !Number.isFinite(Number(line.quantity)) || Number(line.quantity) <= 0) {
     return { kind: "missing-qty", ready: false, labelKey: "admin.inventory.smart.rowMissingQty", field: "quantity" };
   }
-  if (packNeedsCompletion(line, options?.productBase)) {
-    return { kind: "missing-pack", ready: false, labelKey: "admin.inventory.smart.rowMissingPack", field: "pack" };
+  const product = options?.product ?? (options?.productBase ? { baseUnit: options.productBase } : null);
+  if (invoiceUnitGap(line, product) === "mismatch") {
+    return { kind: "missing-pack", ready: false, labelKey: "admin.inventory.smart.unitMismatch", field: "unit" };
   }
   if (!lineHasAmount(line)) {
     return { kind: "missing-price", ready: false, labelKey: "admin.inventory.smart.rowMissingPrice", field: "price" };
@@ -83,14 +88,85 @@ export function workingInvoiceLines(
   return lines.map((line) => drafts[line.key] ?? line);
 }
 
+/** Corrects the unit written on the invoice line. Quantity and price stay until a conversion is entered. */
 export function applyInvoiceUnitChange(
-  line: Pick<PurchaseInvoiceLine, "unit" | "quantity">,
+  _line: Pick<PurchaseInvoiceLine, "unit" | "quantity" | "unitPrice">,
   nextUnit: PurchaseUnit | null
 ): Partial<PurchaseInvoiceLine> {
-  if (!nextUnit) return { unit: null };
-  if (!line.unit || line.quantity == null || !Number.isFinite(line.quantity)) return { unit: nextUnit };
-  if (!unitsCompatible(line.unit, nextUnit)) return { unit: nextUnit };
-  return { unit: nextUnit, quantity: convertRecipeQuantity(line.quantity, line.unit, nextUnit) };
+  return { unit: nextUnit };
+}
+
+export type InvoiceUnitScope = "all" | "selected" | "missing";
+
+export function invoiceUnitTargets(
+  lines: PurchaseInvoiceLine[],
+  scope: InvoiceUnitScope,
+  selectedKeys: Iterable<string> = []
+): PurchaseInvoiceLine[] {
+  if (scope === "selected") {
+    const selected = new Set(selectedKeys);
+    return lines.filter((line) => selected.has(line.key));
+  }
+  if (scope === "missing") return lines.filter((line) => !line.unit);
+  return lines;
+}
+
+export function invoiceUnitGap(
+  line: Pick<PurchaseInvoiceLine, "unit" | "conversionFactor" | "productId">,
+  product?: { baseUnit?: BaseUnit | null; purchaseUnit?: PurchaseUnit | null } | null
+): "missing" | "mismatch" | null {
+  if (!line.productId || !product) return null;
+  if (line.conversionFactor != null && Number(line.conversionFactor) > 0) return null;
+  if (!line.unit) return "missing";
+  if (product.purchaseUnit && !unitsCompatible(line.unit, product.purchaseUnit)) return "mismatch";
+  if (packNeedsCompletion(line, product.baseUnit)) return "mismatch";
+  return null;
+}
+
+export function invoiceLineEditStamp(line: PurchaseInvoiceLine): string {
+  return JSON.stringify({
+    rawName: line.rawName,
+    plannedProductName: line.plannedProductName ?? null,
+    productId: line.productId ?? null,
+    matchKind: line.matchKind ?? null,
+    matchConfirmed: Boolean(line.matchConfirmed),
+    category: line.category ?? null,
+    quantity: line.quantity ?? null,
+    unit: line.unit ?? null,
+    unitPrice: line.unitPrice ?? null,
+    vatRate: line.vatRate ?? null,
+    conversionFactor: line.conversionFactor ?? null,
+    conversionNote: line.conversionNote ?? null,
+  });
+}
+
+export function shouldClearInvoiceDraft(ok: boolean, revision: number, savedRevision: number): boolean {
+  return ok && revision === savedRevision;
+}
+
+export function invoiceAfterPersist<T extends { id?: string }>(
+  latest: T,
+  snapshot: T,
+  savedId: string,
+  latestRevision: number,
+  snapshotRevision: number
+): T {
+  if (latestRevision !== snapshotRevision) return { ...latest, id: savedId || latest.id };
+  return { ...snapshot, id: savedId || snapshot.id };
+}
+
+export class InvoiceLineSaveError extends Error {
+  lineKey: string;
+  lineIndex: number;
+  reason: string;
+
+  constructor(lineKey: string, lineIndex: number, productName: string, reason: string) {
+    super(`${lineIndex}. ${productName || "—"} — ${reason}`);
+    this.name = "InvoiceLineSaveError";
+    this.lineKey = lineKey;
+    this.lineIndex = lineIndex;
+    this.reason = reason;
+  }
 }
 
 export type InvoiceLineBlocker = {
@@ -104,13 +180,19 @@ export type InvoiceLineBlocker = {
 
 export function invoiceLineBlockers(
   lines: PurchaseInvoiceLine[],
-  options?: { dirtyKeys?: Iterable<string>; productBaseById?: Record<string, BaseUnit | null | undefined> }
+  options?: {
+    dirtyKeys?: Iterable<string>;
+    productBaseById?: Record<string, BaseUnit | null | undefined>;
+    productById?: Record<string, { baseUnit?: BaseUnit | null; purchaseUnit?: PurchaseUnit | null } | null | undefined>;
+  }
 ): InvoiceLineBlocker[] {
   const dirty = new Set(options?.dirtyKeys ?? []);
   return lines.flatMap((line, index) => {
+    const listed = line.productId ? options?.productById?.[line.productId] : null;
     const status = invoiceLineReviewStatus(line, {
       dirty: dirty.has(line.key),
-      productBase: line.productId ? options?.productBaseById?.[line.productId] ?? null : null,
+      productBase: line.productId ? listed?.baseUnit ?? options?.productBaseById?.[line.productId] ?? null : null,
+      product: listed ?? null,
     });
     if (status.ready) return [];
     return [{
