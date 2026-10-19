@@ -286,7 +286,15 @@ function CompareRow({ row, highlight, onOpen }: { row: MaterialCompareRow; highl
         {row.packQuantity != null && row.packUnit ? `${row.packQuantity} ${t(unitLabelKey(row.packUnit))}` : "—"}
       </td>
       <td className="border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap tabular-nums">
-        {missingBasis ? <span className="text-amber-800">{t("admin.compare.missingSupplierPrice")}</span> : row.buyPrice != null ? formatCompareMoney(row.buyPrice) : "—"}
+        {row.buyPrice == null && row.reason === "vat-mismatch" ? (
+          <span className="text-amber-800">{t("admin.compare.missingSelectedBasis")}</span>
+        ) : missingBasis ? (
+          <span className="text-amber-800">{t("admin.compare.missingSupplierPrice")}</span>
+        ) : row.buyPrice != null ? (
+          formatCompareMoney(row.buyPrice)
+        ) : (
+          "—"
+        )}
       </td>
       <td className={`border-b border-beige-dark/10 px-2 py-2 whitespace-nowrap tabular-nums ${highlight ? "font-semibold text-emerald-800" : ""}`}>
         {row.comparable && row.displayUnitCost != null ? `${formatCompareMoney(row.displayUnitCost)} / ${t(unitLabelKey(row.displayUnit))}` : "—"}

@@ -84,6 +84,7 @@ export function SmartInvoiceFlow({
   invoices = [],
   vatRate,
   initialInvoice,
+  initialLineKey,
   onClose,
   onToast,
   onManual,
@@ -97,6 +98,7 @@ export function SmartInvoiceFlow({
   invoices?: PurchaseInvoice[];
   vatRate: number;
   initialInvoice?: PurchaseInvoice | null;
+  initialLineKey?: string | null;
   onClose: () => void;
   onToast: (message: string, variant?: "success" | "error") => void;
   onManual: () => void;
@@ -141,7 +143,10 @@ export function SmartInvoiceFlow({
   const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
   const [moreOpen, setMoreOpen] = useState(false);
   const [focusField, setFocusField] = useState<string | null>(null);
-  const [highlightKey, setHighlightKey] = useState<string | null>(null);
+  const [highlightKey, setHighlightKey] = useState<string | null>(initialLineKey ?? null);
+  useEffect(() => {
+    if (initialLineKey) setHighlightKey(initialLineKey);
+  }, [initialLineKey]);
   const [highlightField, setHighlightField] = useState<string | null>(null);
   const [workingLines, setWorkingLines] = useState<PurchaseInvoiceLine[]>([]);
   const [dirtyKeys, setDirtyKeys] = useState<string[]>([]);
@@ -411,7 +416,12 @@ export function SmartInvoiceFlow({
           ...invoiceCreateProductDraft({ ...sample, rawName: group.name }, supplierName),
           category: sample.category,
         });
-        if (!created.success || !created.data) throw new Error(created.error || "CREATE_FAILED");
+        if (created.success === false) {
+          throw new Error(created.error || "CREATE_FAILED");
+        }
+        if (!created.data) {
+          throw new Error("CREATE_FAILED");
+        }
         catalog.push(created.data);
         return created.data;
       })());
@@ -435,12 +445,13 @@ export function SmartInvoiceFlow({
     if (!supplierId) return;
     for (const line of preferredSupplierAssignments(lines)) {
       const supplierProductName = (line.originalDescription || line.rawName || "").trim();
-      if (!supplierProductName) continue;
+      const inventoryProductId = line.productId;
+      if (!supplierProductName || !inventoryProductId) continue;
       const saved = await saveSupplierItemMap({
         supplierId,
         supplierProductName,
         supplierSku: line.sku,
-        inventoryProductId: line.productId,
+        inventoryProductId,
         purchaseUnit: line.unit ?? undefined,
         packageQuantity: line.quantity ?? undefined,
         conversion: line.conversionFactor ?? undefined,

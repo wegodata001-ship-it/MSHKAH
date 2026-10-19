@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { CheckCircle2, ChevronDown, Pencil, Plus, Search, Target, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +11,6 @@ import { adminKpiCard, adminTableHeader, adminTableRow } from "@/features/admin/
 import { formatIls, formatPercent } from "@/lib/costing/money";
 import {
   computeBreakEven,
-  inferredAppliesTo,
   monthBounds,
   monthlyEquivalent,
   productContribution,
@@ -20,7 +20,6 @@ import {
 import {
   DEFAULT_BREAK_EVEN_SETTINGS,
   FIXED_COST_PRESETS,
-  VARIABLE_COST_PRESETS,
   type BreakEvenFixedCost,
   type BreakEvenResult,
   type BreakEvenSettings,
@@ -28,21 +27,19 @@ import {
   type BreakEvenVariableCost,
   type BreakEvenVatMode,
   type CostFrequency,
-  type VariableAppliesTo,
-  type VariableCostKind,
+  type PaymentSchedule,
 } from "@/lib/breakeven/types";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import type { PosFinanceEntry, PosImport, PosZReport } from "@/lib/inventory/types";
 import type { Order, Product } from "@/types";
+import { billingDayFromDate, nextOccurrence, paymentScheduleOf } from "@/lib/cashflow/engine";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import { subscribeToOrders } from "@/services/orderService";
 import {
   deleteFixedCost,
-  deleteVariableCost,
   saveBreakEvenSettings,
   saveBreakEvenSnapshot,
   saveFixedCost,
-  saveVariableCost,
   subscribeToBreakEvenFixedCosts,
   subscribeToBreakEvenSettings,
   subscribeToBreakEvenSnapshots,
@@ -292,14 +289,12 @@ export function BreakEvenPanel({
             {missingActions.map((item) => (
               <li key={item} className="flex flex-col gap-2 rounded-xl bg-beige/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-dark-brown">{t(`admin.breakeven.missing.${item}`)}</p>
-                {item !== "margin" && (
+                {item !== "margin" && item !== "variable" && (
                   <Button
                     size="sm"
                     variant="turquoise"
                     onClick={() =>
-                      scrollToId(
-                        item === "fixed" ? "be-fixed" : item === "variable" ? "be-variable" : item === "mix" ? "be-dishes" : "be-history"
-                      )
+                      scrollToId(item === "fixed" ? "be-fixed" : item === "mix" ? "be-dishes" : "be-history")
                     }
                   >
                     {t(`admin.breakeven.action.${item === "sales" ? "sales" : item}`)}
@@ -342,11 +337,8 @@ export function BreakEvenPanel({
         </div>
       )}
 
-      <div id="be-fixed">
+      <div id="be-fixed" className="min-w-0">
         <FixedCostsCard items={fixed} operatingDays={settings.operatingDays} />
-      </div>
-      <div id="be-variable">
-        <VariableCostsCard items={variable} />
       </div>
 
       <Collapsible title={t("admin.breakeven.settings")}>
@@ -582,6 +574,194 @@ function Collapsible({
   );
 }
 
+const MENU_LIMIT = 240;
+const SCREEN_GAP = 8;
+
+function anchoredBox(anchor: HTMLElement): CSSProperties {
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(rect.width, window.innerWidth - SCREEN_GAP * 2);
+  const left = Math.min(Math.max(SCREEN_GAP, rect.left), Math.max(SCREEN_GAP, window.innerWidth - width - SCREEN_GAP));
+  const spaceBelow = window.innerHeight - rect.bottom - 4 - SCREEN_GAP;
+  const spaceAbove = rect.top - 4 - SCREEN_GAP;
+  const below = spaceBelow >= spaceAbove;
+  const maxHeight = Math.max(0, Math.min(MENU_LIMIT, below ? spaceBelow : spaceAbove));
+  return below
+    ? { position: "fixed", top: rect.bottom + 4, left, width, maxHeight, zIndex: 1020 }
+    : { position: "fixed", bottom: window.innerHeight - rect.top + 4, left, width, maxHeight, zIndex: 1020 };
+}
+
+function useAnchoredStyle(open: boolean, anchorRef: RefObject<HTMLElement | null>, panelRef: RefObject<HTMLElement | null>) {
+  const [style, setStyle] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = anchorRef.current;
+      if (anchor) setStyle(anchoredBox(anchor));
+    };
+    place();
+    const onScroll = (event: Event) => {
+      const panel = panelRef.current;
+      if (panel && event.target instanceof Node && panel.contains(event.target)) return;
+      place();
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open, anchorRef, panelRef]);
+  return open ? style : null;
+}
+
+function AnchoredPanel({
+  open,
+  anchorRef,
+  panelRef,
+  children,
+}: {
+  open: boolean;
+  anchorRef: RefObject<HTMLElement | null>;
+  panelRef: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}) {
+  const style = useAnchoredStyle(open, anchorRef, panelRef);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!open || !mounted || !style) return null;
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={style}
+      data-anchored-menu=""
+      className="overflow-y-auto overscroll-contain rounded-xl border border-beige-dark/25 bg-white py-1 shadow-soft"
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+function FieldList<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const selected = options.find((item) => item.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    setActive(Math.max(0, options.findIndex((item) => item.value === value)));
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, options, value]);
+
+  function reveal(index: number) {
+    const panel = panelRef.current;
+    const option = panel?.querySelector<HTMLElement>(`[data-index="${index}"]`);
+    if (!panel || !option) return;
+    const top = option.offsetTop;
+    const bottom = top + option.offsetHeight;
+    if (top < panel.scrollTop) panel.scrollTop = top;
+    else if (bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = bottom - panel.clientHeight;
+  }
+
+  function move(next: number) {
+    if (!options.length) return;
+    const index = (next + options.length) % options.length;
+    setActive(index);
+    reveal(index);
+  }
+
+  function choose(index: number) {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus({ preventScroll: true });
+  }
+
+  function onTriggerKey(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      move(event.key === "ArrowDown" ? active + 1 : active - 1);
+    } else if ((event.key === "Enter" || event.key === " ") && open) {
+      event.preventDefault();
+      choose(active);
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-beige-dark/40 bg-white px-3 text-start text-sm text-dark-brown"
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={onTriggerKey}
+      >
+        <span className="truncate">{selected?.label ?? ""}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-coffee/50" />
+      </button>
+      <AnchoredPanel open={open} anchorRef={triggerRef} panelRef={panelRef}>
+        <div id={listId} role="listbox">
+          {options.map((item, index) => {
+            const isSelected = item.value === value;
+            return (
+              <button
+                key={item.value || "empty"}
+                type="button"
+                role="option"
+                data-index={index}
+                aria-selected={isSelected}
+                className={`flex min-h-11 w-full items-center px-3 text-start text-sm ${
+                  isSelected ? "bg-turquoise/15 font-medium text-dark-brown" : "text-dark-brown hover:bg-beige/50"
+                } ${index === active ? "ring-1 ring-inset ring-turquoise/40" : ""}`}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => choose(index)}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </AnchoredPanel>
+    </>
+  );
+}
+
 function CategorySelect({
   presets,
   prefix,
@@ -596,54 +776,159 @@ function CategorySelect({
   const t = useT();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const options = presets.filter((item) => {
     const label = t(`${prefix}.${item}`);
     return !query || label.includes(query) || item.includes(query.toLowerCase());
   });
+  const selectedIndex = Math.max(0, options.findIndex((item) => item === value));
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
+  useEffect(() => {
+    if (!open) return;
+    setActive(selectedIndexRef.current);
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (anchorRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  function reveal(index: number) {
+    const panel = panelRef.current;
+    const option = panel?.querySelector<HTMLElement>(`[data-index="${index}"]`);
+    if (!panel || !option) return;
+    const top = option.offsetTop;
+    const bottom = top + option.offsetHeight;
+    if (top < panel.scrollTop) panel.scrollTop = top;
+    else if (bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = bottom - panel.clientHeight;
+  }
+  function choose(index: number) {
+    const item = options[index];
+    if (!item) return;
+    onChange(item, t(`${prefix}.${item}`));
+    setQuery("");
+    setOpen(false);
+  }
+  function onInputKey(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open || !options.length) {
+        setOpen(true);
+        return;
+      }
+      const next = event.key === "ArrowDown" ? active + 1 : active - 1;
+      const index = (next + options.length) % options.length;
+      setActive(index);
+      reveal(index);
+    } else if (event.key === "Enter" && open) {
+      event.preventDefault();
+      choose(active);
+    }
+  }
   return (
-    <div className="relative">
+    <div ref={anchorRef}>
       <Input
         value={query || (value ? t(`${prefix}.${value}`) : "")}
         placeholder={t("admin.breakeven.searchCategory")}
         onChange={(e) => {
           setQuery(e.target.value);
+          setActive(0);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onKeyDown={onInputKey}
       />
-      {open && (
-        <div className="absolute z-20 mt-1 max-h-44 w-full overflow-auto rounded-xl border border-beige-dark/20 bg-warm-white shadow-soft">
-          {options.map((item) => (
+      <AnchoredPanel open={open} anchorRef={anchorRef} panelRef={panelRef}>
+        <div role="listbox">
+          {options.map((item, index) => (
             <button
               key={item}
               type="button"
-              className="block w-full px-3 py-1.5 text-start text-sm hover:bg-beige/40"
-              onClick={() => {
-                onChange(item, t(`${prefix}.${item}`));
-                setQuery("");
-                setOpen(false);
-              }}
+              role="option"
+              data-index={index}
+              aria-selected={item === value}
+              className={`block min-h-11 w-full px-3 text-start text-sm ${
+                item === value ? "bg-turquoise/15 font-medium text-dark-brown" : "text-dark-brown hover:bg-beige/50"
+              } ${index === active ? "ring-1 ring-inset ring-turquoise/40" : ""}`}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => choose(index)}
             >
               {t(`${prefix}.${item}`)}
             </button>
           ))}
         </div>
-      )}
+      </AnchoredPanel>
     </div>
   );
 }
 
-function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[]; operatingDays: number }) {
-  const t = useT();
-  const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({
+type FixedDraft = {
+  name: string;
+  amount: string;
+  frequency: CostFrequency;
+  category: string;
+  vatMode: BreakEvenVatMode;
+  paymentFrequency: "" | PaymentSchedule;
+  nextPaymentDate: string;
+  billingStart: string;
+  billingEnd: string;
+  billingDay: string;
+  paymentAccount: string;
+};
+
+function emptyFixedDraft(): FixedDraft {
+  return {
     name: "",
     amount: "",
-    frequency: "monthly" as CostFrequency,
+    frequency: "monthly",
     category: "other",
-    vatMode: "before" as BreakEvenVatMode,
-  });
+    vatMode: "before",
+    paymentFrequency: "",
+    nextPaymentDate: "",
+    billingStart: "",
+    billingEnd: "",
+    billingDay: "",
+    paymentAccount: "",
+  };
+}
+
+function draftFromCost(item: BreakEvenFixedCost): FixedDraft {
+  return {
+    name: item.name,
+    amount: String(item.amount),
+    frequency: item.frequency,
+    category: item.category ?? "other",
+    vatMode: item.vatMode,
+    paymentFrequency: item.paymentFrequency ?? "",
+    nextPaymentDate: item.nextPaymentDate ?? "",
+    billingStart: item.billingStart ?? "",
+    billingEnd: item.billingEnd ?? "",
+    billingDay: item.billingDay ? String(item.billingDay) : "",
+    paymentAccount: item.paymentAccount ?? "",
+  };
+}
+
+function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[]; operatingDays: number }) {
+  const t = useT();
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<FixedDraft>(emptyFixedDraft);
   const total = items
     .filter((item) => item.active)
     .reduce((sum, item) => sum + monthlyEquivalent(item.amount, item.frequency, operatingDays), 0);
@@ -652,6 +937,7 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
     if (!draft.name.trim()) return;
     const amount = Number(draft.amount);
     if (!Number.isFinite(amount) || amount < 0) return;
+    const dayFromDate = billingDayFromDate(draft.nextPaymentDate);
     await saveFixedCost({
       id,
       name: draft.name,
@@ -660,8 +946,14 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
       category: draft.category,
       vatMode: draft.vatMode,
       active: true,
+      paymentFrequency: draft.paymentFrequency || null,
+      billingDay: dayFromDate ?? (draft.billingDay ? Number(draft.billingDay) : null),
+      billingStart: draft.billingStart || draft.nextPaymentDate || null,
+      billingEnd: draft.billingEnd || null,
+      nextPaymentDate: draft.nextPaymentDate || null,
+      paymentAccount: draft.paymentAccount.trim() || null,
     });
-    setDraft({ name: "", amount: "", frequency: "monthly", category: "other", vatMode: "before" });
+    setDraft(emptyFixedDraft());
     setAdding(false);
     setEditingId(null);
   }
@@ -671,101 +963,106 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
       title={t("admin.breakeven.fixedTitle")}
       icon={<Target className="h-4 w-4 text-turquoise" />}
       action={
-        <Button size="sm" variant="turquoise" onClick={() => setAdding(true)}>
+        <Button
+          size="sm"
+          variant="turquoise"
+          type="button"
+          onClick={() => {
+            setEditingId(null);
+            setDraft(emptyFixedDraft());
+            setAdding(true);
+          }}
+        >
           <Plus className="h-4 w-4" />
           {t("admin.breakeven.addFixed")}
         </Button>
       }
     >
-      <div className="overflow-x-auto">
+      <p className="mb-3 text-xs text-coffee/60">{t("admin.breakeven.cashNote")}</p>
+      {(adding || editingId) && (
+        <div data-fixed-form="" className="mb-3 grid grid-cols-1 gap-2 rounded-xl bg-beige/25 p-3 sm:grid-cols-2 xl:grid-cols-3">
+          <label className="space-y-1 text-xs">
+            <span>{t("admin.breakeven.name")}</span>
+            <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          </label>
+          <label className="space-y-1 text-xs">
+            <span>{t("admin.breakeven.amount")}</span>
+            <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
+          </label>
+          {!editingId && (
+            <label className="space-y-1 text-xs">
+              <span>{t("admin.breakeven.category")}</span>
+              <CategorySelect
+                presets={FIXED_COST_PRESETS}
+                prefix="admin.breakeven.fixed"
+                value={draft.category}
+                onChange={(category, label) => setDraft({ ...draft, category, name: draft.name || label })}
+              />
+            </label>
+          )}
+          <label className="space-y-1 text-xs">
+            <span>{t("admin.breakeven.periodForBreakEven")}</span>
+            <FreqSelect value={draft.frequency} onChange={(frequency) => setDraft({ ...draft, frequency })} />
+          </label>
+          {editingId && (
+            <label className="space-y-1 text-xs">
+              <span>{t("admin.breakeven.basis")}</span>
+              <VatSelect value={draft.vatMode} onChange={(vatMode) => setDraft({ ...draft, vatMode })} />
+            </label>
+          )}
+          <PaymentFields draft={draft} onChange={setDraft} />
+          <div className="flex items-end gap-2">
+            <Button type="button" size="sm" variant="turquoise" onClick={() => submit(editingId ?? undefined)}>
+              {t("admin.breakeven.add")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setAdding(false);
+                setEditingId(null);
+              }}
+            >
+              {t("admin.breakeven.cancel")}
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className="w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden">
         <table className="min-w-full text-sm">
           <thead className={adminTableHeader}>
             <tr className="text-start">
               <th className="p-2">{t("admin.breakeven.name")}</th>
               <th className="p-2">{t("admin.breakeven.amount")}</th>
               <th className="p-2">{t("admin.breakeven.basis")}</th>
-              <th className="p-2">{t("admin.breakeven.periodCol")}</th>
+              <th className="p-2">{t("admin.breakeven.periodForBreakEven")}</th>
+              <th className="p-2">{t("admin.breakeven.paymentDate")}</th>
+              <th className="p-2">{t("admin.breakeven.paymentFrequency")}</th>
+              <th className="p-2">{t("admin.breakeven.paymentAccount")}</th>
               <th className="p-2">{t("admin.breakeven.actions")}</th>
             </tr>
           </thead>
           <tbody>
-            {adding && (
-              <tr className="bg-beige/25">
-                <td className="p-2" colSpan={5}>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.name")}</span>
-                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.amount")}</span>
-                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.category")}</span>
-                      <CategorySelect
-                        presets={FIXED_COST_PRESETS}
-                        prefix="admin.breakeven.fixed"
-                        value={draft.category}
-                        onChange={(category, label) => setDraft({ ...draft, category, name: draft.name || label })}
-                      />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.periodCol")}</span>
-                      <FreqSelect value={draft.frequency} onChange={(frequency) => setDraft({ ...draft, frequency })} />
-                    </label>
-                    <div className="flex items-end gap-2">
-                      <Button size="sm" variant="turquoise" onClick={() => submit()}>
-                        {t("admin.breakeven.add")}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setAdding(false)}>
-                        {t("admin.breakeven.cancel")}
-                      </Button>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            )}
-            {items.map((item) =>
-              editingId === item.id ? (
-                <tr key={item.id} className="bg-beige/25">
-                  <td className="p-2" colSpan={5}>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
-                      <FreqSelect value={draft.frequency} onChange={(frequency) => setDraft({ ...draft, frequency })} />
-                      <VatSelect value={draft.vatMode} onChange={(vatMode) => setDraft({ ...draft, vatMode })} />
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="turquoise" onClick={() => submit(item.id)}>
-                          {t("admin.breakeven.add")}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>
-                          {t("admin.breakeven.cancel")}
-                        </Button>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
+            {items.map((item) => (
                 <tr key={item.id} className={adminTableRow}>
                   <td className="p-2 font-medium">{item.name}</td>
                   <td className="p-2">{formatIls(item.amount)}</td>
                   <td className="p-2 text-xs text-coffee/60">{item.category ? t(`admin.breakeven.fixed.${item.category}`) : "—"}</td>
                   <td className="p-2 text-xs">{t(`admin.breakeven.freq.${item.frequency}`)}</td>
+                  <td className="p-2 text-xs">{paymentScheduleOf(item) ? (nextOccurrence(item, today) ?? "—") : t("admin.breakeven.missingPaymentDate")}</td>
+                  <td className="p-2 text-xs">{item.paymentFrequency ? t(`admin.breakeven.pay.${item.paymentFrequency}`) : t("admin.breakeven.missingPaymentDate")}</td>
+                  <td className="p-2 text-xs">{item.paymentAccount || "—"}</td>
                   <td className="p-2">
                     <div className="flex gap-1">
                       <Button
                         size="icon-sm"
                         variant="ghost"
+                        type="button"
                         onClick={() => {
+                          setAdding(false);
                           setEditingId(item.id);
-                          setDraft({
-                            name: item.name,
-                            amount: String(item.amount),
-                            frequency: item.frequency,
-                            category: item.category ?? "other",
-                            vatMode: item.vatMode,
-                          });
+                          setDraft(draftFromCost(item));
                         }}
                       >
                         <Pencil className="h-4 w-4" />
@@ -776,11 +1073,10 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
                     </div>
                   </td>
                 </tr>
-              )
-            )}
+            ))}
             {!items.length && !adding && (
               <tr>
-                <td colSpan={5} className="p-3 text-sm text-coffee/55">
+                <td colSpan={8} className="p-3 text-sm text-coffee/55">
                   {t("admin.breakeven.noFixed")}
                 </td>
               </tr>
@@ -790,227 +1086,7 @@ function FixedCostsCard({ items, operatingDays }: { items: BreakEvenFixedCost[];
             <tr className="border-t border-beige-dark/20 font-medium">
               <td className="p-2">{t("admin.breakeven.total")}</td>
               <td className="p-2">{items.length ? formatIls(total) : "—"}</td>
-              <td colSpan={3} />
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </AdminCard>
-  );
-}
-
-function VariableCostsCard({ items }: { items: BreakEvenVariableCost[] }) {
-  const t = useT();
-  const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({
-    name: "",
-    amount: "",
-    kind: "percent" as VariableCostKind,
-    appliesTo: "all" as VariableAppliesTo,
-    vatMode: "exempt" as BreakEvenVatMode,
-  });
-
-  async function submit(id?: string) {
-    if (!draft.name.trim()) return;
-    const amount = Number(draft.amount);
-    if (!Number.isFinite(amount) || amount < 0) return;
-    await saveVariableCost({
-      id,
-      name: draft.name,
-      kind: draft.kind,
-      amount,
-      appliesTo: draft.kind === "percent" ? draft.appliesTo : "all",
-      vatMode: draft.vatMode,
-      active: true,
-    });
-    setDraft({ name: "", amount: "", kind: "percent", appliesTo: "all", vatMode: "exempt" });
-    setAdding(false);
-    setEditingId(null);
-  }
-
-  function basisLabel(item: BreakEvenVariableCost) {
-    if (item.kind === "percent") {
-      return `${t("admin.breakeven.kind.percent")} · ${
-        inferredAppliesTo(item) === "card" ? t("admin.breakeven.appliesCard") : t("admin.breakeven.appliesAll")
-      }`;
-    }
-    if (item.kind === "per_dish") return t("admin.breakeven.kind.perDish");
-    if (item.kind === "per_order") return t("admin.breakeven.kind.perOrder");
-    return t("admin.breakeven.kind.fixed");
-  }
-
-  return (
-    <AdminCard
-      title={t("admin.breakeven.variableTitle")}
-      action={
-        <Button size="sm" variant="turquoise" onClick={() => setAdding(true)}>
-          <Plus className="h-4 w-4" />
-          {t("admin.breakeven.addVariable")}
-        </Button>
-      }
-    >
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className={adminTableHeader}>
-            <tr className="text-start">
-              <th className="p-2">{t("admin.breakeven.name")}</th>
-              <th className="p-2">{t("admin.breakeven.amount")}</th>
-              <th className="p-2">{t("admin.breakeven.basis")}</th>
-              <th className="p-2">{t("admin.breakeven.periodCol")}</th>
-              <th className="p-2">{t("admin.breakeven.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {adding && (
-              <tr className="bg-beige/25">
-                <td className="p-2" colSpan={5}>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.name")}</span>
-                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.amount")}</span>
-                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.category")}</span>
-                      <CategorySelect
-                        presets={VARIABLE_COST_PRESETS}
-                        prefix="admin.breakeven.variable"
-                        value=""
-                        onChange={(_, label) =>
-                          setDraft({
-                            ...draft,
-                            name: draft.name || label,
-                            kind: label.includes("%") ? "percent" : draft.kind,
-                            appliesTo: /אשראי|card|بطاقة/i.test(label) ? "card" : draft.appliesTo,
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      <span>{t("admin.breakeven.basis")}</span>
-                      <select
-                        className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
-                        value={draft.kind}
-                        onChange={(e) => setDraft({ ...draft, kind: e.target.value as VariableCostKind })}
-                      >
-                        <option value="percent">{t("admin.breakeven.kind.percent")}</option>
-                        <option value="per_dish">{t("admin.breakeven.kind.perDish")}</option>
-                        <option value="per_order">{t("admin.breakeven.kind.perOrder")}</option>
-                        <option value="fixed">{t("admin.breakeven.kind.fixed")}</option>
-                      </select>
-                    </label>
-                    {draft.kind === "percent" && (
-                      <label className="space-y-1 text-xs">
-                        <span>{t("admin.breakeven.appliesTo")}</span>
-                        <select
-                          className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
-                          value={draft.appliesTo}
-                          onChange={(e) => setDraft({ ...draft, appliesTo: e.target.value as VariableAppliesTo })}
-                        >
-                          <option value="all">{t("admin.breakeven.appliesAll")}</option>
-                          <option value="card">{t("admin.breakeven.appliesCard")}</option>
-                        </select>
-                      </label>
-                    )}
-                    <div className="flex items-end gap-2">
-                      <Button size="sm" variant="turquoise" onClick={() => submit()}>
-                        {t("admin.breakeven.add")}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setAdding(false)}>
-                        {t("admin.breakeven.cancel")}
-                      </Button>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            )}
-            {items.map((item) =>
-              editingId === item.id ? (
-                <tr key={item.id} className="bg-beige/25">
-                  <td className="p-2" colSpan={5}>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                      <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-                      <Input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} />
-                      <select
-                        className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm"
-                        value={draft.kind}
-                        onChange={(e) => setDraft({ ...draft, kind: e.target.value as VariableCostKind })}
-                      >
-                        <option value="percent">{t("admin.breakeven.kind.percent")}</option>
-                        <option value="per_dish">{t("admin.breakeven.kind.perDish")}</option>
-                        <option value="per_order">{t("admin.breakeven.kind.perOrder")}</option>
-                        <option value="fixed">{t("admin.breakeven.kind.fixed")}</option>
-                      </select>
-                      {draft.kind === "percent" && (
-                        <select
-                          className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm"
-                          value={draft.appliesTo}
-                          onChange={(e) => setDraft({ ...draft, appliesTo: e.target.value as VariableAppliesTo })}
-                        >
-                          <option value="all">{t("admin.breakeven.appliesAll")}</option>
-                          <option value="card">{t("admin.breakeven.appliesCard")}</option>
-                        </select>
-                      )}
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="turquoise" onClick={() => submit(item.id)}>
-                          {t("admin.breakeven.add")}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>
-                          {t("admin.breakeven.cancel")}
-                        </Button>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                <tr key={item.id} className={adminTableRow}>
-                  <td className="p-2 font-medium">{item.name}</td>
-                  <td className="p-2">{item.kind === "percent" ? `${item.amount}%` : formatIls(item.amount)}</td>
-                  <td className="p-2 text-xs text-coffee/60">{basisLabel(item)}</td>
-                  <td className="p-2 text-xs">{item.frequency ? t(`admin.breakeven.freq.${item.frequency}`) : "—"}</td>
-                  <td className="p-2">
-                    <div className="flex gap-1">
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setEditingId(item.id);
-                          setDraft({
-                            name: item.name,
-                            amount: String(item.amount),
-                            kind: item.kind,
-                            appliesTo: inferredAppliesTo(item),
-                            vatMode: item.vatMode,
-                          });
-                        }}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon-sm" variant="ghost" onClick={() => deleteVariableCost(item.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            )}
-            {!items.length && !adding && (
-              <tr>
-                <td colSpan={5} className="p-3 text-sm text-coffee/55">
-                  {t("admin.breakeven.noVariable")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-          <tfoot>
-            <tr className="border-t border-beige-dark/20 text-xs text-coffee/60">
-              <td className="p-2" colSpan={5}>
-                {t("admin.breakeven.total")}: {items.filter((item) => item.active).length}
-              </td>
+              <td colSpan={6} />
             </tr>
           </tfoot>
         </table>
@@ -1142,30 +1218,86 @@ function ProductMarginCard({
   );
 }
 
+function PaymentFields({ draft, onChange }: { draft: FixedDraft; onChange: (draft: FixedDraft) => void }) {
+  const t = useT();
+  return (
+    <>
+      <label className="space-y-1 text-xs">
+        <span>{t("admin.breakeven.paymentFrequency")}</span>
+        <FieldList
+          value={draft.paymentFrequency}
+          options={[
+            { value: "", label: t("admin.breakeven.missingPaymentDate") },
+            { value: "once", label: t("admin.breakeven.pay.once") },
+            { value: "monthly", label: t("admin.breakeven.pay.monthly") },
+            { value: "bimonthly", label: t("admin.breakeven.pay.bimonthly") },
+            { value: "quarterly", label: t("admin.breakeven.pay.quarterly") },
+            { value: "yearly", label: t("admin.breakeven.pay.yearly") },
+          ]}
+          onChange={(paymentFrequency) => onChange({ ...draft, paymentFrequency })}
+        />
+      </label>
+      <label className="space-y-1 text-xs">
+        <span>{t("admin.breakeven.paymentDate")}</span>
+        <Input
+          type="date"
+          value={draft.nextPaymentDate}
+          onChange={(event) => {
+            const nextPaymentDate = event.target.value;
+            const day = billingDayFromDate(nextPaymentDate);
+            onChange({
+              ...draft,
+              nextPaymentDate,
+              billingDay: day ? String(day) : draft.billingDay,
+              billingStart: draft.billingStart || nextPaymentDate,
+            });
+          }}
+        />
+      </label>
+      <label className="space-y-1 text-xs">
+        <span>{t("admin.breakeven.billingStart")}</span>
+        <Input type="date" value={draft.billingStart} onChange={(event) => onChange({ ...draft, billingStart: event.target.value })} />
+      </label>
+      <label className="space-y-1 text-xs">
+        <span>{t("admin.breakeven.billingEnd")}</span>
+        <Input type="date" value={draft.billingEnd} onChange={(event) => onChange({ ...draft, billingEnd: event.target.value })} />
+      </label>
+      <label className="space-y-1 text-xs">
+        <span>{t("admin.breakeven.paymentAccount")}</span>
+        <Input value={draft.paymentAccount} onChange={(event) => onChange({ ...draft, paymentAccount: event.target.value })} />
+      </label>
+    </>
+  );
+}
+
 function FreqSelect({ value, onChange }: { value: CostFrequency; onChange: (value: CostFrequency) => void }) {
   const t = useT();
   return (
-    <select
-      className="h-10 w-full rounded-xl border border-beige-dark/40 px-2 text-sm"
+    <FieldList
       value={value}
-      onChange={(e) => onChange(e.target.value as CostFrequency)}
-    >
-      <option value="daily">{t("admin.breakeven.freq.daily")}</option>
-      <option value="weekly">{t("admin.breakeven.freq.weekly")}</option>
-      <option value="monthly">{t("admin.breakeven.freq.monthly")}</option>
-      <option value="yearly">{t("admin.breakeven.freq.yearly")}</option>
-    </select>
+      options={[
+        { value: "daily", label: t("admin.breakeven.freq.daily") },
+        { value: "weekly", label: t("admin.breakeven.freq.weekly") },
+        { value: "monthly", label: t("admin.breakeven.freq.monthly") },
+        { value: "yearly", label: t("admin.breakeven.freq.yearly") },
+      ]}
+      onChange={onChange}
+    />
   );
 }
 
 function VatSelect({ value, onChange }: { value: BreakEvenVatMode; onChange: (value: BreakEvenVatMode) => void }) {
   const t = useT();
   return (
-    <select className="h-10 rounded-xl border border-beige-dark/40 px-2 text-sm" value={value} onChange={(e) => onChange(e.target.value as BreakEvenVatMode)}>
-      <option value="before">{t("admin.breakeven.vatBefore")}</option>
-      <option value="including">{t("admin.breakeven.vatIncluding")}</option>
-      <option value="exempt">{t("admin.breakeven.vatExempt")}</option>
-    </select>
+    <FieldList
+      value={value}
+      options={[
+        { value: "before", label: t("admin.breakeven.vatBefore") },
+        { value: "including", label: t("admin.breakeven.vatIncluding") },
+        { value: "exempt", label: t("admin.breakeven.vatExempt") },
+      ]}
+      onChange={onChange}
+    />
   );
 }
 

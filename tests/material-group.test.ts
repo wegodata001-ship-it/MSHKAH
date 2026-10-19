@@ -276,6 +276,49 @@ describe("cheapest comparable purchase price", () => {
     expect(alone[0]?.cheapest).toBe(false);
   });
 
+  it("keeps the saved pack total and does not treat the per-unit price as the pack price", () => {
+    const pastry = record({
+      id: "pastry",
+      productId: "cola",
+      supplierId: "s1",
+      purchaseDate: "2026-10-13",
+      quantity: 40,
+      packageQuantity: 40,
+      unit: "unit",
+      priceBeforeVat: 244.8,
+      vatAmount: 44.06,
+      priceIncludingVat: 288.86,
+      lineTotalNet: 244.8,
+      lineTotalGross: 288.86,
+      unitPriceNet: 6.12,
+      vatType: "exclusive",
+    });
+    const input = {
+      ingredientIds: ["cola"],
+      ingredients: [cola],
+      suppliers: [alsunbola],
+      offers: [offer({ id: "p", productId: "cola", supplierId: "s1", vatType: "exclusive" as const, lastPurchaseDate: "2026-10-13" })],
+      records: [pastry],
+    };
+    const netRow = buildGroupCompareRows({ ...input, lineVatBasis: "net" })[0];
+    const grossRow = buildGroupCompareRows({ ...input, lineVatBasis: "gross" })[0];
+    expect(netRow?.buyPrice).toBeCloseTo(244.8);
+    expect(netRow?.displayUnitCost).toBeCloseTo(6.12);
+    expect(netRow?.comparable).toBe(true);
+    expect(grossRow?.buyPrice).toBeCloseTo(288.86);
+    expect(grossRow?.displayUnitCost).toBeCloseTo(7.2215);
+    expect(grossRow?.comparable).toBe(true);
+    const netOnly = record({ ...pastry, priceIncludingVat: undefined as unknown as number, lineTotalGross: undefined });
+    expect(buildGroupCompareRows({ ...input, records: [netOnly], lineVatBasis: "gross" })[0]?.reason).toBe("vat-mismatch");
+    const withoutPack = record({
+      ...pastry,
+      priceBeforeVat: undefined as unknown as number,
+      lineTotalNet: undefined,
+      unitPriceNet: 6.12,
+    });
+    expect(buildGroupCompareRows({ ...input, records: [withoutPack], lineVatBasis: "net" })[0]?.buyPrice).toBeNull();
+  });
+
   it("does not change invoice amounts or create stock when assigning a group", () => {
     const line = { unitPrice: 52, lineNet: 104, lineGross: 122.72, quantity: 2, rawName: "נוטלה דלי 3 ק״ג" };
     const assigned = assignmentKeepsSourceAmounts(line, "nutella");

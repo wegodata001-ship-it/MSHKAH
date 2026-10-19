@@ -211,6 +211,16 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /supplierPayments/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /supplierOpenings/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
     match /supplierOffers/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();
@@ -280,6 +290,15 @@ service cloud.firestore {
     match /stockCountSessions/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();
+    }
+
+    match /cashFlowEntries/{id} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /cashFlowSettings/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
     }
 
     match /reportRuns/{id} {

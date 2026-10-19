@@ -79,6 +79,8 @@ export type Supplier = {
   notes?: string;
   aliases?: string[];
   active: boolean;
+  mergedInto?: string;
+  audit?: InvoiceAuditEvent[];
   createdAt: string;
   updatedAt: string;
 };
@@ -172,6 +174,7 @@ export type InventoryMovement = {
   unitCostNet?: number;
   unitCostGross?: number;
   vatRate?: number;
+  invoiceLineId?: string;
   invoiceLineKey?: string;
   conversionFactor?: number | null;
   lineTotalNet?: number | null;
@@ -324,6 +327,8 @@ export type PurchaseInvoice = {
   computedNet?: number | null;
   computedVat?: number | null;
   computedGross?: number | null;
+  coveredByInvoiceId?: string;
+  coversDeliveryIds?: string[];
   duplicateOf?: string;
   duplicateSnapshot?: {
     id: string;

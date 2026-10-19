@@ -81,6 +81,7 @@ import { RecipeEditorModal } from "./recipe-editor";
 import { CostingImportWizard, downloadCostingWorkbook } from "./import-wizard";
 import { InventorySection, PosSection, PurchaseSection } from "@/features/admin/inventory/inventory-hub";
 import { BreakEvenPanel } from "@/features/admin/breakeven/breakeven-panel";
+import { CashFlowPanel } from "@/features/admin/cashflow/cashflow-panel";
 import { productContribution } from "@/lib/breakeven/compute";
 import {
   subscribeToInventoryMovements,
@@ -112,7 +113,7 @@ import { currentStockBase } from "@/lib/inventory/stock";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
-type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "cashflow" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -124,6 +125,8 @@ export function CostingAdmin() {
 
   const [hub, setHub] = useState<Hub>("finance");
   const [tab, setTab] = useState<Tab>("invoices");
+  const [focusInvoiceId, setFocusInvoiceId] = useState<string | null>(null);
+  const [focusInvoiceLineId, setFocusInvoiceLineId] = useState<string | null>(null);
   const [ingredients, setIngredients] = useState<CostingIngredient[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [offers, setOffers] = useState<SupplierOffer[]>([]);
@@ -310,7 +313,7 @@ export function CostingAdmin() {
         }
         return true;
       }
-      const result = await createIngredient(payload);
+      const result = await createIngredient({ ...payload, originKind: "manual" });
       if (!result.success) {
         const message =
           result.code === "PERMISSION_DENIED"
@@ -405,6 +408,7 @@ export function CostingAdmin() {
       tabs: [
         { id: "invoices", label: t("admin.finance.purchases") },
         { id: "breakeven", label: t("admin.breakeven.tab") },
+        { id: "cashflow", label: t("admin.cashflow.tab") },
       ],
     },
     {
@@ -466,6 +470,16 @@ export function CostingAdmin() {
     locale,
     settingsVatRate: settings.vatRate ?? 0.18,
     onToast: toast,
+    onOpenInvoice: (invoiceId: string, lineId?: string) => {
+      setFocusInvoiceId(invoiceId);
+      setFocusInvoiceLineId(lineId ?? null);
+      setHub("finance");
+      setTab("invoices");
+    },
+    onShowLedger: () => {
+      setHub("inventory");
+      setTab("ledger");
+    },
     onAddProduct: () => {
       setIngredientError(null);
       setIngredientForm("new");
@@ -524,6 +538,12 @@ export function CostingAdmin() {
         <PurchaseSection
           {...hubProps}
           pane={tab === "invoices" ? "invoices" : tab === "suppliers" ? "suppliers" : "compare"}
+          focusInvoiceId={focusInvoiceId}
+          focusInvoiceLineId={focusInvoiceLineId}
+          onFocusInvoiceHandled={() => {
+            setFocusInvoiceId(null);
+            setFocusInvoiceLineId(null);
+          }}
           onViewInventory={() => {
             setHub("inventory");
             setTab("products");
@@ -541,6 +561,15 @@ export function CostingAdmin() {
           zReports={posZReports}
           financeEntries={posFinanceEntries}
           posImports={posImports}
+        />
+      )}
+
+      {tab === "cashflow" && (
+        <CashFlowPanel
+          invoices={invoices}
+          zReports={posZReports}
+          vatRate={settings.vatRate ?? 0.18}
+          onToast={toast}
         />
       )}
 

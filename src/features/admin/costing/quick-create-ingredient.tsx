@@ -119,6 +119,7 @@ export function QuickCreateIngredientPanel({
         purchaseQuantity: Number(purchaseQuantity) || 1,
         purchaseUnit,
         supplier,
+        originKind: "manual",
       });
       if (!result.success) {
         setError(

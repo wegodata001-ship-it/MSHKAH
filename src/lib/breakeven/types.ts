@@ -1,4 +1,5 @@
 export type CostFrequency = "daily" | "weekly" | "monthly" | "yearly";
+export type PaymentSchedule = "once" | "monthly" | "bimonthly" | "quarterly" | "yearly";
 export type BreakEvenVatMode = "before" | "including" | "exempt";
 export type BreakEvenVatBasis = "before" | "including";
 export type VariableCostKind = "percent" | "per_order" | "per_dish" | "fixed";
@@ -11,6 +12,12 @@ export type BreakEvenFixedCost = {
   name: string;
   amount: number;
   frequency: CostFrequency;
+  paymentFrequency?: PaymentSchedule | null;
+  billingDay?: number | null;
+  billingStart?: string | null;
+  billingEnd?: string | null;
+  nextPaymentDate?: string | null;
+  paymentAccount?: string | null;
   category?: string;
   vatMode: BreakEvenVatMode;
   vatRate?: number | null;

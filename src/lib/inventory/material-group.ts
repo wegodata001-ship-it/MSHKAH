@@ -379,6 +379,20 @@ function blankCompareRow(partial: Partial<MaterialCompareRow> & Pick<MaterialCom
   };
 }
 
+function finitePrice(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Pack total on the selected VAT basis. A per-unit price is not a pack price. */
+function savedPackPrice(
+  record: Pick<PurchasePriceRecord, "priceBeforeVat" | "lineTotalNet" | "priceIncludingVat" | "lineTotalGross"> | null | undefined,
+  mode: CompareVatMode | "unknown" | undefined
+): number | null {
+  if (!record) return null;
+  if (mode === "net") return finitePrice(record.priceBeforeVat) ?? finitePrice(record.lineTotalNet);
+  return finitePrice(record.priceIncludingVat) ?? finitePrice(record.lineTotalGross);
+}
+
 function appendMembersWithoutOffers(
   rows: MaterialCompareRow[],
   input: {
@@ -404,20 +418,17 @@ function appendMembersWithoutOffers(
         const packUnit = record.unit;
         const packQuantity = record.packageQuantity ?? record.quantity ?? null;
         const packOk = packQuantity != null && packQuantity > 0 && Boolean(packUnit);
-        const vatBasis: MaterialCompareRow["vatBasis"] =
-          record.vatType === "exclusive" ? "net" : record.vatType === "inclusive" ? "gross" : "unknown";
-        const buyPrice =
-          input.lineVatBasis === "net"
-            ? record.priceBeforeVat ?? record.unitPriceNet ?? null
-            : record.priceIncludingVat ?? record.unitPriceGross ?? null;
+        const buyPrice = savedPackPrice(record, input.lineVatBasis);
+        const otherBasis = savedPackPrice(record, input.lineVatBasis === "net" ? "gross" : "net");
+        const vatBasis: MaterialCompareRow["vatBasis"] = buyPrice == null ? "unknown" : input.lineVatBasis === "net" ? "net" : "gross";
         const unitCost = packOk && buyPrice != null && packUnit ? unitCostFromPackage(buyPrice, packQuantity, packUnit) : null;
         const base = packUnit ? baseUnitFor(packUnit) : ingredient.baseUnit;
         const displayUnit = displayUnitForBase(base);
         const displayUnitCost = toDisplayUnitCost(unitCost, base);
         const compatible = !packUnit || baseUnitFor(packUnit) === ingredient.baseUnit;
-        const vatOk = input.lineVatBasis == null || input.lineVatBasis === "unknown" || vatBasis === input.lineVatBasis;
+        const vatOk = buyPrice != null && vatBasis !== "unknown";
         const map = (input.maps ?? []).find((item) => item.inventoryProductId === ingredientId && item.supplierId === supplierId);
-        const reason: CompareRowReason = !packOk ? "missing-pack" : unitCost == null ? "missing-price" : !compatible ? "unit-mismatch" : !vatOk ? "vat-mismatch" : null;
+        const reason: CompareRowReason = !packOk ? "missing-pack" : buyPrice == null && otherBasis != null ? "vat-mismatch" : unitCost == null ? "missing-price" : !compatible ? "unit-mismatch" : null;
         rows.push(
           blankCompareRow({
             ingredientId,
@@ -435,7 +446,7 @@ function appendMembersWithoutOffers(
             purchaseDate: record.purchaseDate,
             invoiceNumber: null,
             complete: packOk && unitCost != null && unitCost > 0,
-            comparable: packOk && unitCost != null && unitCost > 0 && compatible && vatOk && vatBasis !== "unknown",
+            comparable: packOk && unitCost != null && unitCost > 0 && compatible && vatOk,
             reason,
           })
         );
@@ -487,49 +498,34 @@ export function buildGroupCompareRows(input: {
     const record = latestPurchaseForSupplier(input.records, offer.productId, offer.supplierId);
     const packUnit = record?.unit ?? offer.lastUnit ?? offerPurchaseUnit(offer);
     const packQuantity = record?.packageQuantity ?? record?.quantity ?? offer.lastPackageQuantity ?? offer.packageQuantity ?? null;
-    const vatBasis: MaterialCompareRow["vatBasis"] = record
-      ? record.vatType === "exclusive"
-        ? "net"
-        : record.vatType === "inclusive"
-          ? "gross"
-          : "unknown"
-      : offer.vatType === "exclusive"
-        ? "net"
-        : offer.vatType === "inclusive"
-          ? "gross"
-          : offer.lastPriceBeforeVat != null && offer.lastPriceIncludingVat != null
-            ? "gross"
-            : "unknown";
     const purchased = Boolean(record || offer.lastPurchaseDate || offer.lastPurchasedAt);
-    const buyPrice = !purchased
-      ? null
-      : input.lineVatBasis === "net"
-        ? record?.priceBeforeVat ?? record?.unitPriceNet ?? offer.lastPriceBeforeVat ?? offer.priceBeforeVat ?? null
-        : record?.priceIncludingVat ??
-          record?.unitPriceGross ??
-          offer.lastPriceIncludingVat ??
-          offer.priceIncludingVat ??
-          offer.lastLineTotalGross ??
-          null;
+    const offerPack =
+      input.lineVatBasis === "net"
+        ? finitePrice(offer.lastPriceBeforeVat) ?? finitePrice(offer.priceBeforeVat)
+        : finitePrice(offer.lastPriceIncludingVat) ?? finitePrice(offer.priceIncludingVat) ?? finitePrice(offer.lastLineTotalGross);
+    const otherOfferPack =
+      input.lineVatBasis === "net"
+        ? finitePrice(offer.lastPriceIncludingVat) ?? finitePrice(offer.priceIncludingVat) ?? finitePrice(offer.lastLineTotalGross)
+        : finitePrice(offer.lastPriceBeforeVat) ?? finitePrice(offer.priceBeforeVat);
+    const buyPrice = !purchased ? null : savedPackPrice(record, input.lineVatBasis) ?? offerPack;
+    const otherBasis = savedPackPrice(record, input.lineVatBasis === "net" ? "gross" : "net") ?? otherOfferPack;
+    const vatBasis: MaterialCompareRow["vatBasis"] = buyPrice == null ? "unknown" : input.lineVatBasis === "net" ? "net" : "gross";
     const packOk = packQuantity != null && packQuantity > 0 && Boolean(packUnit);
     const unitCost = packOk && buyPrice != null && packUnit ? unitCostFromPackage(buyPrice, packQuantity, packUnit) : null;
     const displayUnit = displayUnitForBase(packUnit ? baseUnitFor(packUnit) : ingredient.baseUnit);
     const displayUnitCost = toDisplayUnitCost(unitCost, packUnit ? baseUnitFor(packUnit) : ingredient.baseUnit);
     const complete = packOk && unitCost != null && unitCost > 0;
     const compatible = !packUnit || baseUnitFor(packUnit) === ingredient.baseUnit || unitsShareBase(packUnit, ingredient.baseUnit);
-    const vatOk =
-      input.lineVatBasis == null ||
-      input.lineVatBasis === "unknown" ||
-      vatBasis === input.lineVatBasis;
+    const vatOk = buyPrice != null && vatBasis !== "unknown";
     const map = (input.maps ?? []).find((item) => item.inventoryProductId === offer.productId && item.supplierId === offer.supplierId);
     const reason: CompareRowReason = !packOk
       ? "missing-pack"
-      : unitCost == null
-        ? "missing-price"
-        : !compatible
-          ? "unit-mismatch"
-          : !vatOk
-            ? "vat-mismatch"
+      : buyPrice == null && otherBasis != null
+        ? "vat-mismatch"
+        : unitCost == null
+          ? "missing-price"
+          : !compatible
+            ? "unit-mismatch"
             : null;
     rows.push({
       ingredientId: ingredient.id,

@@ -20,12 +20,12 @@ import {
   currentStockBase,
   labeledPurchaseUnitPrice,
   latestPurchase,
-  movementSignedBase,
   offerLastPurchaseCost,
   offerNormalizedCost,
   offerPurchaseUnit,
 } from "@/lib/inventory/stock";
-import type { InventoryMovement, PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
+import type { InventoryMovement, PurchaseInvoice, PurchasePriceRecord, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
+import { InventoryLedgerTable } from "@/features/admin/inventory/inventory-ledger-table";
 import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-panel";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
@@ -42,11 +42,13 @@ export function InventoryProductDetails({
   offers,
   records,
   movements,
+  invoices = [],
   recipes,
   products,
   itemMaps,
   allIngredients,
   locale,
+  onOpenInvoice,
   onIssue,
   onEdit,
   onClose,
@@ -57,11 +59,13 @@ export function InventoryProductDetails({
   offers: SupplierOffer[];
   records: PurchasePriceRecord[];
   movements: InventoryMovement[];
+  invoices?: PurchaseInvoice[];
   recipes: DishRecipe[];
   products: Product[];
   itemMaps: SupplierItemMap[];
   allIngredients?: CostingIngredient[];
   locale: Locale;
+  onOpenInvoice?: (invoiceId: string, lineId?: string) => void;
   onIssue: () => void;
   onEdit: () => void;
   onClose: () => void;
@@ -238,39 +242,30 @@ export function InventoryProductDetails({
         )}
 
         {tab === "ledger" && (
-          <div className="space-y-2 text-sm">
-            {movements
-              .filter((row) => row.productId === product.id)
-              .slice()
-              .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || b.createdAt.localeCompare(a.createdAt))
-              .map((row) => (
-                <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-beige-dark/10 py-1">
-                  <span>
-                    {row.receivedAt.slice(0, 10)} · {t(`admin.inventory.movement.${row.type}`, row.type)}
-                    {row.reason ? ` · ${t(`admin.inventory.reason.${row.reason}`)}` : ""}
-                    {row.note ? ` · ${row.note}` : ""}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    {movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`} {t(unitLabelKey(row.unit))}
-                    {canReverseMovement(row, movements) && (
-                      <button
-                        type="button"
-                        className="text-xs text-turquoise"
-                        disabled={reversing === row.id}
-                        onClick={async () => {
-                          setReversing(row.id);
-                          const result = await reverseInventoryMovement(row.id, user?.email);
-                          setReversing(null);
-                          onToast(result.success ? t("admin.inventory.reversed") : result.error, result.success ? "success" : "error");
-                        }}
-                      >
-                        {t("admin.inventory.reverse")}
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
-          </div>
+          <InventoryLedgerTable
+            product={product}
+            movements={movements}
+            invoices={invoices}
+            suppliers={suppliers}
+            onOpenInvoice={onOpenInvoice}
+            movementAction={(row) =>
+              canReverseMovement(row, movements) ? (
+                <button
+                  type="button"
+                  className="text-xs text-turquoise"
+                  disabled={reversing === row.id}
+                  onClick={async () => {
+                    setReversing(row.id);
+                    const result = await reverseInventoryMovement(row.id, user?.email);
+                    setReversing(null);
+                    onToast(result.success ? t("admin.inventory.reversed") : result.error, result.success ? "success" : "error");
+                  }}
+                >
+                  {t("admin.inventory.reverse")}
+                </button>
+              ) : null
+            }
+          />
         )}
 
         {tab === "history" && (

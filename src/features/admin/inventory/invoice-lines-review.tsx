@@ -123,6 +123,20 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     () => working.filter((line) => invoiceLineMatchesFilter(line, filter, query) || (filter === "needs" && drafts[line.key])),
     [working, filter, query, drafts]
   );
+  const highlightedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightKey || highlightedRef.current === highlightKey) return;
+    if (!lines.some((line) => line.key === highlightKey)) return;
+    highlightedRef.current = highlightKey;
+    setFilter("all");
+    setQuery("");
+  }, [highlightKey, lines]);
+  useEffect(() => {
+    if (!highlightKey) return;
+    const nodes = document.querySelectorAll<HTMLElement>(`[data-invoice-line="${CSS.escape(highlightKey)}"]`);
+    const target = [...nodes].find((node) => node.getClientRects().length > 0) ?? nodes[0];
+    target?.scrollIntoView?.({ block: "center" });
+  }, [highlightKey, visible]);
 
   const current = (key: string) => draftsRef.current[key] ?? lines.find((line) => line.key === key);
 
@@ -580,7 +594,7 @@ function LineEditor({
 
   if (card) {
     return (
-      <div id={`invoice-line-${line.key}`} className={cn("space-y-2", highlight && "rounded-xl ring-2 ring-amber-500")}>
+      <div id={`invoice-line-${line.key}`} data-invoice-line={line.key} className={cn("space-y-2", highlight && "rounded-xl ring-2 ring-amber-500")}>
         <div className="flex items-start justify-between gap-2">
           <label className="flex items-start gap-2">
             <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
@@ -622,7 +636,7 @@ function LineEditor({
 
   return (
     <>
-      <tr id={`invoice-line-${line.key}`} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-amber-50")}>
+      <tr id={`invoice-line-${line.key}`} data-invoice-line={line.key} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-amber-50")}>
         <td className="px-2 py-1.5">
           <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
         </td>

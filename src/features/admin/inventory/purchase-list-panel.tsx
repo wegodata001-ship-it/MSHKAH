@@ -71,6 +71,7 @@ export function PurchaseListPanel(props: InventoryHubProps) {
       maps: props.itemMaps ?? [],
       invoices: props.invoices,
       decisions,
+      fileName: fileName || undefined,
     });
     if (!saved.success) {
       setError(saved.error);

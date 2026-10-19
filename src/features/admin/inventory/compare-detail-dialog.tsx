@@ -131,13 +131,13 @@ export function CompareDetailDialog({
                 {history.length === 0 ? (
                   <p className="text-coffee/70">{t("admin.compare.noHistory")}</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <div className="max-h-36 overflow-auto">
                     <table className="min-w-full text-xs">
                       <thead>
                         <tr className="text-coffee/55">
                           <th className="px-1 py-1 text-start font-medium">{t("admin.compare.historyDate")}</th>
-                          <th className="px-1 py-1 text-start font-medium">{t("admin.compare.packPrice")}</th>
-                          <th className="px-1 py-1 text-start font-medium">{t("admin.compare.baseUnitPrice")}</th>
+                          <th className="px-1 py-1 text-start font-medium">{t("admin.compare.packPrice")} · {basisLabel}</th>
+                          <th className="px-1 py-1 text-start font-medium">{t("admin.compare.baseUnitPrice")} · {basisLabel}</th>
                           <th className="px-1 py-1 text-start font-medium">{t("admin.compare.historyDoc")}</th>
                         </tr>
                       </thead>

@@ -23,6 +23,7 @@ import {
   type CostingSettings,
   type CostingSnapshot,
   type DishRecipe,
+  type IngredientOriginKind,
   type IngredientPriceHistory,
   type OverheadSettings,
   type PriceRoundMode,
@@ -45,6 +46,10 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
   return {
     id,
     name: String(data.name ?? ""),
+    originKind:
+      data.originKind === "manual" || data.originKind === "invoice" || data.originKind === "purchase-file" || data.originKind === "other"
+        ? data.originKind
+        : undefined,
     category: data.category ? String(data.category) : undefined,
     purchasePrice,
     purchaseQuantity,
@@ -199,6 +204,7 @@ export type IngredientWriteInput = {
   minStock?: number;
   recommendedStock?: number;
   active?: boolean;
+  originKind?: IngredientOriginKind;
 };
 
 export function isCostingPermissionError(error: unknown): boolean {
@@ -222,6 +228,7 @@ function ingredientPayload(input: IngredientWriteInput) {
     minStock: input.minStock ?? null,
     recommendedStock: input.recommendedStock ?? null,
     active: input.active !== false,
+    ...(input.originKind ? { originKind: input.originKind } : {}),
   });
 }
 

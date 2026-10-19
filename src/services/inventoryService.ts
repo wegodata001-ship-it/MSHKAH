@@ -86,6 +86,8 @@ function mapSupplier(id: string, data: Record<string, unknown>): Supplier {
     notes: data.notes ? String(data.notes) : undefined,
     aliases: Array.isArray(data.aliases) ? data.aliases.map((item) => String(item)).filter(Boolean) : undefined,
     active: data.active !== false,
+    mergedInto: data.mergedInto ? String(data.mergedInto) : undefined,
+    audit: Array.isArray(data.audit) ? (data.audit as Supplier["audit"]) : undefined,
     createdAt: timestampToIso(data.createdAt as never),
     updatedAt: timestampToIso(data.updatedAt as never),
   };
@@ -134,6 +136,7 @@ function mapMovement(id: string, data: Record<string, unknown>): InventoryMoveme
     quantityBase: asNumber(data.quantityBase),
     supplierId: data.supplierId ? String(data.supplierId) : undefined,
     invoiceId: data.invoiceId ? String(data.invoiceId) : undefined,
+    invoiceLineId: data.invoiceLineId ? String(data.invoiceLineId) : undefined,
     invoiceLineKey: data.invoiceLineKey ? String(data.invoiceLineKey) : undefined,
     conversionFactor: data.conversionFactor != null ? asNumber(data.conversionFactor) : undefined,
     lineTotalNet: data.lineTotalNet != null ? asNumber(data.lineTotalNet) : undefined,
@@ -304,6 +307,8 @@ export function subscribeToPurchaseInvoices(onData: (items: PurchaseInvoice[]) =
           audit: Array.isArray(data.audit) ? data.audit : undefined,
           duplicateOf: data.duplicateOf ? String(data.duplicateOf) : undefined,
           notes: data.notes ? String(data.notes) : undefined,
+          coveredByInvoiceId: data.coveredByInvoiceId ? String(data.coveredByInvoiceId) : undefined,
+          coversDeliveryIds: Array.isArray(data.coversDeliveryIds) ? data.coversDeliveryIds.map((item) => String(item)) : undefined,
           createdAt: timestampToIso(data.createdAt as never),
           approvedAt: data.approvedAt ? timestampToIso(data.approvedAt as never) : undefined,
         };
@@ -1756,6 +1761,7 @@ export async function applyPurchaseList(input: {
   invoices: PurchaseInvoice[];
   decisions?: Record<string, PurchaseListDecision>;
   actor?: string;
+  fileName?: string;
 }): Promise<ServiceResult<PurchaseListApplyResult>> {
   try {
     const plan = planPurchaseList(input);
@@ -1908,6 +1914,7 @@ export async function applyPurchaseList(input: {
           stockStatus: "none",
           lines,
           notes: "purchase-list-import",
+          fileName: input.fileName?.trim() || undefined,
           sourceNet: sourceNet || null,
           sourceVat: sourceVat || null,
           sourceGross: sourceGross || null,

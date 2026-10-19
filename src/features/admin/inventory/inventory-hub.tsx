@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,7 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { filterUnifiedIngredients } from "@/lib/inventory/ingredient-core";
 import { ComparePane } from "@/features/admin/inventory/compare-pane";
-import { cheapestOffer, currentStockBase, labeledPurchaseUnitPrice, latestPurchase, movementSignedBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { cheapestOffer, currentStockBase, labeledPurchaseUnitPrice, latestPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import type { PurchaseUnit } from "@/lib/costing/types";
@@ -30,17 +30,20 @@ import type {
 } from "@/lib/inventory/types";
 import type { Product } from "@/types";
 import type { Locale } from "@/lib/i18n/types";
-import { saveSupplier } from "@/services/inventoryService";
+import { SupplierLedgerPanel } from "@/features/admin/inventory/supplier-ledger-panel";
 import { cn } from "@/lib/utils";
 import { PosExcelPanel } from "@/features/admin/inventory/pos-excel-panel";
 import { PosHistoryPanel } from "@/features/admin/inventory/pos-history-panel";
 import { PosZPanel } from "@/features/admin/inventory/pos-z-panel";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
+import { InventoryLedgerTable } from "@/features/admin/inventory/inventory-ledger-table";
 import { InvoiceArchivePanel } from "@/features/admin/inventory/invoice-archive-panel";
 import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
 import { StockCountPanel } from "@/features/admin/inventory/stock-count-panel";
 import { PurchaseListPanel } from "@/features/admin/inventory/purchase-list-panel";
+import { ProductSourceDialog, sourceSummaryText } from "@/features/admin/inventory/product-source-dialog";
+import { buildProductSource, productMatchesSourceKind, productMatchesSupplier, type ProductSourceKind } from "@/lib/inventory/product-source";
 
 function priceUnitKey(unit: PurchaseUnit): string {
   if (unit === "kg") return "admin.compare.eachKg";
@@ -69,7 +72,26 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [issueId, setIssueId] = useState<string | null | "all">(null);
   const [purchaseImport, setPurchaseImport] = useState(false);
+  const [sourceKind, setSourceKind] = useState<"" | ProductSourceKind>("");
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [highlightMovementId, setHighlightMovementId] = useState<string | null>(null);
   const categories = Array.from(new Set(props.ingredients.map((item) => item.category).filter(Boolean))) as string[];
+  const sources = useMemo(() => {
+    const mapped = new Map<string, ReturnType<typeof buildProductSource>>();
+    for (const item of props.ingredients) {
+      mapped.set(
+        item.id,
+        buildProductSource({
+          product: item,
+          invoices: props.invoices,
+          movements: props.movements,
+          maps: props.itemMaps,
+          suppliers: props.suppliers,
+        })
+      );
+    }
+    return mapped;
+  }, [props.ingredients, props.invoices, props.movements, props.itemMaps, props.suppliers]);
 
   const rows = filterUnifiedIngredients({
     ingredients: props.ingredients,
@@ -78,9 +100,15 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
     movements: props.movements,
     query: search,
     category: category || undefined,
-    supplierId: supplierId || undefined,
     lowStockOnly,
   })
+    .filter((item) => {
+      const source = sources.get(item.id);
+      if (!source) return false;
+      if (supplierId && !productMatchesSupplier({ product: item, supplierId, maps: props.itemMaps, offers: props.offers, source })) return false;
+      if (sourceKind && !productMatchesSourceKind(source, sourceKind)) return false;
+      return true;
+    })
     .filter((item) => {
       if (!missingOnly) return true;
       return !props.offers.some((offer) => offer.productId === item.id && offer.active !== false);
@@ -105,7 +133,21 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         .filter((row) => row.productId === item.id && row.type === "OPENING")
         .reduce((sum, row) => sum + row.quantityBase, 0);
       const toOrder = reorderQty(current, item.recommendedStock ?? item.minStock ?? 0);
-      return { item, current, incoming, outgoing, last, cheap, cheapName, supplierName, belowMin, missingSupplier: !itemOffers.length, opening, toOrder };
+      return {
+        item,
+        current,
+        incoming,
+        outgoing,
+        last,
+        cheap,
+        cheapName,
+        supplierName,
+        belowMin,
+        missingSupplier: !itemOffers.length,
+        opening,
+        toOrder,
+        source: sources.get(item.id)!,
+      };
     });
 
   const alerts = rows.filter((row) => row.belowMin || row.missingSupplier);
@@ -121,6 +163,14 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         <select className="h-10 rounded-xl border px-2 text-sm" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
           <option value="">{t("admin.costing.supplier")}</option>
           {props.suppliers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+        <select className="h-10 rounded-xl border px-2 text-sm" value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "" | ProductSourceKind)}>
+          <option value="">{t("admin.inventory.source.filter")}</option>
+          <option value="invoice">{t("admin.inventory.source.kind.invoice")}</option>
+          <option value="purchase-file">{t("admin.inventory.source.kind.purchase-file")}</option>
+          <option value="manual">{t("admin.inventory.source.kind.manual")}</option>
+          <option value="other">{t("admin.inventory.source.kind.other")}</option>
+          <option value="undocumented">{t("admin.inventory.source.kind.undocumented")}</option>
         </select>
         <Button type="button" variant={lowStockOnly ? "turquoise" : "outline"} onClick={() => setLowStockOnly((v) => !v)}>
           {t("admin.inventory.belowMin")}
@@ -166,9 +216,12 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         <LedgerPane
           ingredients={props.ingredients}
           movements={props.movements}
+          invoices={props.invoices}
           suppliers={props.suppliers}
           selectedId={ledgerId}
+          highlightMovementId={highlightMovementId}
           onSelect={setLedgerId}
+          onOpenInvoice={props.onOpenInvoice}
         />
       )}
 
@@ -181,7 +234,9 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
               <p className="mt-1 text-sm text-coffee/65">
                 {t("admin.inventory.current")}: {stockInDisplayUnit(row.current, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}
               </p>
+              <p className="mt-1 text-sm text-coffee/70" data-product-source={row.item.id}>{sourceSummaryText(row.source, t)}</p>
               <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="text-sm text-turquoise" onClick={() => setSourceId(row.item.id)}>{t("admin.inventory.sourceDetails")}</button>
                 <button type="button" className="text-sm text-turquoise" onClick={() => setIssueId(row.item.id)}>{t("admin.inventory.issue")}</button>
                 <button type="button" className="text-sm text-turquoise" onClick={() => props.onEditProduct(row.item)}>{t("common.edit")}</button>
               </div>
@@ -193,6 +248,7 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             <thead className="bg-beige/40 text-coffee/70">
               <tr>
                 <th className="px-3 py-2 text-start">{t("admin.inventory.product")}</th>
+                <th className="px-3 py-2 text-start">{t("admin.inventory.source")}</th>
                 <th className="px-3 py-2 text-start">{t("admin.costing.category")}</th>
                 <th className="px-3 py-2 text-end">{t("admin.inventory.opening")}</th>
                 <th className="px-3 py-2 text-end">{t("admin.inventory.stockIn")}</th>
@@ -211,6 +267,12 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                   <td className="px-3 py-2">
                     <button type="button" className="font-medium text-start" onClick={() => setDetailsId(row.item.id)}>
                       {row.item.name}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2" data-product-source={row.item.id}>
+                    <div className="max-w-[16rem]">{sourceSummaryText(row.source, t)}</div>
+                    <button type="button" className="text-turquoise" onClick={() => setSourceId(row.item.id)}>
+                      {t("admin.inventory.sourceDetails")}
                     </button>
                   </td>
                   <td className="px-3 py-2 text-coffee/60">{row.item.category || "—"}</td>
@@ -265,11 +327,16 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             offers={props.offers}
             records={props.records}
             movements={props.movements}
+            invoices={props.invoices}
             recipes={props.recipes}
             products={props.products}
             itemMaps={props.itemMaps ?? []}
             allIngredients={props.ingredients}
             locale={props.locale}
+            onOpenInvoice={(invoiceId, lineId) => {
+              setDetailsId(null);
+              props.onOpenInvoice?.(invoiceId, lineId);
+            }}
             onIssue={() => setIssueId(product.id)}
             onEdit={() => {
               setDetailsId(null);
@@ -280,6 +347,23 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
           />
         );
       })()}
+      {sourceId && sources.get(sourceId) && props.ingredients.some((item) => item.id === sourceId) && (
+        <ProductSourceDialog
+          product={props.ingredients.find((item) => item.id === sourceId)!}
+          source={sources.get(sourceId)!}
+          onClose={() => setSourceId(null)}
+          onOpenInvoice={(invoiceId, lineId) => {
+            setSourceId(null);
+            props.onOpenInvoice?.(invoiceId, lineId);
+          }}
+          onOpenMovement={(movementId) => {
+            setSourceId(null);
+            setLedgerId(sourceId);
+            setHighlightMovementId(movementId);
+            props.onShowLedger?.();
+          }}
+        />
+      )}
       {issueId != null && (
         <IssueIngredientForm
           open
@@ -299,26 +383,27 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
 function LedgerPane({
   ingredients,
   movements,
+  invoices,
   suppliers,
   selectedId,
+  highlightMovementId,
   onSelect,
+  onOpenInvoice,
 }: {
   ingredients: CostingIngredient[];
   movements: InventoryMovement[];
+  invoices: PurchaseInvoice[];
   suppliers: Supplier[];
   selectedId: string | null;
+  highlightMovementId?: string | null;
   onSelect: (id: string) => void;
+  onOpenInvoice?: (invoiceId: string, lineId?: string) => void;
 }) {
   const t = useT();
   const productId = selectedId ?? ingredients[0]?.id;
   const product = ingredients.find((item) => item.id === productId);
-  const rows = movements
-    .filter((row) => row.productId === productId)
-    .slice()
-    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt) || a.createdAt.localeCompare(b.createdAt));
-  let running = 0;
   return (
-    <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
       <div className="space-y-1">
         {ingredients.map((item) => (
           <button
@@ -331,25 +416,17 @@ function LedgerPane({
           </button>
         ))}
       </div>
-      <AdminCard title={t("admin.inventory.ledger")}>
-        <table className="w-full text-sm">
-          <tbody>
-            {rows.map((row) => {
-              running += movementSignedBase(row);
-              const supplier = suppliers.find((item) => item.id === row.supplierId)?.name;
-              return (
-                <tr key={row.id} className="border-b border-beige-dark/10">
-                  <td className="py-2">{row.receivedAt.slice(0, 10)}</td>
-                  <td className="py-2">{movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`} {row.unit ? t(unitLabelKey(row.unit)) : ""}</td>
-                  <td className="py-2 text-coffee/60">
-                    {t(`admin.inventory.movement.${row.type}`, row.type)} {row.reason ? `· ${t(`admin.inventory.reason.${row.reason}`)}` : ""} {supplier ? `· ${supplier}` : ""}
-                  </td>
-                  <td className="py-2 text-end">{product ? `${stockInDisplayUnit(running, product).toFixed(2)} ${t(unitLabelKey(product.purchaseUnit))}` : running.toFixed(2)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <AdminCard title={t("admin.inventory.ledger")} className="min-w-0">
+        {product ? (
+          <InventoryLedgerTable
+            product={product}
+            movements={movements}
+            invoices={invoices}
+            suppliers={suppliers}
+            highlightMovementId={highlightMovementId}
+            onOpenInvoice={onOpenInvoice}
+          />
+        ) : null}
         <p className="mt-3 text-sm font-semibold">
           {t("admin.inventory.balance")}: {product ? `${stockInDisplayUnit(currentStockBase(movements, productId ?? ""), product).toFixed(2)} ${t(unitLabelKey(product.purchaseUnit))}` : currentStockBase(movements, productId ?? "").toFixed(2)}
         </p>
@@ -358,58 +435,41 @@ function LedgerPane({
   );
 }
 
-export function PurchaseSection(props: InventoryHubProps & { pane: PurchasePane; onViewInventory?: () => void }) {
+export function PurchaseSection(props: InventoryHubProps & { pane: PurchasePane; onViewInventory?: () => void; focusInvoiceId?: string | null; focusInvoiceLineId?: string | null; onFocusInvoiceHandled?: () => void }) {
   if (props.pane === "suppliers") return <SuppliersPane {...props} />;
   if (props.pane === "compare") return <ComparePane {...props} />;
   return <InvoicesPane {...props} />;
 }
 
-function SuppliersPane({ suppliers, onToast }: InventoryHubProps) {
-  const t = useT();
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  return (
-    <div className="space-y-4">
-      <AdminCard title={t("admin.inventory.addSupplier")}>
-        <div className="flex flex-wrap gap-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("admin.inventory.supplierName")} className="max-w-xs" />
-          <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("admin.settings.phone")} className="max-w-xs" />
-          <Button
-            type="button"
-            variant="turquoise"
-            onClick={async () => {
-              if (!name.trim()) return;
-              const result = await saveSupplier({ name, phone });
-              if (result.success) {
-                setName("");
-                setPhone("");
-                onToast(t("admin.inventory.supplierSaved"));
-              } else onToast(result.error, "error");
-            }}
-          >
-            {t("common.save")}
-          </Button>
-        </div>
-      </AdminCard>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {suppliers.map((item) => (
-          <div key={item.id} className="rounded-2xl border border-beige-dark/20 p-4">
-            <p className="font-semibold">{item.name}</p>
-            {item.phone && <p className="text-sm text-coffee/55">{item.phone}</p>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function SuppliersPane(props: InventoryHubProps) {
+  return <SupplierLedgerPanel {...props} />;
 }
 
-function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void }) {
+function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void; focusInvoiceId?: string | null; focusInvoiceLineId?: string | null; onFocusInvoiceHandled?: () => void }) {
   const t = useT();
   const ai = useSmartInvoiceEnabled();
   const [draft, setDraft] = useState<PurchaseInvoice | "new" | null>(null);
   const [smart, setSmart] = useState(false);
   const [smartInvoice, setSmartInvoice] = useState<PurchaseInvoice | null>(null);
   const [transferInvoice, setTransferInvoice] = useState<PurchaseInvoice | null>(null);
+  const [focusLineKey, setFocusLineKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!props.focusInvoiceId) return;
+    const invoice = props.invoices.find((item) => item.id === props.focusInvoiceId);
+    if (invoice) {
+      setFocusLineKey(props.focusInvoiceLineId ?? null);
+      if (invoice.sourceFile || invoice.scanStatus || invoice.aiProvider) {
+        setDraft(null);
+        setSmartInvoice(invoice);
+        setSmart(true);
+      } else {
+        setSmart(false);
+        setSmartInvoice(null);
+        setDraft(invoice);
+      }
+    }
+    props.onFocusInvoiceHandled?.();
+  }, [props.focusInvoiceId, props.focusInvoiceLineId, props.invoices, props.onFocusInvoiceHandled]);
 
   if (transferInvoice) {
     return (
@@ -433,9 +493,13 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void 
         invoices={props.invoices}
         vatRate={props.settingsVatRate}
         initialInvoice={smartInvoice}
+        initialLineKey={focusLineKey}
         onToast={props.onToast}
         onViewInventory={props.onViewInventory}
-        onOpenExisting={(invoice) => setSmartInvoice(invoice)}
+        onOpenExisting={(invoice) => {
+          setFocusLineKey(null);
+          setSmartInvoice(invoice);
+        }}
         onClose={() => {
           setSmart(false);
           setSmartInvoice(null);
@@ -456,6 +520,7 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void 
         ingredients={props.ingredients}
         suppliers={props.suppliers}
         vatRate={props.settingsVatRate}
+        focusLineKey={focusLineKey}
         onToast={props.onToast}
         onClose={() => setDraft(null)}
       />
@@ -490,6 +555,7 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void 
         <InvoiceArchivePanel
           invoices={props.invoices}
           onOpen={(invoice) => {
+            setFocusLineKey(null);
             if (invoice.sourceFile || invoice.scanStatus || invoice.aiProvider) {
               setSmartInvoice(invoice);
               setSmart(true);
@@ -498,6 +564,7 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void 
             setDraft(invoice);
           }}
           onRescan={(invoice) => {
+            setFocusLineKey(null);
             setSmartInvoice(invoice);
             setSmart(true);
           }}
@@ -539,6 +606,8 @@ export type InventoryHubProps = {
   locale: Locale;
   settingsVatRate: number;
   onToast: (message: string, variant?: "success" | "error") => void;
+  onOpenInvoice?: (invoiceId: string, lineId?: string) => void;
+  onShowLedger?: () => void;
   onAddProduct: () => void;
   onEditProduct: (item: CostingIngredient) => void;
 };

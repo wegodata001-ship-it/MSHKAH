@@ -21,6 +21,7 @@ import {
   type BreakEvenVariableCost,
   type BreakEvenVatMode,
   type CostFrequency,
+  type PaymentSchedule,
   type VariableAppliesTo,
   type VariableCostKind,
 } from "@/lib/breakeven/types";
@@ -36,6 +37,20 @@ function asNumber(value: unknown, fallback = 0): number {
 
 function asFrequency(value: unknown): CostFrequency {
   return value === "daily" || value === "weekly" || value === "yearly" ? value : "monthly";
+}
+
+function asPaymentFrequency(value: unknown): PaymentSchedule | null {
+  return value === "once" || value === "monthly" || value === "bimonthly" || value === "quarterly" || value === "yearly" ? value : null;
+}
+
+function asIsoDate(value: unknown): string | null {
+  const text = String(value ?? "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+}
+
+function asBillingDay(value: unknown): number | null {
+  const day = Number(value);
+  return Number.isInteger(day) && day >= 1 && day <= 31 ? day : null;
 }
 
 function asVatMode(value: unknown): BreakEvenVatMode {
@@ -56,6 +71,12 @@ function mapFixed(id: string, data: Record<string, unknown>): BreakEvenFixedCost
     name: String(data.name ?? ""),
     amount: asNumber(data.amount),
     frequency: asFrequency(data.frequency),
+    paymentFrequency: asPaymentFrequency(data.paymentFrequency),
+    billingDay: asBillingDay(data.billingDay),
+    billingStart: asIsoDate(data.billingStart),
+    billingEnd: asIsoDate(data.billingEnd),
+    nextPaymentDate: asIsoDate(data.nextPaymentDate),
+    paymentAccount: data.paymentAccount ? String(data.paymentAccount) : null,
     category: data.category ? String(data.category) : undefined,
     vatMode: asVatMode(data.vatMode),
     vatRate: data.vatRate == null ? null : asNumber(data.vatRate),
@@ -190,6 +211,12 @@ export async function saveFixedCost(
       name: input.name.trim(),
       amount: input.amount,
       frequency: input.frequency,
+      paymentFrequency: input.paymentFrequency ?? null,
+      billingDay: input.billingDay ?? null,
+      billingStart: input.billingStart ?? null,
+      billingEnd: input.billingEnd ?? null,
+      nextPaymentDate: input.nextPaymentDate ?? null,
+      paymentAccount: input.paymentAccount ?? null,
       category: input.category ?? null,
       vatMode: input.vatMode,
       vatRate: input.vatRate ?? null,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary, INVOICE_UNITS } 
 import type { PurchaseDocumentType, PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
 import { saveFinanceInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
 import { invoiceMismatch } from "@/lib/inventory/invoice-finance";
+import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 import { uploadImageWithProgress } from "@/services/storageService";
@@ -31,6 +32,7 @@ export function SupplierInvoiceForm({
   ingredients,
   suppliers,
   vatRate = DEFAULT_VAT_RATE,
+  focusLineKey,
   onClose,
   onToast,
 }: {
@@ -38,6 +40,7 @@ export function SupplierInvoiceForm({
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
   vatRate?: number;
+  focusLineKey?: string | null;
   onClose: () => void;
   onToast: (message: string, variant?: "success" | "error") => void;
 }) {
@@ -70,6 +73,12 @@ export function SupplierInvoiceForm({
   const locked = form.status === "saved" || form.status === "approved";
 
   const summary = useMemo(() => invoiceSummary(form.lines, vatRate), [form.lines, vatRate]);
+  useEffect(() => {
+    if (!focusLineKey) return;
+    const nodes = document.querySelectorAll<HTMLElement>(`[data-invoice-line="${CSS.escape(focusLineKey)}"]`);
+    const target = [...nodes].find((node) => node.getClientRects().length > 0) ?? nodes[0];
+    target?.scrollIntoView?.({ block: "center" });
+  }, [focusLineKey, form.lines]);
   const supplierName = suppliers.find((item) => item.id === form.supplierId)?.name ?? form.supplierName;
   const canSave = Boolean(form.invoiceDate) && !locked;
   const mismatch = invoiceMismatch(form);
@@ -121,6 +130,11 @@ export function SupplierInvoiceForm({
 
   return (
     <AdminCard title={t("admin.inventory.supplierInvoices")}>
+      {(form.sourceFile || form.fileUrl) && (
+        <div className="mb-4">
+          <InvoiceSourcePreview source={form.sourceFile} fallbackUrl={form.fileUrl} fileName={form.fileName} />
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <Label>{t("admin.costing.supplier")} *</Label>
@@ -192,7 +206,13 @@ export function SupplierInvoiceForm({
 
       <div className="mt-5 space-y-3">
         {form.lines.map((line) => (
-          <div key={line.key} className="grid gap-2 rounded-2xl border border-beige-dark/15 p-3 md:grid-cols-6">
+          <div
+            key={line.key}
+            id={`invoice-line-${line.key}`}
+            data-invoice-line={line.key}
+            className={`grid gap-2 rounded-2xl border p-3 md:grid-cols-6 ${focusLineKey === line.key ? "border-amber-500 ring-2 ring-amber-500" : "border-beige-dark/15"}`}
+          >
+            {line.originalDescription ? <p className="text-sm font-medium md:col-span-6">{line.originalDescription}</p> : null}
             <div className="md:col-span-2">
               <Label>{t("admin.inventory.product")}</Label>
               <select

@@ -236,6 +236,7 @@ export function CostingImportWizard({
             purchasePrice: item.purchasePrice,
             purchaseQuantity: item.packageQuantity,
             purchaseUnit: item.purchaseUnit,
+            originKind: "other",
           });
           if (!result.success) {
             failed += 1;

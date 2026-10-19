@@ -268,7 +268,19 @@ export async function postInvoiceStock(
       const bal = await tx.get(balRef);
       if (existingMove.exists) {
         reused = true;
-        before = asNumber(existingMove.data()?.quantityBefore);
+        const existing = existingMove.data() ?? {};
+        before = asNumber(existing.quantityBefore);
+        if (!existing.invoiceId || !existing.invoiceLineKey || !existing.invoiceLineId) {
+          tx.set(
+            moveRef,
+            sanitizeFirestoreData({
+              invoiceId: merged.id,
+              invoiceLineKey: line.key,
+              invoiceLineId: line.key,
+            }),
+            { merge: true }
+          );
+        }
         return;
       }
       before = bal.exists ? asNumber(bal.data()?.quantityBase) : 0;
@@ -285,6 +297,7 @@ export async function postInvoiceStock(
           supplierId: merged.supplierId || null,
           invoiceId: merged.id,
           invoiceLineKey: line.key,
+          invoiceLineId: line.key,
           lineTotalNet: net,
           lineTotalGross: gross,
           unitCost: qtyBase > 0 ? (net || gross) / qtyBase : 0,

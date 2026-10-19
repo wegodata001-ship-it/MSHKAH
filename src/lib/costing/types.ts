@@ -4,9 +4,12 @@ export type PriceRoundMode = "none" | "shekel" | "half" | "ninety" | "five";
 export type ProfitStatus = "good" | "watch" | "low" | "none";
 export type CustomCostType = "fixed" | "percent";
 
+export type IngredientOriginKind = "manual" | "invoice" | "purchase-file" | "other";
+
 export type CostingIngredient = {
   id: string;
   name: string;
+  originKind?: IngredientOriginKind;
   category?: string;
   purchasePrice: number;
   purchaseQuantity: number;
