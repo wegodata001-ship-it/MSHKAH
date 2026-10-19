@@ -127,6 +127,7 @@ export function CostingAdmin() {
   const [tab, setTab] = useState<Tab>("invoices");
   const [focusInvoiceId, setFocusInvoiceId] = useState<string | null>(null);
   const [focusInvoiceLineId, setFocusInvoiceLineId] = useState<string | null>(null);
+  const [startInvoiceIntake, setStartInvoiceIntake] = useState(false);
   const [ingredients, setIngredients] = useState<CostingIngredient[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [offers, setOffers] = useState<SupplierOffer[]>([]);
@@ -488,6 +489,13 @@ export function CostingAdmin() {
       setIngredientError(null);
       setIngredientForm(item);
     },
+    onAddDocument: () => {
+      setStartInvoiceIntake(true);
+      setHub("finance");
+      setTab("invoices");
+    },
+    startInvoiceIntake,
+    onInvoiceIntakeHandled: () => setStartInvoiceIntake(false),
   };
 
   return (

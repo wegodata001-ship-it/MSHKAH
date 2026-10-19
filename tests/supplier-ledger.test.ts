@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   balanceTone,
   buildSupplierLedger,
+  documentPayTag,
+  splitPackLabel,
   cashEntryId,
   compareLedgerRows,
   debtEffect,
@@ -261,5 +263,20 @@ describe("supplier ledger", () => {
     expect(supplierSearchMatch(row, "050123")).toBe(true);
     expect(supplierSearchMatch(row, "514123456")).toBe(true);
     expect(supplierSearchMatch(row, "מאפייה")).toBe(false);
+  });
+
+  it("labels a document without changing the open amount", () => {
+    expect(documentPayTag({ documentType: "credit", open: 10, settled: 0, today: "2026-10-19", countsAsDebt: false })).toBe("credit");
+    expect(documentPayTag({ documentType: "delivery", open: 0, settled: 0, today: "2026-10-19", countsAsDebt: false })).toBeNull();
+    expect(documentPayTag({ documentType: "invoice", open: 0, settled: 40, today: "2026-10-19", countsAsDebt: true })).toBe("paid");
+    expect(documentPayTag({ documentType: "invoice", open: 20, settled: 5, dueDate: "2026-10-01", today: "2026-10-19", countsAsDebt: true })).toBe("overdue");
+    expect(documentPayTag({ documentType: "invoice", open: 20, settled: 5, dueDate: "2026-11-01", today: "2026-10-19", countsAsDebt: true })).toBe("partial");
+    expect(documentPayTag({ documentType: "invoice", open: 20, settled: 0, dueDate: "2026-11-01", today: "2026-10-19", countsAsDebt: true })).toBe("open");
+  });
+
+  it("splits a pack label without rewriting the stored text", () => {
+    expect(splitPackLabel("5 kg")).toEqual({ quantity: "5", unit: "kg" });
+    expect(splitPackLabel("שקית 5 ק״ג")).toEqual({ quantity: "שקית 5 ק״ג" });
+    expect(splitPackLabel("  ")).toBeNull();
   });
 });

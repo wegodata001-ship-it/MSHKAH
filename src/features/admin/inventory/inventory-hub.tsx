@@ -470,6 +470,13 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
     }
     props.onFocusInvoiceHandled?.();
   }, [props.focusInvoiceId, props.focusInvoiceLineId, props.invoices, props.onFocusInvoiceHandled]);
+  useEffect(() => {
+    if (!props.startInvoiceIntake) return;
+    setDraft(null);
+    setSmartInvoice(null);
+    setSmart(true);
+    props.onInvoiceIntakeHandled?.();
+  }, [props.startInvoiceIntake, props.onInvoiceIntakeHandled]);
 
   if (transferInvoice) {
     return (
@@ -607,6 +614,9 @@ export type InventoryHubProps = {
   settingsVatRate: number;
   onToast: (message: string, variant?: "success" | "error") => void;
   onOpenInvoice?: (invoiceId: string, lineId?: string) => void;
+  onAddDocument?: () => void;
+  startInvoiceIntake?: boolean;
+  onInvoiceIntakeHandled?: () => void;
   onShowLedger?: () => void;
   onAddProduct: () => void;
   onEditProduct: (item: CostingIngredient) => void;

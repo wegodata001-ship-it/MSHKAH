@@ -562,6 +562,32 @@ export type SupplierProductRow = {
   history: { date: string; price: number; unit?: string }[];
 };
 
+export function splitPackLabel(pack?: string): { quantity: string; unit?: string } | null {
+  if (!pack?.trim()) return null;
+  const match = /^([\d.,]+)\s+([A-Za-z]+)$/.exec(pack.trim());
+  if (!match) return { quantity: pack.trim() };
+  return { quantity: match[1]!, unit: match[2] };
+}
+
+export type DocumentPayTag = "open" | "partial" | "paid" | "overdue" | "credit";
+
+export function documentPayTag(input: {
+  documentType?: string | null;
+  open: number;
+  settled: number;
+  dueDate?: string | null;
+  today: string;
+  countsAsDebt: boolean;
+}): DocumentPayTag | null {
+  if (input.documentType === "credit") return "credit";
+  if (!input.countsAsDebt) return null;
+  if (input.open <= 0.009) return "paid";
+  const due = input.dueDate?.slice(0, 10);
+  if (due && due < input.today) return "overdue";
+  if (input.settled > 0.009) return "partial";
+  return "open";
+}
+
 export function supplierProductRows(input: {
   supplierId: string;
   scope: Set<string>;
@@ -569,6 +595,7 @@ export function supplierProductRows(input: {
   maps: SupplierItemMap[];
   offers: SupplierOffer[];
   records: PurchasePriceRecord[];
+  includeHistory?: boolean;
 }): SupplierProductRow[] {
   const rows = new Map<string, SupplierProductRow>();
   const ensure = (name: string): SupplierProductRow => {
@@ -611,14 +638,18 @@ export function supplierProductRows(input: {
     row.ingredientId = record.productId;
     row.ingredientName = ingredient?.name || row.ingredientName;
     row.compareGroup = ingredient?.compareGroupName || row.compareGroup;
-    row.history.push({ date: record.purchaseDate, price: record.priceIncludingVat || record.unitCost, unit: record.unit });
+    if (input.includeHistory !== false) {
+      row.history.push({ date: record.purchaseDate, price: record.priceIncludingVat || record.unitCost, unit: record.unit });
+    }
     if (!row.date || record.purchaseDate >= row.date) {
       row.price = record.priceIncludingVat || record.unitCost;
       row.unit = record.unit;
       row.date = record.purchaseDate;
     }
   }
-  for (const row of rows.values()) row.history.sort((a, b) => b.date.localeCompare(a.date));
+  for (const row of rows.values()) {
+    if (row.history.length) row.history.sort((a, b) => b.date.localeCompare(a.date));
+  }
   return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name, "he"));
 }
 
