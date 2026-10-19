@@ -3,7 +3,10 @@ import { findCategoryByNormalizedName, mergeCategoryNames, normalizeCategoryName
 import { applyInvoiceUnitChange, invoiceLineBlockers, invoiceLineReviewStatus } from "@/lib/inventory/invoice-line-status";
 import { invoiceApproveBlockers, invoiceLineCareStatus, invoiceNeedsAttention } from "@/lib/inventory/invoice-intake";
 import { emptyInvoiceLine } from "@/lib/inventory/invoice-lines";
+import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
+import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import { invoicePurchaseMovementId, sanitizeInventoryDocId, selectStockPostLines, stockPostableLine } from "@/lib/inventory/invoice-stock-post";
+import { labeledPurchaseUnitPrice } from "@/lib/inventory/stock";
 import type { PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 
 function line(patch: Partial<PurchaseInvoiceLine> = {}): PurchaseInvoiceLine {
@@ -89,6 +92,43 @@ describe("invoice unit conversion", () => {
   it("converts kg to g without guessing pack contents", () => {
     expect(applyInvoiceUnitChange({ unit: "kg", quantity: 2 }, "g")).toEqual({ unit: "g", quantity: 2000 });
     expect(applyInvoiceUnitChange({ unit: "kg", quantity: 2 }, "unit")).toEqual({ unit: "unit" });
+  });
+});
+
+describe("photographed poultry invoice quantities", () => {
+  it("keeps shipping and packaging out of stock and converts kg once", () => {
+    const shawarma = line({
+      rawName: "שווארמה עוף טרי",
+      productId: "shawarma",
+      matchKind: "exact",
+      matchConfirmed: true,
+      quantity: 16.27,
+      unit: "kg",
+      unitPrice: 45,
+      netAmount: 732.15,
+      priceBeforeVat: 732.15,
+    });
+    const shipping = line({ rawName: "הובלה", lineType: "SHIPPING", skipInventory: true, quantity: 55.55, unit: "kg", productId: undefined });
+    const plastic = line({ rawName: "פלסטיק טרי גדול", lineType: "GENERAL", quantity: 7, unit: "unit", productId: undefined });
+    expect(invoiceLineReviewStatus(shipping).kind).toBe("ancillary");
+    expect(invoiceLineReviewStatus(shipping).labelKey).not.toBe("admin.inventory.smart.rowReady");
+    expect(invoiceLineReviewStatus(plastic).kind).toBe("packaging");
+    expect(stockPostableLine(shipping)).toBe(false);
+    expect(stockPostableLine(plastic)).toBe(false);
+    expect(stockPostableLine(shawarma)).toBe(true);
+    expect(invoiceLineQuantityBase(shawarma)).toBeCloseTo(16270);
+    expect(stockInDisplayUnit(16270, { baseUnit: "g", purchaseUnit: "kg" })).toBeCloseTo(16.27);
+    expect(
+      labeledPurchaseUnitPrice({
+        unit: "kg",
+        quantity: 16.27,
+        packageQuantity: 16.27,
+        priceBeforeVat: 732.15,
+        unitPriceNet: 45,
+        unitCost: 0.045,
+      })
+    ).toEqual({ amount: 45, unit: "kg" });
+    expect(invoiceLineBlockers([shawarma, shipping, plastic])).toEqual([]);
   });
 });
 

@@ -7,6 +7,10 @@ import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 
 export type InvoiceLineCareKind =
   | "ready"
+  | "posted"
+  | "ancillary"
+  | "packaging"
+  | "excluded"
   | "unsaved"
   | "missing-material"
   | "missing-pack"
@@ -24,12 +28,32 @@ export type InvoiceLineReviewStatus = {
   field: InvoiceLineStatusField;
 };
 
+export function isAncillaryInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType">): boolean {
+  return line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT";
+}
+
+export function isPackagingInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription" | "productId">): boolean {
+  if (line.productId) return false;
+  if (line.lineType === "GENERAL") return true;
+  const name = `${line.rawName || ""} ${line.originalDescription || ""}`;
+  return /פלסטיק|אריז|קרטון|שקית|ניילון/.test(name);
+}
+
 export function invoiceLineReviewStatus(
   line: PurchaseInvoiceLine,
   options?: { dirty?: boolean; productBase?: BaseUnit | null }
 ): InvoiceLineReviewStatus {
+  if (line.postedToStock) {
+    return { kind: "posted", ready: true, labelKey: "admin.inventory.smart.rowPosted", field: "product" };
+  }
+  if (isAncillaryInvoiceLine(line)) {
+    return { kind: "ancillary", ready: true, labelKey: "admin.inventory.smart.rowAncillary", field: "product" };
+  }
+  if (isPackagingInvoiceLine(line)) {
+    return { kind: "packaging", ready: true, labelKey: "admin.inventory.smart.rowPackaging", field: "product" };
+  }
   if (line.skipInventory) {
-    return { kind: "ready", ready: true, labelKey: "admin.inventory.smart.rowReady", field: "product" };
+    return { kind: "excluded", ready: true, labelKey: "admin.inventory.smart.rowExcluded", field: "product" };
   }
   if (!line.productId || !isConfirmedInvoiceMatch(line)) {
     return { kind: "missing-material", ready: false, labelKey: "admin.inventory.smart.rowMissingMaterial", field: "product" };

@@ -20,7 +20,7 @@ export type InvoiceIntakeBlocker = {
 
 export function invoiceLineCareStatus(line: PurchaseInvoiceLine, dirty = false): InvoiceLineCareStatus {
   const status = invoiceLineReviewStatus(line, { dirty });
-  if (status.kind === "ready") return "ok";
+  if (status.kind === "ready" || status.kind === "posted" || status.kind === "ancillary" || status.kind === "packaging" || status.kind === "excluded") return "ok";
   if (status.kind === "missing-unit") return "missing-unit";
   if (status.kind === "missing-material") return "needs-match";
   return status.kind === "unsaved" ? "ok" : "needs-match";

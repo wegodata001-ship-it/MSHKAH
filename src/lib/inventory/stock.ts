@@ -118,6 +118,21 @@ export function cheapestLastPurchase(
   })[0];
 }
 
+/** Invoice unit cost is stored per base unit (gram/ml). Show it on the purchase unit, once. */
+export function labeledPurchaseUnitPrice(record: Pick<PurchasePriceRecord, "unit" | "purchaseUnit" | "quantity" | "packageQuantity" | "purchaseQuantity" | "priceBeforeVat" | "unitPriceNet" | "unitCost">): { amount: number; unit: PurchaseUnit } | null {
+  const unit = record.purchaseUnit || record.unit;
+  if (!unit) return null;
+  const qty = record.purchaseQuantity || record.packageQuantity || record.quantity;
+  const net = record.priceBeforeVat;
+  if (record.unitPriceNet != null && record.unitPriceNet > 0 && qty > 0 && net > 0) {
+    const extended = record.unitPriceNet * qty;
+    if (Math.abs(extended - net) <= Math.max(0.05, net * 0.02)) return { amount: record.unitPriceNet, unit };
+  }
+  if (net > 0 && qty > 0) return { amount: net / qty, unit };
+  if (record.unitCost > 0) return { amount: record.unitCost * purchaseQuantityInBase(1, unit), unit };
+  return null;
+}
+
 export function latestPurchase(records: PurchasePriceRecord[], productId: string): PurchasePriceRecord | undefined {
   return records
     .filter((row) => row.productId === productId)

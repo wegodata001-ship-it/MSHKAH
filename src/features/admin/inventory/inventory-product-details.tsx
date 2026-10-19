@@ -18,6 +18,7 @@ import { canReverseMovement, stockInDisplayUnit } from "@/lib/inventory/issue";
 import {
   cheapestOffer,
   currentStockBase,
+  labeledPurchaseUnitPrice,
   latestPurchase,
   movementSignedBase,
   offerLastPurchaseCost,
@@ -121,7 +122,12 @@ export function InventoryProductDetails({
             <p>{t("admin.inventory.minStock")}: {product.minStock ?? "—"}</p>
             <p>{t("admin.inventory.barcode")}: {product.barcode || "—"}</p>
             <p>{t("admin.costing.notes")}: {product.notes || "—"}</p>
-            <p>{t("admin.inventory.lastPaid")}: {last ? formatIls(last.unitCost, 4) : "—"}</p>
+            <p>
+              {t("admin.inventory.lastPaid")}:{" "}
+              {last && labeledPurchaseUnitPrice(last)
+                ? `${formatIls(labeledPurchaseUnitPrice(last)!.amount)} ${t(last.unit === "kg" || last.purchaseUnit === "kg" ? "admin.compare.eachKg" : last.unit === "g" ? "admin.costing.perGram" : "admin.compare.eachUnit")}`
+                : "—"}
+            </p>
             <div>
               <p className="font-medium">{t("admin.inventory.linkedDishes")}</p>
               {dishes.length === 0 ? (

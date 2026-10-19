@@ -1,7 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { costPerBaseUnit } from "@/lib/costing/units";
+import { costPerBaseUnit, purchaseQuantityInBase } from "@/lib/costing/units";
 import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
-import { findDuplicateInvoice } from "@/lib/inventory/invoice-smart-match";
+import { findDuplicateInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import { syncInvoiceTotals } from "@/lib/inventory/invoice-finance";
 import { invoicePurchaseMovementId, selectStockPostLines } from "@/lib/inventory/invoice-stock-post";
@@ -9,7 +9,7 @@ import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/invent
 import { unitCostFromPackage } from "@/lib/inventory/stock";
 import { COLLECTIONS } from "@/lib/firebase/collections";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
-import type { PurchaseInvoice, PurchaseInvoiceLine, SupplierItemMap } from "@/lib/inventory/types";
+import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap } from "@/lib/inventory/types";
 
 function asNumber(value: unknown, fallback = 0): number {
   const n = typeof value === "number" ? value : Number(value);
@@ -206,6 +206,16 @@ export async function persistInvoiceDocument(
   return { id, invoice: saved };
 }
 
+async function resolveSupplierId(db: Firestore, invoice: PurchaseInvoice): Promise<string | undefined> {
+  if (invoice.supplierId) return invoice.supplierId;
+  const name = invoice.supplierName?.trim();
+  if (!name) return undefined;
+  const snap = await db.collection(COLLECTIONS.suppliers).get();
+  const suppliers = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Supplier);
+  const match = matchSupplier(name, invoice.supplierTaxId, suppliers);
+  return match.kind === "exact" && match.supplier ? match.supplier.id : undefined;
+}
+
 export async function postInvoiceStock(
   db: Firestore,
   invoice: PurchaseInvoice,
@@ -216,6 +226,8 @@ export async function postInvoiceStock(
   const liveSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(invoice.id).get();
   const live = liveSnap.exists ? ({ id: liveSnap.id, ...liveSnap.data() } as PurchaseInvoice) : invoice;
   const merged: PurchaseInvoice = { ...live, ...invoice, id: invoice.id, lines: invoice.lines?.length ? invoice.lines : live.lines };
+  const supplierId = await resolveSupplierId(db, merged);
+  if (supplierId) merged.supplierId = supplierId;
 
   const existingMoves = await db.collection(COLLECTIONS.inventoryMovements).where("invoiceId", "==", merged.id).get();
   const postedKeys = new Set(
@@ -246,6 +258,7 @@ export async function postInvoiceStock(
     }
     const net = line.netAmount ?? line.priceBeforeVat ?? 0;
     const gross = line.grossAmount ?? line.priceIncludingVat ?? 0;
+    const conversionFactor = line.conversionFactor && line.conversionFactor > 0 ? line.conversionFactor : line.unit ? purchaseQuantityInBase(1, line.unit) : null;
     let before = 0;
     let reused = false;
     await db.runTransaction(async (tx) => {
@@ -268,9 +281,12 @@ export async function postInvoiceStock(
           quantity: line.quantity,
           unit: line.unit,
           quantityBase: qtyBase,
+          conversionFactor,
           supplierId: merged.supplierId || null,
           invoiceId: merged.id,
           invoiceLineKey: line.key,
+          lineTotalNet: net,
+          lineTotalGross: gross,
           unitCost: qtyBase > 0 ? (net || gross) / qtyBase : 0,
           unitCostNet: qtyBase > 0 ? net / qtyBase : 0,
           unitCostGross: qtyBase > 0 ? gross / qtyBase : 0,
@@ -303,6 +319,7 @@ export async function postInvoiceStock(
           purchaseQuantity: line.quantity,
           purchaseUnit: line.unit,
           costPerBaseUnit: qtyBase > 0 ? (net || gross) / qtyBase : costPerBaseUnit(net || gross, line.quantity!, line.unit!),
+          supplier: merged.supplierName || null,
           lastSupplierId: merged.supplierId || null,
           lastReceivedAt: merged.receivedAt,
           updatedAt: now,

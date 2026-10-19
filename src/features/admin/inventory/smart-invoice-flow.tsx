@@ -10,6 +10,8 @@ import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-creat
 import { useT } from "@/components/providers/locale-provider";
 import { useAuthFetch } from "@/lib/auth/auth-fetch";
 import { formatIls } from "@/lib/costing/money";
+import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import type { CostingIngredient } from "@/lib/costing/types";
 import { finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
 import { invoiceCreateProductDraft, newInvoiceProductPatch } from "@/lib/inventory/invoice-line-review";
@@ -109,6 +111,7 @@ export function SmartInvoiceFlow({
   const [saving, setSaving] = useState(false);
   const [createKey, setCreateKey] = useState<string | null>(null);
   const [askStock, setAskStock] = useState(false);
+  const [receipt, setReceipt] = useState<PurchaseInvoice | null>(null);
   const [transfer, setTransfer] = useState(false);
   const [warnNoSupplier, setWarnNoSupplier] = useState(false);
   const [allowNoSupplier, setAllowNoSupplier] = useState(false);
@@ -661,27 +664,31 @@ export function SmartInvoiceFlow({
                   );
                   return;
                 }
-                const ready = { ...withId, id: finance.data, status: "saved" as const, stockStatus: "none" as const };
-                setInvoice(ready);
-                if (!ready.supplierId && !allowNoSupplier) {
-                  setAskStock(true);
-                  onToast(t("admin.finance.saved"));
-                  return;
+                let ready = { ...withId, id: finance.data, status: "saved" as const, stockStatus: "none" as const };
+                if (!ready.supplierId && ready.supplierName) {
+                  const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);
+                  if (match.kind === "exact" && match.supplier) {
+                    ready = { ...ready, supplierId: match.supplier.id, supplierName: match.supplier.name };
+                  }
                 }
-                const stock = await transferInvoiceLinesToStock(ready);
-                if (!stock.success) {
+                setInvoice(ready);
+                const stock = await transferInvoiceLinesToStock(ready, undefined, { skipFinanceSave: true });
+                const postedInvoice = stock.success && stock.data ? stock.data : undefined;
+                const postedCount = postedInvoice?.lines.filter((line) => line.postedToStock).length ?? 0;
+                if (!stock.success || !postedInvoice || (postedInvoice.stockStatus !== "posted" && postedInvoice.stockStatus !== "partial") || postedCount === 0) {
                   onToast(
-                    stock.error === "PERMISSION_DENIED"
+                    !stock.success && stock.error === "PERMISSION_DENIED"
                       ? t("admin.inventory.smart.permissionSystem")
-                      : stock.error === "NO_STOCK_LINES"
+                      : !stock.success && stock.error === "NO_STOCK_LINES"
                         ? t("admin.finance.noStockLines")
                         : t("admin.inventory.smart.stockNotPosted"),
                     "error"
                   );
                   return;
                 }
-                setInvoice(stock.data || { ...ready, stockStatus: "posted" });
-                onToast(t("admin.finance.stockTransferred"));
+                setInvoice(postedInvoice);
+                setReceipt(postedInvoice);
+                onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
               } finally {
                 setSaving(false);
               }
@@ -689,8 +696,65 @@ export function SmartInvoiceFlow({
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.approveStock")}
           </Button>
+          {invoice && (invoice.status === "saved" || invoice.status === "approved") && invoice.stockStatus !== "posted" && (
+            <Button
+              type="button"
+              variant="turquoise"
+              disabled={saving}
+              onClick={async () => {
+                if (saving) return;
+                setSaving(true);
+                try {
+                  let ready = invoice;
+                  if (!ready.supplierId && ready.supplierName) {
+                    const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);
+                    if (match.kind === "exact" && match.supplier) {
+                      ready = { ...ready, supplierId: match.supplier.id, supplierName: match.supplier.name };
+                    }
+                  }
+                  const stock = await transferInvoiceLinesToStock(ready, undefined, { skipFinanceSave: true });
+                  const postedInvoice = stock.success && stock.data ? stock.data : undefined;
+                  const postedCount = postedInvoice?.lines.filter((line) => line.postedToStock).length ?? 0;
+                  if (!stock.success || !postedInvoice || postedCount === 0) {
+                    onToast(t("admin.inventory.smart.stockNotPosted"), "error");
+                    return;
+                  }
+                  setInvoice(postedInvoice);
+                  setReceipt(postedInvoice);
+                  onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            >
+              {t("admin.inventory.postSavedStock")}
+            </Button>
+          )}
         </div>
       </div>
+      {receipt && (
+        <AdminCard title={t("admin.inventory.smart.rowPosted")}>
+          <p className="mb-2 text-sm text-coffee/70">
+            {t("admin.inventory.smart.postedSummary").replace("{count}", String(receipt.lines.filter((line) => line.postedToStock).length))}
+            {receipt.invoiceNumber ? ` · ${receipt.invoiceNumber}` : ""}
+          </p>
+          <ul className="space-y-1 text-sm">
+            {receipt.lines.filter((line) => line.postedToStock && line.quantityIn != null).map((line) => {
+              const product = ingredients.find((item) => item.id === line.productId);
+              const qty = product && line.quantityIn != null ? stockInDisplayUnit(line.quantityIn, product) : line.quantity;
+              const before = product && line.quantityBefore != null ? stockInDisplayUnit(line.quantityBefore, product) : line.quantityBefore;
+              const after = product && line.quantityAfter != null ? stockInDisplayUnit(line.quantityAfter, product) : line.quantityAfter;
+              const unit = product ? t(unitLabelKey(product.purchaseUnit)) : line.unit ?? "";
+              return (
+                <li key={line.key}>
+                  {product?.name || line.rawName}: {qty} {unit}
+                  {before != null && after != null ? ` · ${before} → ${after} ${unit}` : ""}
+                </li>
+              );
+            })}
+          </ul>
+        </AdminCard>
+      )}
       {askStock && invoice && (
         <AdminCard title={t("admin.finance.savedTitle")}>
           <p className="text-sm">

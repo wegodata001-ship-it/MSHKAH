@@ -48,21 +48,22 @@ export function InvoiceStockTransfer({
       skipFinanceSave,
     });
     setSaving(false);
-    if (!result.success) {
+    const postedCount = result.success ? result.data?.lines.filter((line) => line.postedToStock).length ?? 0 : 0;
+    if (!result.success || !result.data || (result.data.stockStatus !== "posted" && result.data.stockStatus !== "partial") || postedCount === 0) {
       onToast(
-        result.error === "PERMISSION_DENIED"
+        !result.success && result.error === "PERMISSION_DENIED"
           ? t("admin.inventory.smart.permissionSystem")
-          : result.error === "NO_STOCK_LINES"
+          : !result.success && result.error === "NO_STOCK_LINES"
             ? t("admin.finance.noStockLines")
-            : result.error === "ALREADY_POSTED"
+            : !result.success && result.error === "ALREADY_POSTED"
               ? t("admin.finance.alreadyPosted")
               : t("admin.inventory.smart.stockNotPosted"),
         "error"
       );
       return;
     }
-    if (result.data?.lines) setLines(result.data.lines);
-    onToast(t("admin.finance.stockTransferred"));
+    setLines(result.data.lines);
+    onToast(t("admin.inventory.smart.postedSummary").replace("{count}", String(postedCount)));
     onClose();
   };
 

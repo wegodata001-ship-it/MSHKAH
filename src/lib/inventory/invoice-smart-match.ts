@@ -228,7 +228,7 @@ export function buildReviewedInvoice(input: {
         lineType: line.lineType,
         lineNumber: line.lineNumber,
         rawText: line.rawText,
-        skipInventory: Boolean(line.lineType && line.lineType !== "INVENTORY_ITEM" && line.lineType !== "UNKNOWN"),
+        skipInventory: line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT",
       },
       computeVatRate
     );

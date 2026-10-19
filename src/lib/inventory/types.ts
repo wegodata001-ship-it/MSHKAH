@@ -173,6 +173,9 @@ export type InventoryMovement = {
   unitCostGross?: number;
   vatRate?: number;
   invoiceLineKey?: string;
+  conversionFactor?: number | null;
+  lineTotalNet?: number | null;
+  lineTotalGross?: number | null;
   quantityBefore?: number;
   quantityIn?: number;
   quantityAfter?: number;

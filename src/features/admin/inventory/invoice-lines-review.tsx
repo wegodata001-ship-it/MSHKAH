@@ -682,6 +682,10 @@ function CareBadge({ status }: { status: ReturnType<typeof invoiceLineReviewStat
   const t = useT();
   const styles = {
     ready: "bg-emerald-50 text-emerald-800",
+    posted: "bg-emerald-50 text-emerald-800",
+    ancillary: "bg-stone-100 text-stone-700",
+    packaging: "bg-amber-50 text-amber-900",
+    excluded: "bg-stone-100 text-stone-700",
     unsaved: "bg-amber-50 text-amber-900",
     "missing-material": "bg-stone-100 text-stone-700",
     "missing-pack": "bg-amber-50 text-amber-800",

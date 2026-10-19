@@ -11,8 +11,10 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { filterUnifiedIngredients } from "@/lib/inventory/ingredient-core";
 import { ComparePane } from "@/features/admin/inventory/compare-pane";
-import { cheapestOffer, currentStockBase, latestPurchase, movementSignedBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { cheapestOffer, currentStockBase, labeledPurchaseUnitPrice, latestPurchase, movementSignedBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
+import type { PurchaseUnit } from "@/lib/costing/types";
 import { IssueIngredientForm } from "@/features/admin/inventory/issue-ingredient-form";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import type {
@@ -39,6 +41,18 @@ import { InvoiceArchivePanel } from "@/features/admin/inventory/invoice-archive-
 import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
 import { StockCountPanel } from "@/features/admin/inventory/stock-count-panel";
 import { PurchaseListPanel } from "@/features/admin/inventory/purchase-list-panel";
+
+function priceUnitKey(unit: PurchaseUnit): string {
+  if (unit === "kg") return "admin.compare.eachKg";
+  if (unit === "g") return "admin.costing.perGram";
+  if (unit === "liter") return "admin.compare.eachLiter";
+  if (unit === "ml") return "admin.costing.perMl";
+  return "admin.compare.eachUnit";
+}
+
+function moneyWithUnit(amount: number, unit: PurchaseUnit, t: (key: string) => string): string {
+  return `${formatIls(amount)} ${t(priceUnitKey(unit))}`;
+}
 
 type InventoryPane = "products" | "ledger" | "alerts";
 type PurchasePane = "invoices" | "suppliers" | "compare";
@@ -81,7 +95,10 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         .slice()
         .sort((a, b) => (b.lastPurchasedAt ?? b.lastPurchaseDate ?? "").localeCompare(a.lastPurchasedAt ?? a.lastPurchaseDate ?? ""))[0];
       const cheap = cheapestOffer(itemOffers, item.baseUnit);
-      const supplierName = props.suppliers.find((s) => s.id === (item.lastSupplierId || last?.supplierId || lastOffer?.supplierId))?.name;
+      const supplierName =
+        props.suppliers.find((s) => s.id === (item.lastSupplierId || last?.supplierId || lastOffer?.supplierId))?.name ||
+        item.supplier?.trim() ||
+        "";
       const cheapName = props.suppliers.find((s) => s.id === cheap?.supplierId)?.name;
       const belowMin = item.minStock != null && current < item.minStock;
       const opening = props.movements
@@ -197,15 +214,19 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                     </button>
                   </td>
                   <td className="px-3 py-2 text-coffee/60">{row.item.category || "—"}</td>
-                  <td className="px-3 py-2 text-end">{row.opening.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-end">{row.incoming.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-end">{row.outgoing.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-end font-semibold">{row.current.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.opening, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
+                  <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.incoming, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
+                  <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.outgoing, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
+                  <td className="px-3 py-2 text-end font-semibold">{stockInDisplayUnit(row.current, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
                   <td className="px-3 py-2">{row.supplierName || "—"}</td>
-                  <td className="px-3 py-2 text-end">{row.last ? formatIls(row.last.unitCost, 4) : "—"}</td>
+                  <td className="px-3 py-2 text-end">
+                    {row.last && labeledPurchaseUnitPrice(row.last)
+                      ? moneyWithUnit(labeledPurchaseUnitPrice(row.last)!.amount, labeledPurchaseUnitPrice(row.last)!.unit, t)
+                      : "—"}
+                  </td>
                   <td className="px-3 py-2 text-end">
                     {row.cheap
-                      ? `${formatIls(offerNormalizedNet(row.cheap) ?? 0, 4)} — ${row.cheapName ?? ""}`
+                      ? `${moneyWithUnit((offerNormalizedNet(row.cheap) ?? 0) * purchaseQuantityInBase(1, row.item.purchaseUnit), row.item.purchaseUnit, t)} — ${row.cheapName ?? ""}`
                       : "—"}
                   </td>
                   <td className="px-3 py-2">
@@ -290,6 +311,7 @@ function LedgerPane({
 }) {
   const t = useT();
   const productId = selectedId ?? ingredients[0]?.id;
+  const product = ingredients.find((item) => item.id === productId);
   const rows = movements
     .filter((row) => row.productId === productId)
     .slice()
@@ -318,18 +340,18 @@ function LedgerPane({
               return (
                 <tr key={row.id} className="border-b border-beige-dark/10">
                   <td className="py-2">{row.receivedAt.slice(0, 10)}</td>
-                  <td className="py-2">{movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`}</td>
+                  <td className="py-2">{movementSignedBase(row) < 0 ? `-${row.quantity}` : `+${row.quantity}`} {row.unit ? t(unitLabelKey(row.unit)) : ""}</td>
                   <td className="py-2 text-coffee/60">
                     {t(`admin.inventory.movement.${row.type}`, row.type)} {row.reason ? `· ${t(`admin.inventory.reason.${row.reason}`)}` : ""} {supplier ? `· ${supplier}` : ""}
                   </td>
-                  <td className="py-2 text-end">{running.toFixed(2)}</td>
+                  <td className="py-2 text-end">{product ? `${stockInDisplayUnit(running, product).toFixed(2)} ${t(unitLabelKey(product.purchaseUnit))}` : running.toFixed(2)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
         <p className="mt-3 text-sm font-semibold">
-          {t("admin.inventory.balance")}: {currentStockBase(movements, productId ?? "").toFixed(2)}
+          {t("admin.inventory.balance")}: {product ? `${stockInDisplayUnit(currentStockBase(movements, productId ?? ""), product).toFixed(2)} ${t(unitLabelKey(product.purchaseUnit))}` : currentStockBase(movements, productId ?? "").toFixed(2)}
         </p>
       </AdminCard>
     </div>
