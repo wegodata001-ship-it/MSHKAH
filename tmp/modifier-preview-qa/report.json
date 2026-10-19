@@ -1,0 +1,129 @@
+{
+  "base": "http://localhost:3002",
+  "checks": [
+    {
+      "name": "Desktop menu loaded",
+      "pass": true,
+      "detail": "6 cards"
+    },
+    {
+      "name": "Has modifier preview on some cards",
+      "pass": true,
+      "detail": "with=1 without=5 sample=טעמי גלידה· اختيار حتى 2ונילקינדרפירות יער+5 خيارات"
+    },
+    {
+      "name": "No-modifiers cards exist (empty preview area omitted)",
+      "pass": true,
+      "detail": "without=5"
+    },
+    {
+      "name": "No +0.00 ₪ on free options",
+      "pass": true
+    },
+    {
+      "name": "Paid modifier uses existing formatPrice",
+      "pass": false,
+      "detail": "טעמי גלידה· اختيار حتى 2ונילקינדרפירות יער+5 خيارات"
+    },
+    {
+      "name": "Arabic: no Hebrew UI hint leak",
+      "pass": true
+    },
+    {
+      "name": "Required/choose-one hint seen",
+      "pass": true,
+      "detail": "one=false exact=false upTo=true"
+    },
+    {
+      "name": "pointer-events-none on preview",
+      "pass": true,
+      "detail": "none"
+    },
+    {
+      "name": "Desktop no horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "Preview font size readable band",
+      "pass": true,
+      "detail": "min=10px max=16px"
+    },
+    {
+      "name": "Click on preview opens product",
+      "pass": true,
+      "detail": "click at 196,861"
+    },
+    {
+      "name": "No N+1 spike on scroll",
+      "pass": true,
+      "detail": "listenRequests delta=0 total=22"
+    },
+    {
+      "name": "320px visual",
+      "pass": true,
+      "detail": "cards=6 tallest=291 overflowDoc=false overflowCard=false preview=true"
+    },
+    {
+      "name": "360px visual",
+      "pass": true,
+      "detail": "cards=6 tallest=226 overflowDoc=false overflowCard=false preview=true"
+    },
+    {
+      "name": "375px visual",
+      "pass": true,
+      "detail": "cards=6 tallest=203 overflowDoc=false overflowCard=false preview=true"
+    },
+    {
+      "name": "390px visual",
+      "pass": true,
+      "detail": "cards=6 tallest=170 overflowDoc=false overflowCard=false preview=true"
+    },
+    {
+      "name": "430px visual",
+      "pass": true,
+      "detail": "cards=6 tallest=148 overflowDoc=false overflowCard=false preview=true"
+    },
+    {
+      "name": "Hebrew locale preview",
+      "pass": true,
+      "detail": "טעמי גלידה· בחירה עד 2ונילקינדרפירות יער+5 אפשרויות"
+    },
+    {
+      "name": "Hebrew RTL dir",
+      "pass": true
+    },
+    {
+      "name": "English locale preview",
+      "pass": true,
+      "detail": "טעמי גלידה· Up to 2ונילקינדרפירות יער+5 options"
+    },
+    {
+      "name": "English: no Hebrew UI leak",
+      "pass": true
+    },
+    {
+      "name": "English LTR dir",
+      "pass": true
+    },
+    {
+      "name": "Truncation (+N options) observed",
+      "pass": true,
+      "detail": "FAIL only if catalog has no group with >3 options"
+    },
+    {
+      "name": "Cart add flow (modifier product)",
+      "pass": true,
+      "detail": "clicked add; cartKey=mishkat-cart-v2; hasData=true"
+    },
+    {
+      "name": "Cart page loads",
+      "pass": true
+    },
+    {
+      "name": "Checkout page loads",
+      "pass": true
+    }
+  ],
+  "passCount": 25,
+  "failCount": 1
+}

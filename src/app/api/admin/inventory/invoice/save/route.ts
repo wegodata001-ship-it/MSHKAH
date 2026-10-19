@@ -19,6 +19,9 @@ export async function POST(request: NextRequest) {
     if (message === "DUPLICATE_INVOICE") {
       return Response.json({ error: "DUPLICATE_INVOICE", code: "DUPLICATE_INVOICE" }, { status: 409 });
     }
+    if (message === "INVOICE_CANCELLED") {
+      return Response.json({ error: "INVOICE_CANCELLED", code: "INVOICE_CANCELLED" }, { status: 409 });
+    }
     return Response.json({ error: message, code: "SAVE_FAILED" }, { status: 500 });
   }
 }

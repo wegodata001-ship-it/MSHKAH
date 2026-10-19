@@ -8,6 +8,7 @@ import {
 } from "@/lib/email/notifications/customer-payment";
 import { enqueueNewOrderPrintJob } from "@/lib/print-jobs/jobs";
 import { paymentAudit } from "@/lib/payments/hyp/audit";
+import { awardLoyaltyPointsForOrder } from "@/lib/loyalty/order-hook";
 
 function taskStatus(result: { status: string }): "SENT" | "FAILED" | "SKIPPED" | "CREATED" {
   if (result.status === "sent" || result.status === "already_sent") return "SENT";
@@ -28,6 +29,9 @@ export async function runPaidPostPaymentTasks(orderId: string, paymentId: string
     enqueueNewOrderPrintJob(orderId, { ignoreAutoPrintGate: true }),
     notifyNewOrder(orderId),
     notifyCustomerPaymentSuccess(orderId),
+    // Loyalty award runs in parallel so a Firestore delay here doesn't block
+    // the admin email / print job. All side-effects are idempotent.
+    awardLoyaltyPointsForOrder(orderId),
   ]);
 
   const printResult = settled[0];
@@ -74,6 +78,14 @@ export async function runPaidPostPaymentTasks(orderId: string, paymentId: string
       providerErrorCode:
         customerResult.reason instanceof Error ? customerResult.reason.message : "customer_email_failed",
     });
+  }
+
+  const loyaltyResult = settled[3];
+  if (loyaltyResult.status === "fulfilled") {
+    post.loyalty = loyaltyResult.value.status.toUpperCase();
+  } else {
+    post.loyalty = "FAILED";
+    console.error("[loyalty] pipeline hook failed", loyaltyResult.reason);
   }
 
   await paymentRef

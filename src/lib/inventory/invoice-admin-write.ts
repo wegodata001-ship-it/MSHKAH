@@ -132,6 +132,13 @@ export async function persistInvoiceDocument(
   const id = synced.id || db.collection(COLLECTIONS.purchaseInvoices).doc().id;
   const currentSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(id).get();
   const current = currentSnap.exists ? (currentSnap.data() as PurchaseInvoice) : undefined;
+  // Don't overwrite a cancelled invoice via any save mode. The cancel flow
+  // locks the record; the only way out is to not re-save at all.
+  if (current?.status === "cancelled") {
+    const error = new Error("INVOICE_CANCELLED");
+    error.name = "INVOICE_CANCELLED";
+    throw error;
+  }
   const alreadyPosted = current?.stockStatus === "posted" && Boolean(current.inventoryPostedAt);
   const lines = synced.lines.map((line) => {
     const liveLine = current?.lines?.find((item) => item.key === line.key);
@@ -225,6 +232,12 @@ export async function postInvoiceStock(
   if (!invoice.id) throw new Error("Invoice required");
   const liveSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(invoice.id).get();
   const live = liveSnap.exists ? ({ id: liveSnap.id, ...liveSnap.data() } as PurchaseInvoice) : invoice;
+  // Refuse to re-post a cancelled invoice. Clients that still hold an old
+  // reference (e.g. "approve stock" tab opened before the cancel landed) will
+  // get a clean 400 instead of silently creating duplicate movements.
+  if (live.status === "cancelled") {
+    throw new Error("INVOICE_CANCELLED");
+  }
   const merged: PurchaseInvoice = { ...live, ...invoice, id: invoice.id, lines: invoice.lines?.length ? invoice.lines : live.lines };
   const supplierId = await resolveSupplierId(db, merged);
   if (supplierId) merged.supplierId = supplierId;

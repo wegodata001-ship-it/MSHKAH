@@ -1,0 +1,44 @@
+{
+  "status": 200,
+  "id": "prj_fzrYUzu7qXLmFZJG5IfKdOQS8DKZ",
+  "name": "mshkah",
+  "avatar": null,
+  "framework": "nextjs",
+  "link": {
+    "type": "github",
+    "repo": "MSHKAH",
+    "repoId": 1317252768,
+    "org": "wegodata001-ship-it",
+    "repoOwnerId": 278918428,
+    "gitCredentialId": "cred_26c231bcf9d5ecb50da8dccf8ea71a22e9905beb",
+    "productionBranch": "master",
+    "sourceless": true,
+    "createdAt": 1785415205304,
+    "updatedAt": 1785415205304,
+    "deployHooks": []
+  },
+  "targets": {
+    "production": {
+      "alias": [
+        "mishkatcafe.dev",
+        "mshkah.vercel.app",
+        "meshkah.vercel.app",
+        "menu.mishkatcafe.dev",
+        "portal.mishkatcafe.dev",
+        "mshkah-wegodata001-ship-its-projects.vercel.app"
+      ],
+      "url": "mshkah-mylus0ria-wegodata001-ship-its-projects.vercel.app",
+      "createdAt": 1791311711831
+    },
+    "preview": {
+      "alias": [
+        "mshkah-git-wego-wegodata001-ship-its-projects.vercel.app"
+      ],
+      "url": "mshkah-ksti8pelf-wegodata001-ship-its-projects.vercel.app",
+      "createdAt": 1791311697352
+    }
+  },
+  "productionBranch": "master",
+  "repo": "MSHKAH",
+  "aliases": []
+}

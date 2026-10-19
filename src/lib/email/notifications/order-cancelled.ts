@@ -9,6 +9,8 @@ import { firestoreOrderToEmailPayload } from "@/lib/email/order-email-payload";
 import { sendOrderCancelledNotificationEmail } from "@/lib/email/send";
 import type { NotifyResult } from "@/lib/email/notifications/new-order";
 import type { FirestoreOrder } from "@/types/firestore";
+import { refundOrderPoints } from "@/lib/loyalty/admin/members";
+import { toMinor } from "@/lib/loyalty/points-math";
 
 const FIELD = "orderCancelledEmail";
 
@@ -39,6 +41,22 @@ export async function notifyOrderCancelled(orderId: string): Promise<NotifyResul
       status: "failed",
       error: error instanceof Error ? error.message : "Failed to claim",
     };
+  }
+
+  // Reverse the loyalty points that were awarded when this order was paid.
+  // The ledger entry is idempotent (`refund:${orderId}`), so even if the
+  // admin flips the status back to cancelled a second time nothing moves.
+  try {
+    const refundedAmountMinor = toMinor(Number(data.total) || 0);
+    await refundOrderPoints(getAdminDb(), {
+      orderId,
+      refundedAmountMinor,
+    });
+  } catch (error) {
+    console.error("[loyalty] refund hook failed on cancel", {
+      orderId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
   }
 
   const result = await sendOrderCancelledNotificationEmail({

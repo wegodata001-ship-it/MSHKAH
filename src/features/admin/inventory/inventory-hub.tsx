@@ -38,7 +38,9 @@ import { PosZPanel } from "@/features/admin/inventory/pos-z-panel";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
 import { InventoryLedgerTable } from "@/features/admin/inventory/inventory-ledger-table";
-import { InvoiceArchivePanel } from "@/features/admin/inventory/invoice-archive-panel";
+import { InvoiceArchivePanel, type AddDocumentAction } from "@/features/admin/inventory/invoice-archive-panel";
+import { InvoiceCancelDialog } from "@/features/admin/inventory/invoice-cancel-dialog";
+import { cancelPurchaseInvoice } from "@/services/inventoryService";
 import { SmartInvoiceFlow, useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
 import { StockCountPanel } from "@/features/admin/inventory/stock-count-panel";
 import { PurchaseListPanel } from "@/features/admin/inventory/purchase-list-panel";
@@ -452,7 +454,28 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
   const [smart, setSmart] = useState(false);
   const [smartInvoice, setSmartInvoice] = useState<PurchaseInvoice | null>(null);
   const [transferInvoice, setTransferInvoice] = useState<PurchaseInvoice | null>(null);
+  const [invoiceToCancel, setInvoiceToCancel] = useState<PurchaseInvoice | null>(null);
   const [focusLineKey, setFocusLineKey] = useState<string | null>(null);
+  const [showPurchaseList, setShowPurchaseList] = useState(false);
+  function handleAddAction(action: AddDocumentAction) {
+    setFocusLineKey(null);
+    setSmartInvoice(null);
+    if (action === "manual") {
+      setShowPurchaseList(false);
+      setSmart(false);
+      setDraft("new");
+      return;
+    }
+    if (action === "import-list") {
+      setShowPurchaseList(true);
+      setSmart(false);
+      setDraft(null);
+      return;
+    }
+    setShowPurchaseList(false);
+    setDraft(null);
+    setSmart(true);
+  }
   useEffect(() => {
     if (!props.focusInvoiceId) return;
     const invoice = props.invoices.find((item) => item.id === props.focusInvoiceId);
@@ -516,6 +539,11 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
           setDraft(smartInvoice ?? "new");
           setSmartInvoice(null);
         }}
+        onRequestCancel={(invoice) => {
+          setSmart(false);
+          setSmartInvoice(null);
+          setInvoiceToCancel(invoice);
+        }}
       />
     );
   }
@@ -534,50 +562,65 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
     );
   }
 
-  return (
-    <div className="space-y-4">
-      <PurchaseListPanel {...props} />
-      <AdminCard title={t("admin.finance.purchases")}>
-        <p className="mb-3 text-sm text-coffee/60">{t("admin.finance.purchasesHint")}</p>
-        <div className="flex flex-wrap gap-2">
-          {ai?.configured && ai.reachable ? (
-            <Button type="button" variant="turquoise" onClick={() => setSmart(true)}>{t("admin.finance.scanInvoice")}</Button>
-          ) : ai?.configured ? (
-            <>
-              <p className="self-center text-xs text-coffee/50">{t("admin.inventory.smart.unavailable")}</p>
-              <Button type="button" variant="outline" onClick={() => setSmart(true)}>{t("admin.inventory.smart.retry")}</Button>
-            </>
-          ) : (
-            <p className="self-center text-xs text-coffee/50">{t("admin.inventory.smart.notConfigured")}</p>
-          )}
-          <Button type="button" variant="outline" onClick={() => setSmart(true)}>{t("admin.finance.uploadPdf")}</Button>
-          <Button type="button" variant="outline" onClick={() => setSmart(true)}>{t("admin.finance.uploadImage")}</Button>
-          <Button type="button" variant="outline" onClick={() => setSmart(true)}>{t("admin.inventory.smart.camera")}</Button>
-          <Button type="button" variant="outline" onClick={() => setDraft("new")}>
-            <Plus className="h-4 w-4" /> {t("admin.inventory.smart.manual")}
+  if (showPurchaseList) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-dark-brown">{t("admin.purchaseList.title")}</h2>
+          <Button type="button" variant="ghost" onClick={() => setShowPurchaseList(false)}>
+            {t("admin.inventory.hub.backToList")}
           </Button>
         </div>
-      </AdminCard>
-      <AdminCard title={t("admin.inventory.archive.title")}>
-        <InvoiceArchivePanel
-          invoices={props.invoices}
-          onOpen={(invoice) => {
-            setFocusLineKey(null);
-            if (invoice.sourceFile || invoice.scanStatus || invoice.aiProvider) {
-              setSmartInvoice(invoice);
-              setSmart(true);
-              return;
-            }
-            setDraft(invoice);
-          }}
-          onRescan={(invoice) => {
-            setFocusLineKey(null);
+        <PurchaseListPanel {...props} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <InvoiceArchivePanel
+        invoices={props.invoices}
+        suppliers={props.suppliers}
+        aiState={ai}
+        onAddAction={handleAddAction}
+        onOpen={(invoice) => {
+          setFocusLineKey(null);
+          if (invoice.sourceFile || invoice.scanStatus || invoice.aiProvider) {
             setSmartInvoice(invoice);
             setSmart(true);
-          }}
-          onTransfer={setTransferInvoice}
-        />
-      </AdminCard>
+            return;
+          }
+          setDraft(invoice);
+        }}
+        onRescan={(invoice) => {
+          setFocusLineKey(null);
+          setSmartInvoice(invoice);
+          setSmart(true);
+        }}
+        onTransfer={setTransferInvoice}
+        onDelete={(invoice) => setInvoiceToCancel(invoice)}
+      />
+      <InvoiceCancelDialog
+        invoice={invoiceToCancel}
+        movements={props.movements}
+        ingredients={props.ingredients}
+        onClose={() => setInvoiceToCancel(null)}
+        onConfirmed={(updated) => {
+          setInvoiceToCancel(null);
+          props.onToast(
+            t("admin.invoice.cancel.toast.success").replace(
+              "{number}",
+              updated.invoiceNumber || updated.id
+            ),
+            "success"
+          );
+        }}
+        cancelFn={async ({ invoiceId, reason }) => {
+          const result = await cancelPurchaseInvoice({ invoiceId, reason });
+          if (result.success) return { ok: true, invoice: result.data.invoice };
+          return { ok: false, code: result.error };
+        }}
+      />
     </div>
   );
 }

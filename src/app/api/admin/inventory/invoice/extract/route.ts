@@ -9,6 +9,7 @@ import {
   type InvoiceAiCode,
 } from "@/lib/ai/gemini-config";
 import { extractInvoiceWithGemini } from "@/lib/ai/gemini-invoice";
+import { prepareInvoiceImage, sniffImageOrPdfMime } from "@/lib/ai/image-prep";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { COLLECTIONS } from "@/lib/firebase/collections";
 import { mergeScannedInvoice, publicScanErrorCode } from "@/lib/inventory/invoice-archive";
@@ -23,7 +24,15 @@ export const maxDuration = 120;
 
 const MAX_BYTES = 12 * 1024 * 1024;
 
-function mimeFor(file: File): string | null {
+/**
+ * Resolve the request MIME in three stages, from most trustworthy to least:
+ *   1. magic bytes (fail-safe for WhatsApp blobs that lie about their type)
+ *   2. declared `file.type` from the browser
+ *   3. filename extension
+ */
+function mimeFor(file: File, bytes: Buffer): string | null {
+  const sniffed = sniffImageOrPdfMime(bytes);
+  if (sniffed) return sniffed;
   const type = file.type || "";
   const name = file.name.toLowerCase();
   if (type === "application/pdf" || name.endsWith(".pdf")) return "application/pdf";
@@ -32,7 +41,24 @@ function mimeFor(file: File): string | null {
   return null;
 }
 
-const inflightScans = new Map<string, string>();
+/**
+ * In-process concurrency guard with a self-cleaning TTL. The TTL matters on
+ * serverless: when a scan crashes between the `set` and the `finally`,
+ * stale keys would otherwise block retries forever.
+ */
+type InflightEntry = { requestId: string; startedAt: number };
+const INFLIGHT_TTL_MS = 150_000;
+const inflightScans = new Map<string, InflightEntry>();
+
+function isInflight(key: string): InflightEntry | null {
+  const entry = inflightScans.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.startedAt > INFLIGHT_TTL_MS) {
+    inflightScans.delete(key);
+    return null;
+  }
+  return entry;
+}
 
 function fail(
   code: InvoiceAiCode,
@@ -105,7 +131,8 @@ export async function POST(request: NextRequest) {
     if (file.size > MAX_BYTES) {
       return fail("FILE_TOO_LARGE", { message: "Invoice file is too large", requestId, fileSize: file.size, invoice: existing as PurchaseInvoice });
     }
-    mimeType = mimeFor(file);
+    const rawBytes = Buffer.from(await file.arrayBuffer());
+    mimeType = mimeFor(file, rawBytes);
     if (!mimeType) {
       return fail("UNSUPPORTED_FILE", {
         message: "Invoice file type is not supported",
@@ -115,7 +142,7 @@ export async function POST(request: NextRequest) {
         invoice: existing as PurchaseInvoice,
       });
     }
-    bytes = Buffer.from(await file.arrayBuffer());
+    bytes = rawBytes;
     fileName = file.name;
     fileHash = createHash("sha256").update(file.name).update(bytes).digest("hex");
     if (!sourceFile) {
@@ -208,7 +235,9 @@ export async function POST(request: NextRequest) {
   );
 
   const scanKey = existingId || fileHash || invoiceRef.id;
-  if (inflightScans.has(scanKey)) {
+  const existingInflight = isInflight(scanKey);
+  if (existingInflight) {
+    logExtract({ requestId, event: "inflight-blocked", scanKey, holder: existingInflight.requestId });
     return fail("PROVIDER_RATE_LIMIT", {
       message: "A scan is already running for this document.",
       requestId,
@@ -216,7 +245,7 @@ export async function POST(request: NextRequest) {
       invoice: { ...uploadedInvoice, id: invoiceRef.id, scanStatus: "scanning" } as PurchaseInvoice,
     });
   }
-  inflightScans.set(scanKey, requestId);
+  inflightScans.set(scanKey, { requestId, startedAt: Date.now() });
 
   if (!isGeminiConfigured()) {
     inflightScans.delete(scanKey);
@@ -239,9 +268,30 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const { extraction, rawText, model, httpStatus } = await extractInvoiceWithGemini({
+    // Normalise phone-photo EXIF rotation and limit extreme resolutions
+    // before handing off to Gemini. Any sharp failure falls back to the
+    // raw buffer so we never block a scan on preparation issues.
+    const prep = await prepareInvoiceImage({
       bytes,
-      mimeType: mimeType!,
+      declaredMime: mimeType!,
+      filename: fileName,
+    });
+    logExtract({
+      requestId,
+      event: "prepared",
+      sniffedMime: prep.mimeType,
+      declaredMime: mimeType,
+      originalBytes: prep.originalBytes,
+      preparedBytes: prep.bytes.length,
+      rotated: prep.rotated,
+      resized: prep.resized,
+      reencoded: prep.reencoded,
+      width: prep.width,
+      height: prep.height,
+    });
+    const { extraction, rawText, model, httpStatus } = await extractInvoiceWithGemini({
+      bytes: prep.bytes,
+      mimeType: prep.mimeType,
       requestId,
     });
     const [ingredientsSnap, suppliersSnap, offersSnap, recordsSnap, mapsSnap, invoicesSnap] = await Promise.all([

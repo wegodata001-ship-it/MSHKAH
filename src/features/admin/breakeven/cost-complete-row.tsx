@@ -3,298 +3,315 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useT } from "@/components/providers/locale-provider";
+import { useLocale, useT } from "@/components/providers/locale-provider";
+import { getProductDisplayName } from "@/lib/i18n/localized-content";
+import { AdminModal, AdminModalBody, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
+import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import {
+  componentRecipeLines,
+  parseUnitCost,
+  previewCostParts,
+  type CostPartDraft,
+  type CostPartSource,
+} from "@/lib/breakeven/product-cost";
+import type { BreakEvenVatBasis, ProductContribution } from "@/lib/breakeven/types";
 import { formatIls } from "@/lib/costing/money";
-import { comboRecipeLines, findResaleCandidates } from "@/lib/breakeven/product-cost";
-import type { ProductContribution, ProductCostKind } from "@/lib/breakeven/types";
-import type { CostingIngredient, DishRecipe, PurchaseUnit, RecipeLine } from "@/lib/costing/types";
-import type { Product } from "@/types";
-import { completeProductCost } from "@/services/costingService";
 import { recipeForProduct } from "@/lib/costing/model";
+import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
+import { completeProductCost } from "@/services/costingService";
+import type { Product } from "@/types";
 
-type Kind = ProductCostKind;
+function fill(template: string, vars: Record<string, string>) {
+  return Object.entries(vars).reduce((text, [key, value]) => text.replaceAll(`{${key}}`, value), template);
+}
 
-export function CostCompletePanel({
+const UNITS: PurchaseUnit[] = ["unit", "g", "kg", "ml", "liter"];
+
+function blankPart(): CostPartDraft {
+  return { source: "ingredient", refId: "", quantity: "", unit: "unit" };
+}
+
+export function CostCompleteDialog({
   row,
   products,
   recipes,
   ingredients,
+  vatBasis,
+  onClose,
   onSaved,
 }: {
   row: ProductContribution;
   products: Product[];
   recipes: DishRecipe[];
   ingredients: CostingIngredient[];
+  vatBasis: BreakEvenVatBasis;
+  onClose: () => void;
   onSaved: (message: string) => void;
 }) {
   const t = useT();
-  const existingRecipe = recipeForProduct(recipes, row.productId);
-  const candidates = useMemo(
-    () => findResaleCandidates(row.productId, row.name, ingredients, products.find((item) => item.id === row.productId)),
-    [row.productId, row.name, ingredients, products]
+  const [amount, setAmount] = useState("");
+  const [partsOpen, setPartsOpen] = useState(false);
+  const [parts, setParts] = useState<CostPartDraft[]>([blankPart()]);
+  const [saving, setSaving] = useState<"unit" | "parts" | null>(null);
+  const [unitError, setUnitError] = useState<string | null>(null);
+  const [partError, setPartError] = useState<string | null>(null);
+  const catalog = useMemo(() => products.map((item) => ({ id: item.id, name: item.name_he || item.name_ar || item.name_en || item.id })), [products]);
+  const preview = useMemo(
+    () => previewCostParts(parts, ingredients, recipes, catalog, row.productId),
+    [parts, ingredients, recipes, catalog, row.productId]
   );
-  const defaultKind: Kind =
-    row.costKind ??
-    (existingRecipe ? "recipe" : candidates.exact[0] ? "resale" : "recipe");
-  const [kind, setKind] = useState<Kind>(defaultKind);
-  const [recipeId, setRecipeId] = useState(existingRecipe?.id ?? "");
-  const [ingredientId, setIngredientId] = useState(candidates.exact[0]?.id ?? candidates.suggest[0]?.id ?? "");
-  const [packPrice, setPackPrice] = useState(candidates.exact[0]?.purchasePrice ? String(candidates.exact[0].purchasePrice) : "");
-  const [packQty, setPackQty] = useState(candidates.exact[0]?.purchaseQuantity ? String(candidates.exact[0].purchaseQuantity) : "");
-  const [packUnit, setPackUnit] = useState<PurchaseUnit>(candidates.exact[0]?.purchaseUnit ?? "unit");
-  const [lines, setLines] = useState<RecipeLine[]>(existingRecipe?.ingredients ?? [{ ingredientId: "", quantity: 0, unit: "unit" }]);
-  const [combo, setCombo] = useState<{ productId: string; quantity: number }[]>([{ productId: "", quantity: 1 }]);
-  const [estimateAmount, setEstimateAmount] = useState("");
-  const [estimateNote, setEstimateNote] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const basis = t(`admin.breakeven.vatNote.${vatBasis}`);
+  const current = !row.costMissing && row.foodCost != null;
 
-  const unused = row.unusedExisting ?? [];
-
-  async function save() {
-    setSaving(true);
-    setError(null);
-    const builtCombo = kind === "combo" ? comboRecipeLines(combo.filter((item) => item.productId), recipes, ingredients) : null;
-    if (builtCombo?.gaps.length) {
-      setSaving(false);
-      setError(t(`admin.breakeven.gap.${builtCombo.gaps[0]!.code}`));
+  async function saveUnit() {
+    const cost = parseUnitCost(amount);
+    if (cost == null) {
+      setUnitError(t("admin.breakeven.cost.empty"));
       return;
     }
+    setSaving("unit");
+    setUnitError(null);
+    const ownRecipe = recipeForProduct(recipes, row.productId);
     const result = await completeProductCost({
       productId: row.productId,
-      kind,
+      kind: "estimate",
       sellingPrice: row.sellingPrice,
       ingredients,
-      existingRecipeId: kind === "recipe" ? recipeId || existingRecipe?.id : undefined,
-      lines:
-        kind === "recipe"
-          ? lines.filter((line) => line.ingredientId && Number(line.quantity) > 0)
-          : kind === "combo"
-            ? builtCombo?.lines
-            : undefined,
-      ingredientId: kind === "resale" ? ingredientId : undefined,
-      packPrice: kind === "resale" ? Number(packPrice) || undefined : undefined,
-      packQuantity: kind === "resale" ? Number(packQty) || undefined : undefined,
-      packUnit: kind === "resale" ? packUnit : undefined,
-      estimateAmount: kind === "estimate" ? Number(estimateAmount) : undefined,
-      estimateNote: kind === "estimate" ? estimateNote : undefined,
+      existingRecipeId: ownRecipe?.id,
+      estimateAmount: cost,
+      estimateNote: "manual",
     });
-    setSaving(false);
+    setSaving(null);
     if (!result.success) {
-      setError(t("admin.breakeven.saveFailed"));
+      setUnitError(result.error || t("admin.breakeven.saveFailed"));
+      return;
+    }
+    onSaved(t("admin.breakeven.costSaved"));
+  }
+
+  async function saveParts() {
+    if (preview.total == null) {
+      setPartError(t("admin.breakeven.cost.noPartial"));
+      return;
+    }
+    const lines = componentRecipeLines(parts, {
+      recipes,
+      ingredients,
+      products,
+      currentProductId: row.productId,
+    });
+    if (lines.length !== preview.rows.length) {
+      setPartError(t("admin.breakeven.cost.noPartial"));
+      return;
+    }
+    if (!lines.length) {
+      setPartError(t("admin.breakeven.cost.noPartial"));
+      return;
+    }
+    setSaving("parts");
+    setPartError(null);
+    const ownRecipe = recipeForProduct(recipes, row.productId);
+    const result = await completeProductCost({
+      productId: row.productId,
+      kind: lines.some((line) => line.subRecipeId) ? "combo" : "recipe",
+      sellingPrice: row.sellingPrice,
+      ingredients,
+      existingRecipeId: ownRecipe?.id,
+      lines,
+    });
+    setSaving(null);
+    if (!result.success) {
+      setPartError(result.error || t("admin.breakeven.saveFailed"));
       return;
     }
     onSaved(t("admin.breakeven.costSaved"));
   }
 
   return (
-    <div className="space-y-3 rounded-xl bg-beige/30 p-3 text-sm">
-      {(row.costGaps ?? []).map((gap, index) => (
-        <p key={`${gap.code}-${index}`} className="text-amber-900">
-          {t(`admin.breakeven.gap.${gap.code}`)}
-          {gap.name ? ` — ${gap.name}` : ""}
+    <AdminModal open onOpenChange={(next) => !next && onClose()} size={partsOpen ? "md" : "sm"}>
+      <AdminModalHeader onClose={onClose}>
+        <AdminModalTitle>{fill(t("admin.breakeven.cost.title"), { name: row.name })}</AdminModalTitle>
+      </AdminModalHeader>
+      <AdminModalBody className="space-y-4">
+        <p className="text-sm text-dark-brown">
+          {t("admin.costing.sellingPrice")}: {formatIls(row.sellingPrice)}
         </p>
-      ))}
-      {unused.map((item) => (
-        <div key={`${item.kind}-${item.id}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-warm-white px-2 py-1.5">
-          <p>
-            {t(`admin.breakeven.existing${item.kind === "purchase" ? "Purchase" : item.kind === "recipe" ? "Recipe" : item.kind === "pos-cost" ? "Purchase" : "Ingredient"}`)}
-            {item.kind !== "pos-cost" ? `: ${item.name}` : ""}
-            {item.kind === "pos-cost" ? ` · ${t("admin.breakeven.posCostKept")}` : ""}
+        <p className="text-xs text-coffee/60">{basis}</p>
+        {current ? (
+          <p className="rounded-xl bg-beige/40 px-3 py-2 text-sm">
+            {t("admin.breakeven.cost.current")}: {formatIls(row.foodCost ?? 0)}
+            {row.costBasis ? ` · ${t(`admin.breakeven.basis.${row.costBasis}`)}` : ""}
           </p>
-          {item.kind !== "pos-cost" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                if (item.kind === "recipe") {
-                  setKind("recipe");
-                  setRecipeId(item.id);
-                } else {
-                  setKind("resale");
-                  setIngredientId(item.id);
-                  const found = ingredients.find((rowItem) => rowItem.id === item.id);
-                  if (found) {
-                    setPackPrice(String(found.purchasePrice || ""));
-                    setPackQty(String(found.purchaseQuantity || ""));
-                    setPackUnit(found.purchaseUnit);
-                  }
-                }
-              }}
-            >
-              {t("admin.breakeven.useExisting")}
-            </Button>
-          )}
-        </div>
-      ))}
-      {row.posCost != null && !unused.some((item) => item.kind === "pos-cost") && (
-        <p className="text-xs text-coffee/60">{t("admin.breakeven.posCostKept")}: {formatIls(row.posCost)}</p>
-      )}
-
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {(["recipe", "resale", "combo", "estimate"] as Kind[]).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={`rounded-xl border px-3 py-2 text-start ${kind === item ? "border-turquoise bg-turquoise/10" : "border-beige-dark/20 bg-warm-white"}`}
-            onClick={() => setKind(item)}
-          >
-            {t(`admin.breakeven.costKind.${item}`)}
-          </button>
-        ))}
-      </div>
-
-      {kind === "recipe" && (
-        <div className="space-y-2">
+        ) : null}
+        <div className="space-y-1 text-sm">
+          <p className="font-medium text-dark-brown">{t("admin.breakeven.cost.ask")}</p>
           <label className="block space-y-1">
-            <span>{t("admin.breakeven.pickRecipe")}</span>
-            <select
-              className="h-10 w-full rounded-xl border border-beige-dark/40 px-2"
-              value={recipeId}
-              onChange={(e) => {
-                setRecipeId(e.target.value);
-                const chosen = recipes.find((item) => item.id === e.target.value);
-                if (chosen) setLines(chosen.ingredients);
+            <span>{t("admin.breakeven.cost.unit")}</span>
+            <Input
+              className="text-base"
+              inputMode="decimal"
+              type="number"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setUnitError(null);
               }}
-            >
-              <option value="">{t("admin.breakeven.pickRecipe")}</option>
-              {recipes.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {products.find((product) => product.id === item.productId)?.name_he || item.productId}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          <p className="text-xs text-coffee/60">{t("admin.breakeven.recipeLines")}</p>
-          {lines.map((line, index) => (
-            <div key={`${line.ingredientId}-${index}`} className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <select
-                className="h-10 rounded-xl border border-beige-dark/40 px-2"
-                value={line.ingredientId}
-                onChange={(e) =>
-                  setLines((current) => current.map((item, i) => (i === index ? { ...item, ingredientId: e.target.value } : item)))
-                }
-              >
-                <option value="">{t("admin.breakeven.pickIngredient")}</option>
-                {ingredients.map((item) => (
+          <p className="text-xs text-coffee/55">{t("admin.breakeven.basis.estimate")}</p>
+        </div>
+        {unitError ? <p className="text-sm text-red-700">{unitError}</p> : null}
+        <Button type="button" variant="turquoise" className="w-full sm:w-auto" disabled={saving != null} onClick={() => void saveUnit()}>
+          {t("admin.breakeven.cost.save")}
+        </Button>
+
+        <details
+          className="rounded-xl border border-beige-dark/20 px-3 py-2"
+          onToggle={(event) => setPartsOpen((event.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="cursor-pointer text-sm font-medium text-turquoise">{t("admin.breakeven.cost.byParts")}</summary>
+          {partsOpen ? (
+            <div className="mt-3 space-y-3">
+              <p className="text-xs text-coffee/55">{basis}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-sm">
+                  <thead>
+                    <tr className="text-start text-xs text-coffee/60">
+                      <th className="p-1 font-medium">{t("admin.breakeven.cost.part")}</th>
+                      <th className="p-1 font-medium">{t("admin.breakeven.cost.qtyPer")}</th>
+                      <th className="p-1 font-medium">{t("admin.breakeven.cost.unitCol")}</th>
+                      <th className="p-1 font-medium">{t("admin.breakeven.cost.calculated")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parts.map((part, index) => (
+                      <PartRow
+                        key={index}
+                        part={part}
+                        ingredients={ingredients}
+                        recipes={recipes}
+                        products={products}
+                        currentProductId={row.productId}
+                        onChange={(next) => setParts((current) => current.map((item, i) => (i === index ? next : item)))}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={() => setParts((current) => [...current, blankPart()])}>
+                {t("admin.breakeven.cost.addPart")}
+              </Button>
+              {preview.rows.some((item) => item.problem) ? (
+                <div className="space-y-1">
+                  {preview.rows.filter((item) => item.problem).map((item, index) => (
+                    <p key={`${item.name}-${index}`} className="text-sm text-red-700">
+                      {item.problem === "qty"
+                        ? fill(t("admin.breakeven.cost.missingQty"), { name: item.name || t("admin.breakeven.cost.part") })
+                        : fill(t("admin.breakeven.cost.missingPart"), { name: item.name || t("admin.breakeven.cost.part") })}
+                    </p>
+                  ))}
+                  <p className="text-xs text-coffee/60">{t("admin.breakeven.cost.noPartial")}</p>
+                </div>
+              ) : preview.total != null ? (
+                <p className="text-sm font-semibold">{t("admin.breakeven.cost.summary")}: {formatIls(preview.total)}</p>
+              ) : null}
+              {partError ? <p className="text-sm text-red-700">{partError}</p> : null}
+              <Button type="button" variant="turquoise" className="w-full sm:w-auto" disabled={saving != null || preview.total == null} onClick={() => void saveParts()}>
+                {t("admin.breakeven.cost.saveParts")}
+              </Button>
+            </div>
+          ) : null}
+        </details>
+      </AdminModalBody>
+    </AdminModal>
+  );
+}
+
+function PartRow({
+  part,
+  ingredients,
+  recipes,
+  products,
+  currentProductId,
+  onChange,
+}: {
+  part: CostPartDraft;
+  ingredients: CostingIngredient[];
+  recipes: DishRecipe[];
+  products: Product[];
+  currentProductId: string;
+  onChange: (next: CostPartDraft) => void;
+}) {
+  const t = useT();
+  const { locale } = useLocale();
+  const catalog = products.map((item) => ({ id: item.id, name: getProductDisplayName(item, locale) || item.id }));
+  const rowPreview = previewCostParts([part], ingredients, recipes, catalog, currentProductId).rows[0];
+  const portion = part.source === "recipe" || part.source === "product";
+  return (
+    <tr className="align-top">
+      <td className="p-1">
+        <select
+          className="mb-1 h-10 w-full rounded-xl border border-beige-dark/40 bg-white px-2 text-base"
+          value={part.source}
+          aria-label={t("admin.breakeven.cost.part")}
+          onChange={(event) => onChange({ ...part, source: event.target.value as CostPartSource, refId: "", unit: event.target.value === "ingredient" ? part.unit : "unit" })}
+        >
+          <option value="ingredient">{t("admin.breakeven.cost.source.ingredient")}</option>
+          <option value="product">{t("admin.breakeven.cost.source.product")}</option>
+          <option value="recipe">{t("admin.breakeven.cost.source.recipe")}</option>
+        </select>
+        <select
+          className="h-10 w-full rounded-xl border border-beige-dark/40 bg-white px-2 text-base"
+          value={part.refId}
+          aria-label={part.source === "recipe" ? t("admin.breakeven.cost.source.recipe") : part.source === "product" ? t("admin.breakeven.cost.source.product") : t("admin.breakeven.cost.source.ingredient")}
+          onChange={(event) => {
+            const refId = event.target.value;
+            const ingredient = ingredients.find((item) => item.id === refId);
+            onChange({ ...part, refId, unit: portion ? "unit" : ingredient?.purchaseUnit || part.unit });
+          }}
+        >
+          <option value="">{t("admin.breakeven.cost.part")}</option>
+          {part.source === "recipe"
+            ? recipes.filter((item) => item.productId !== currentProductId).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {catalog.find((product) => product.id === item.productId)?.name || item.productId}
+                </option>
+              ))
+            : part.source === "product"
+              ? products.filter((item) => item.id !== currentProductId).map((item) => (
+                  <option key={item.id} value={item.id}>{getProductDisplayName(item, locale) || item.id}</option>
+                ))
+              : ingredients.filter((item) => item.active !== false).map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
-              </select>
-              <Input
-                type="number"
-                placeholder={t("admin.breakeven.qty")}
-                value={line.quantity || ""}
-                onChange={(e) =>
-                  setLines((current) => current.map((item, i) => (i === index ? { ...item, quantity: Number(e.target.value) || 0 } : item)))
-                }
-              />
-              <select
-                className="h-10 rounded-xl border border-beige-dark/40 px-2"
-                value={line.unit}
-                onChange={(e) =>
-                  setLines((current) => current.map((item, i) => (i === index ? { ...item, unit: e.target.value as PurchaseUnit } : item)))
-                }
-              >
-                <option value="unit">unit</option>
-                <option value="g">g</option>
-                <option value="kg">kg</option>
-                <option value="ml">ml</option>
-                <option value="liter">liter</option>
-              </select>
-            </div>
-          ))}
-          <Button size="sm" variant="outline" onClick={() => setLines((current) => [...current, { ingredientId: "", quantity: 0, unit: "unit" }])}>
-            {t("admin.breakeven.addRecipeLine")}
-          </Button>
-        </div>
-      )}
-
-      {kind === "resale" && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="space-y-1">
-            <span>{t("admin.breakeven.pickIngredient")}</span>
-            <select
-              className="h-10 w-full rounded-xl border border-beige-dark/40 px-2"
-              value={ingredientId}
-              onChange={(e) => {
-                setIngredientId(e.target.value);
-                const found = ingredients.find((item) => item.id === e.target.value);
-                if (found) {
-                  setPackPrice(String(found.purchasePrice || ""));
-                  setPackQty(found.purchaseQuantity > 1 ? String(found.purchaseQuantity) : "");
-                  setPackUnit(found.purchaseUnit);
-                }
-              }}
-            >
-              <option value="">{t("admin.breakeven.pickIngredient")}</option>
-              {ingredients.map((item) => (
-                <option key={item.id} value={item.id}>{item.name}</option>
-              ))}
-            </select>
-          </label>
-          <label className="space-y-1">
-            <span>{t("admin.breakeven.packPrice")}</span>
-            <Input type="number" value={packPrice} onChange={(e) => setPackPrice(e.target.value)} />
-          </label>
-          <label className="space-y-1">
-            <span>{t("admin.breakeven.packQty")}</span>
-            <Input type="number" value={packQty} onChange={(e) => setPackQty(e.target.value)} />
-            <span className="text-[11px] text-coffee/55">{t("admin.breakeven.noGuessPack")}</span>
-          </label>
-        </div>
-      )}
-
-      {kind === "combo" && (
-        <div className="space-y-2">
-          <p className="text-xs text-coffee/60">{t("admin.breakeven.comboLines")}</p>
-          {combo.map((line, index) => (
-            <div key={`${line.productId}-${index}`} className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <select
-                className="h-10 rounded-xl border border-beige-dark/40 px-2"
-                value={line.productId}
-                onChange={(e) => setCombo((current) => current.map((item, i) => (i === index ? { ...item, productId: e.target.value } : item)))}
-              >
-                <option value="">{t("admin.breakeven.dish")}</option>
-                {products.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name_he || item.name_en}</option>
-                ))}
-              </select>
-              <Input
-                type="number"
-                placeholder={t("admin.breakeven.qty")}
-                value={line.quantity || ""}
-                onChange={(e) =>
-                  setCombo((current) => current.map((item, i) => (i === index ? { ...item, quantity: Number(e.target.value) || 0 } : item)))
-                }
-              />
-            </div>
-          ))}
-          <Button size="sm" variant="outline" onClick={() => setCombo((current) => [...current, { productId: "", quantity: 1 }])}>
-            {t("admin.breakeven.addComboLine")}
-          </Button>
-        </div>
-      )}
-
-      {kind === "estimate" && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="space-y-1">
-            <span>{t("admin.breakeven.estimateAmount")}</span>
-            <Input type="number" value={estimateAmount} onChange={(e) => setEstimateAmount(e.target.value)} />
-          </label>
-          <label className="space-y-1">
-            <span>{t("admin.breakeven.estimateNote")}</span>
-            <Input value={estimateNote} onChange={(e) => setEstimateNote(e.target.value)} />
-          </label>
-          <p className="text-xs text-coffee/55 sm:col-span-2">
-            {t("admin.breakeven.estimateAt")}: {new Date().toISOString().slice(0, 10)} · {t("admin.breakeven.basis.estimate")}
-          </p>
-        </div>
-      )}
-
-      {error && <p className="text-sm text-red-700">{error}</p>}
-      <Button variant="turquoise" disabled={saving} onClick={save}>
-        {t("admin.breakeven.saveUpdate")}
-      </Button>
-    </div>
+        </select>
+      </td>
+      <td className="p-1">
+        <Input className="text-base" inputMode="decimal" type="number" min="0" step="any" aria-label={t("admin.breakeven.cost.qtyPer")} value={part.quantity} onChange={(event) => onChange({ ...part, quantity: event.target.value })} />
+      </td>
+      <td className="p-1">
+        {portion ? (
+          <p className="flex h-10 items-center text-sm text-coffee/70">{t("admin.breakeven.cost.portion")}</p>
+        ) : (
+          <select
+            className="h-10 w-full rounded-xl border border-beige-dark/40 bg-white px-2 text-base"
+            value={part.unit}
+            aria-label={t("admin.breakeven.cost.unitCol")}
+            onChange={(event) => onChange({ ...part, unit: event.target.value })}
+          >
+            {UNITS.map((unit) => (
+              <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>
+            ))}
+          </select>
+        )}
+      </td>
+      <td className="p-1">
+        <p className="flex h-10 items-center whitespace-nowrap text-sm">
+          {rowPreview?.cost == null ? "—" : formatIls(rowPreview.cost)}
+        </p>
+      </td>
+    </tr>
   );
 }

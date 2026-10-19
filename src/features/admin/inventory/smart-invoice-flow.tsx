@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { Camera, FileUp, Loader2, Upload } from "lucide-react";
+import { Camera, FileUp, Loader2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -90,6 +90,7 @@ export function SmartInvoiceFlow({
   onManual,
   onOpenExisting,
   onViewInventory,
+  onRequestCancel,
 }: {
   ingredients: CostingIngredient[];
   suppliers: Supplier[];
@@ -104,10 +105,18 @@ export function SmartInvoiceFlow({
   onManual: () => void;
   onOpenExisting?: (invoice: PurchaseInvoice) => void;
   onViewInventory?: () => void;
+  /**
+   * Opens the invoice-cancellation dialog in the parent. The parent is
+   * responsible for threading inventory movements into the dialog, so the
+   * detail screen only has to surface the trash button here.
+   */
+  onRequestCancel?: (invoice: PurchaseInvoice) => void;
 }) {
   const t = useT();
   const authFetch = useAuthFetch();
   const [busy, setBusy] = useState(false);
+  const [scanPhase, setScanPhase] = useState<"idle" | "preparing" | "scanning" | "processing">("idle");
+  const [lastRequestId, setLastRequestId] = useState<string | null>(null);
   const scanning = useRef(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -173,15 +182,23 @@ export function SmartInvoiceFlow({
     if (!nextFile && !invoiceId) return;
     scanning.current = true;
     setBusy(true);
+    setScanPhase(nextFile ? "preparing" : "scanning");
     setError(null);
+    setLastRequestId(null);
     setRetryAfterSeconds(null);
     try {
       const body = new FormData();
       if (nextFile && !invoiceId) body.set("file", nextFile);
       if (invoiceId) body.set("invoiceId", invoiceId);
       if (nextFile && invoiceId && !invoice?.sourceFile) body.set("file", nextFile);
+      // Flip to "scanning" once the body is prepared; "processing" is set
+      // right after the response lands and before we merge lines, so staff
+      // see what is actually happening at each stage.
+      setScanPhase("scanning");
       const response = await authFetch("/api/admin/inventory/invoice/extract", { method: "POST", body });
+      setScanPhase("processing");
       const data = (await response.json()) as InvoiceExtractResponse;
+      if (data.requestId) setLastRequestId(data.requestId);
       const retryAfter = data.retryAfterSeconds ?? parseRetryAfterSeconds({ header: response.headers.get("Retry-After") });
       if (retryAfter) setRetryAfterSeconds(retryAfter);
       const extracted = data.invoice ? invoiceHasExtractedData(data.invoice) : Boolean(data.extraction?.invoiceNumber?.value || data.extraction?.lines?.length);
@@ -214,8 +231,16 @@ export function SmartInvoiceFlow({
     } finally {
       scanning.current = false;
       setBusy(false);
+      setScanPhase("idle");
     }
   };
+
+  const scanPhaseLabel = (() => {
+    if (scanPhase === "preparing") return t("admin.inventory.smart.phase.preparing");
+    if (scanPhase === "scanning") return t("admin.inventory.smart.phase.scanning");
+    if (scanPhase === "processing") return t("admin.inventory.smart.phase.processing");
+    return t("admin.inventory.smart.scan");
+  })();
 
   const update = (patch: Partial<PurchaseInvoice>) => {
     const current = invoiceRef.current;
@@ -284,38 +309,54 @@ export function SmartInvoiceFlow({
           // eslint-disable-next-line @next/next/no-img-element
           <img src={preview} alt="" className="mt-3 max-h-64 rounded-xl border object-contain" />
         )}
+        {busy && (
+          <p className="mt-3 inline-flex items-center gap-2 text-sm text-coffee/80">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {scanPhaseLabel}
+          </p>
+        )}
         {error && (
-          <div className="mt-3 space-y-1">
+          <div className="mt-3 space-y-1 rounded-xl border border-red-200 bg-red-50 p-3">
             <p className="text-sm font-medium text-red-700">{t("admin.inventory.smart.scanIncomplete")}</p>
             <p className="text-sm text-red-600">{error}</p>
             {retryAfterSeconds != null && (
               <p className="text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
             )}
+            {lastRequestId && (
+              <p dir="ltr" className="text-[11px] font-mono text-coffee/50">
+                {t("admin.inventory.smart.requestId")}: {lastRequestId}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan(file)}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.retry")}
+              </Button>
+              <label className="inline-flex">
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
+                />
+                <span className="inline-flex h-10 cursor-pointer items-center rounded-xl border px-3 text-sm">
+                  {t("admin.inventory.smart.chooseOtherFile")}
+                </span>
+              </label>
+            </div>
           </div>
         )}
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="button" variant="outline" onClick={onManual}>{t("admin.inventory.smart.manual")}</Button>
-          {error && (
-            <label className="inline-flex">
-              <input
-                type="file"
-                accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-                className="hidden"
-                onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
-              />
-              <span className="inline-flex h-10 cursor-pointer items-center rounded-xl border px-3 text-sm">
-                {t("admin.inventory.smart.chooseOtherFile")}
-              </span>
-            </label>
-          )}
-          {error && (
-            <Button type="button" variant="outline" disabled={busy || !file} onClick={() => void scan(file)}>
-              {t("admin.inventory.smart.retry")}
-            </Button>
-          )}
           <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan(file)}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.scan")}
+            {busy ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {scanPhaseLabel}
+              </>
+            ) : (
+              t("admin.inventory.smart.scan")
+            )}
           </Button>
         </div>
       </AdminCard>
@@ -617,11 +658,54 @@ export function SmartInvoiceFlow({
             </Button>
           </div>
         )}
-        {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
-        {retryAfterSeconds != null && (
-          <p className="mb-2 text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
+        {error && (
+          <div className="mb-2 space-y-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+            <p className="text-sm font-medium text-red-700">{error}</p>
+            {retryAfterSeconds != null && (
+              <p className="text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
+            )}
+            {lastRequestId && (
+              <p dir="ltr" className="text-[11px] font-mono text-coffee/50">
+                {t("admin.inventory.smart.requestId")}: {lastRequestId}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button
+                type="button"
+                variant="turquoise"
+                disabled={busy || locked}
+                onClick={() => void scan(invoice.sourceFile ? null : file, invoice.id)}
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {scanPhaseLabel}
+                  </>
+                ) : (
+                  t("admin.inventory.smart.retry")
+                )}
+              </Button>
+              <label className="inline-flex">
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => {
+                    const next = e.target.files?.[0] ?? null;
+                    if (next) {
+                      setFile(next);
+                      void scan(next, invoice.id);
+                    }
+                  }}
+                />
+                <span className="inline-flex h-10 cursor-pointer items-center rounded-xl border bg-warm-white px-3 text-sm">
+                  {t("admin.inventory.smart.chooseOtherFile")}
+                </span>
+              </label>
+            </div>
+          </div>
         )}
-        {reviewState === "incomplete" && (
+        {reviewState === "incomplete" && !error && (
           <div className="mb-2 rounded-xl bg-red-50 px-3 py-1.5 text-sm text-red-800">
             <p className="font-medium">{t("admin.inventory.smart.scanIncomplete")}</p>
           </div>
@@ -711,7 +795,14 @@ export function SmartInvoiceFlow({
               <Input className="min-w-0" type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value === "" ? null : Number(e.target.value), grandTotal: e.target.value === "" ? null : Number(e.target.value), sourceGross: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Button type="button" variant="outline" className="h-8 self-end text-xs" disabled={busy} onClick={() => void scan(invoice.sourceFile ? null : file, invoice.id)}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("admin.inventory.archive.rescan")}
+              {busy ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {scanPhaseLabel}
+                </>
+              ) : (
+                t("admin.inventory.archive.rescan")
+              )}
             </Button>
           </div>
         </details>
@@ -742,11 +833,28 @@ export function SmartInvoiceFlow({
           />
           {summary && (
             <div className="mt-3 grid gap-1 rounded-xl bg-beige/40 p-2.5 text-sm sm:grid-cols-2">
-              <p>{t("admin.inventory.smart.sourceAmounts")}: {formatIls(invoice.sourceNet ?? invoice.netAmount ?? 0)} / {formatIls(invoice.sourceVat ?? invoice.vatAmount ?? 0)} / {formatIls(invoice.sourceGross ?? invoice.grossAmount ?? 0)}</p>
-              <p>{t("admin.inventory.smart.computedAmounts")}: {formatIls(summary.beforeVat)} / {formatIls(summary.vat)} / {formatIls(summary.includingVat)}</p>
-              <p className="font-semibold">{t("admin.finance.linesGross")}: {formatIls(summary.includingVat)}</p>
+              {/* Only display the source totals when the scan actually read them. Showing
+                 ₪0.00 would misrepresent an empty/failed extraction as a zero-value invoice. */}
+              <p>
+                {t("admin.inventory.smart.sourceAmounts")}:{" "}
+                {formatMoneyOrDash(invoice.sourceNet ?? invoice.netAmount, t)}
+                {" / "}
+                {formatMoneyOrDash(invoice.sourceVat ?? invoice.vatAmount, t)}
+                {" / "}
+                {formatMoneyOrDash(invoice.sourceGross ?? invoice.grossAmount, t)}
+              </p>
+              <p>
+                {t("admin.inventory.smart.computedAmounts")}:{" "}
+                {summary.itemCount
+                  ? `${formatIls(summary.beforeVat)} / ${formatIls(summary.vat)} / ${formatIls(summary.includingVat)}`
+                  : t("admin.inventory.smart.notDetected")}
+              </p>
+              <p className="font-semibold">
+                {t("admin.finance.linesGross")}:{" "}
+                {summary.itemCount ? formatIls(summary.includingVat) : t("admin.inventory.smart.notDetected")}
+              </p>
               <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
-              {(invoice.validation ?? mismatch).hasMismatch && (
+              {summary.itemCount > 0 && (invoice.validation ?? mismatch).hasMismatch && (
                 <p className="sm:col-span-2 text-amber-800">
                   {t("admin.inventory.smart.diff")}: {formatIls((invoice.validation?.grossDiff ?? mismatch.grossDiff) ?? (summary.includingVat - (invoice.sourceGross ?? invoice.grossAmount ?? 0)))}
                 </p>
@@ -955,6 +1063,21 @@ export function SmartInvoiceFlow({
               t("admin.inventory.smart.approveStock")
             )}
           </Button>
+          {invoice && invoice.id && onRequestCancel && invoice.status !== "cancelled" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-10 text-red-700 hover:bg-red-50"
+              disabled={saving}
+              onClick={() => {
+                if (!invoice) return;
+                onRequestCancel(invoice);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+              {t("admin.invoice.cancel.action")}
+            </Button>
+          ) : null}
           {invoice && (invoice.status === "saved" || invoice.status === "approved") && invoice.stockStatus !== "posted" && (
             <Button
               type="button"
@@ -1119,6 +1242,16 @@ export function SmartInvoiceFlow({
       />
     </div>
   );
+}
+
+/**
+ * Render a monetary value or the "not detected" placeholder. We don't want
+ * to show "₪0.00" when the scanner returned no data for a field, because
+ * that reads as "the invoice is for zero" rather than "we didn't read it".
+ */
+function formatMoneyOrDash(value: number | null | undefined, t: (key: string) => string): string {
+  if (value == null || !Number.isFinite(value)) return t("admin.inventory.smart.notDetected");
+  return formatIls(value);
 }
 
 function Field({

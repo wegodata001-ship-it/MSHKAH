@@ -52,6 +52,9 @@ export async function POST(request: NextRequest) {
     if (message === "NO_STOCK_LINES") {
       return Response.json({ error: "NO_STOCK_LINES", code: "NO_STOCK_LINES", invoice: current }, { status: 400 });
     }
+    if (message === "INVOICE_CANCELLED") {
+      return Response.json({ error: "INVOICE_CANCELLED", code: "INVOICE_CANCELLED", invoice: current }, { status: 409 });
+    }
     return Response.json({ error: message, code: "STOCK_POST_FAILED", invoice: current }, { status: 500 });
   }
 }

@@ -1,0 +1,329 @@
+{
+  "at": "2026-10-13T17:20:26.491Z",
+  "rows": [
+    {
+      "area": "ספירות",
+      "check": "ספירה עיוורת — ממשק עובד",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "קיים אוסף stockCounts ודוחות, אין מסך ספירה עיוורת / אישור מנהל",
+      "env": "code",
+      "evidence": "no stock-count UI"
+    },
+    {
+      "area": "תשלומי ספקים",
+      "check": "תשלום חלקי/מלא/זיכוי/יתרה נגררת",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "אין מודול תשלומי ספקים. חשבונית נשמרת כמסמך רכש בלבד",
+      "env": "code",
+      "evidence": "no supplier payment ledger"
+    },
+    {
+      "area": "מתכונים",
+      "check": "תתי־מתכונים ותפוקה",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "מתכון שטוח בלבד, אין sub-recipe ואין שדה yield",
+      "env": "code",
+      "evidence": "DishRecipe.ingredients only"
+    },
+    {
+      "area": "הזמנות",
+      "check": "HYP חיוב אמיתי",
+      "result": "BLOCKED",
+      "fix": "",
+      "leftover": "לא בוצע חיוב. נדרש סביבת בדיקה מבוקרת בלי חיוב לקוח",
+      "env": "policy",
+      "evidence": "skipped real charge"
+    },
+    {
+      "area": "הזמנות",
+      "check": "הדפסה פיזית ומסירת מייל",
+      "result": "BLOCKED",
+      "fix": "",
+      "leftover": "יצירת PrintJob בלבד אינה ראיה. לא נשלח מייל ולא הודפס",
+      "env": "policy",
+      "evidence": "no physical print / inbox proof"
+    },
+    {
+      "area": "תשלומי ספקים",
+      "check": "קבלת קצה: תשלום חלקי אחרי קליטה",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "לא ניתן לרשום תשלום חלקי — המסך לא קיים",
+      "env": "acceptance",
+      "evidence": "blocked by missing AP module"
+    },
+    {
+      "area": "הזמנות",
+      "check": "HYP — מניעת כפילות (already_processed)",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "לא בוצע חיוב חי. רק לוגיקת decide",
+      "env": "decidePaymentUpdate",
+      "evidence": "action=already_processed"
+    },
+    {
+      "area": "הזמנות",
+      "check": "PrintJob מזהה דטרמיניסטי להזמנה",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "יצירת מזהה בלבד — לא נשלחה הדפסה",
+      "env": "print-jobs/ids",
+      "evidence": "NEW_ORDER_abc"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "פרסור מסמך ללא מע״מ (0 ≠ חסר)",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "vitest/parser",
+      "evidence": "date=2026-10-05 vat=0"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "שורות מעורבות + סכומי צילום",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "parser",
+      "evidence": "net=2814.92 vat=506.69 lines=2"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "toDate לא נקרא על מחרוזת ISO",
+      "result": "PASS",
+      "fix": "toJsDate קורא toDate רק אם זו פונקציה",
+      "leftover": "",
+      "env": "normalize",
+      "evidence": "05/10/2026 → 2026-10-05 iso=2026-10-05T12:00:00.000Z"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "מיפוי 422 לכשל חילוץ",
+      "result": "PASS",
+      "fix": "200 ריק → EXTRACTION_FAILED + ניסיון בלי סכימה",
+      "leftover": "",
+      "env": "gemini-config",
+      "evidence": "status=422"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "סריקה חלקית מציגה שדות חסרים",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "missingInvoiceFields",
+      "evidence": "supplier,invoiceNumber,invoiceDate,currency,net,vat,gross,lines"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "חילוץ חי JPEG/PDF",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "דולג בריצה חוזרת — ראיות מהריצה הקודמת",
+      "env": "gemini-live",
+      "evidence": "skipped QA_SKIP_LIVE_GEMINI"
+    },
+    {
+      "area": "מלאי",
+      "check": "קבלת קצה: קליטה → הוצאה לפי מתכון → יתרה",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "דולג בריצה חוזרת — ראיות מהריצה הקודמת",
+      "env": "firestore-admin txn",
+      "evidence": "skipped QA_SKIP_ISOLATED_STOCK"
+    },
+    {
+      "area": "רווחיות",
+      "check": "מחיר חסר לא מוצג כרווח",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "foodCostPercent",
+      "evidence": "zeroPrice=null half=20"
+    },
+    {
+      "area": "רווחיות",
+      "check": "נקודת איזון מול חישוב עצמאי (הכנסה 200, קבוע 100)",
+      "result": "PASS",
+      "fix": "fixedMonthlyTotal לא קורס אם המערך חסר",
+      "leftover": "",
+      "env": "computeBreakEven",
+      "evidence": "revenue=200 fixed=100 independentProfit=100"
+    },
+    {
+      "area": "הרשאות",
+      "check": "POST extract בלי טוקן",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000",
+      "evidence": "HTTP 401"
+    },
+    {
+      "area": "הרשאות",
+      "check": "GET /api/admin/users בלי טוקן",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000",
+      "evidence": "HTTP 401"
+    },
+    {
+      "area": "הרשאות",
+      "check": "POST extract עם טוקן מזויף",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000",
+      "evidence": "HTTP 401"
+    },
+    {
+      "area": "הזמנות",
+      "check": "תפריט ציבורי נטען",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000",
+      "evidence": "HTTP 200, 41961 bytes"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "API extract JPEG + שמירת מקור",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "דולג בריצה חוזרת — HTTP 200 id=I5FMEUujmgszsg1Q3y1K #=INV-7788 source=true",
+      "env": "http://localhost:3000 admin-api",
+      "evidence": "skipped QA_SKIP_API_EXTRACT"
+    },
+    {
+      "area": "ממשק",
+      "check": "כניסת מנהל עברית",
+      "result": "PASS",
+      "fix": "נרמול תאריכים",
+      "leftover": "",
+      "env": "http://localhost:3000 desktop-he",
+      "evidence": "http://localhost:3000/admin errors=0"
+    },
+    {
+      "area": "ממשק",
+      "check": "מסך תמחור/מלאי נטען",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 /admin/costing",
+      "evidence": "סקירה לוח בקרה קטלוג מוצרים קטגוריות ניהול תוספות שיוך תוספות למוצרים כללי בחירה מכירות הזמנות לקוחות מלאי ותמחור ד"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "מסך חשבוניות וארכיון",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 finance hub",
+      "evidence": "archive visible"
+    },
+    {
+      "area": "חשבוניות",
+      "check": "סריקת תמונה במסך + ללא קריסת toDate",
+      "result": "PASS",
+      "fix": "נרמול תאריכים + באנר חוסרים",
+      "leftover": "",
+      "env": "http://localhost:3000 Playwright scan",
+      "evidence": "סקירה לוח בקרה קטלוג מוצרים קטגוריות ניהול תוספות שיוך תוספות למוצרים כללי בחירה מכירות הזמנות לקוחות מלאי ותמחור דוחות תוכן באנרים תפריט PDF קישורים ו-QR מערכת Assistant "
+    },
+    {
+      "area": "חשבוניות",
+      "check": "צפייה/הורדת קובץ מקור במסך",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 source preview",
+      "evidence": "view+download links"
+    },
+    {
+      "area": "מלאי",
+      "check": "כפתור הוצאת חומר גלם במסך",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "הכפתור לא נראה בטאב מלאי",
+      "env": "http://localhost:3000 /admin/costing inventory",
+      "evidence": "Loading a11y.skipToContent"
+    },
+    {
+      "area": "ספקים וחומרים",
+      "check": "מסך ספקים נטען",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 suppliers hub",
+      "evidence": "Loading a11y.skipToContent"
+    },
+    {
+      "area": "מתכונים",
+      "check": "מסך מתכונים נטען",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 recipes",
+      "evidence": "Loading a11y.skipToContent"
+    },
+    {
+      "area": "ממשק",
+      "check": "רענון שומר כניסת מנהל",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 refresh",
+      "evidence": "http://localhost:3000/admin/costing"
+    },
+    {
+      "area": "ממשק",
+      "check": "ערבית RTL",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 ar",
+      "evidence": "dir=rtl"
+    },
+    {
+      "area": "ממשק",
+      "check": "תצוגת טלפון בלי גלילה אופקית חריגה",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "390x844",
+      "evidence": "no overflow"
+    },
+    {
+      "area": "ממשק",
+      "check": "יציאה מחזירה למסך כניסה",
+      "result": "FAIL",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 logout",
+      "evidence": "http://localhost:3000/admin/costing"
+    },
+    {
+      "area": "הזמנות",
+      "check": "תפריט + ניסיון הוספה לעגלה",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "http://localhost:3000 public menu 390",
+      "evidence": "clicked=true עברית ארוחת בוקר מיוחדת שקשוקה טרייה מהמטבח — מומלץ! Order Now מיוחד במִשְׁקָת מיוחד במִשְׁקָת 5 פ"
+    },
+    {
+      "area": "ספקים וחומרים",
+      "check": "ניקוי נתוני TEST-QA",
+      "result": "PASS",
+      "fix": "",
+      "leftover": "",
+      "env": "firestore-admin",
+      "evidence": "deleted 0 tracked docs"
+    }
+  ]
+}

@@ -327,17 +327,22 @@ export function dailyRevenueSeries(orders: Order[], from: string, to: string): D
   return seriesFromDailyMap(map, from, to);
 }
 
+function parseIsoDate(value: string): Date {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return new Date(year || 1970, (month || 1) - 1, day || 1);
+}
+
 function seriesFromDailyMap(map: Map<string, number>, from: string, to: string): DailyRevenuePoint[] {
   const points: DailyRevenuePoint[] = [];
-  let cursor = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to}T00:00:00`);
+  let cursor = parseIsoDate(from);
+  const end = parseIsoDate(to).getTime();
   let cumulative = 0;
-  while (cursor.getTime() <= end.getTime()) {
-    const key = cursor.toISOString().slice(0, 10);
+  while (cursor.getTime() <= end) {
+    const key = localIsoDate(cursor);
     const revenue = map.get(key) ?? 0;
     cumulative += revenue;
     points.push({ date: key, revenue, cumulative });
-    cursor = new Date(cursor.getTime() + MS_DAY);
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
   }
   return points;
 }
@@ -439,13 +444,21 @@ export function variableTotalForRevenue(
   return { total: used || active.some((item) => item.amount === 0) ? applied : null, skippedCardFee };
 }
 
+export function localIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function monthBounds(now = new Date()): { from: string; to: string; key: string } {
-  const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const last = new Date(year, month + 1, 0).getDate();
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
+    from: `${key}-01`,
+    to: `${key}-${String(last).padStart(2, "0")}`,
     key,
   };
 }
@@ -609,7 +622,7 @@ export function computeBreakEven(input: {
       breakEvenMonthly != null && sales.revenue != null && breakEvenMonthly > 0
         ? sales.revenue / breakEvenMonthly
         : null,
-    aboveBreakEven: gap != null && gap < 0 ? Math.abs(gap) : null,
+    aboveBreakEven: gap != null && gap <= 0 ? Math.abs(gap) : null,
     achieved: Boolean(canCompute && gap != null && gap <= 0),
     dailyAverage,
     forecast,
@@ -677,7 +690,7 @@ export function simulateBreakEven(
       breakEvenMonthly != null && adjustedRevenue != null && breakEvenMonthly > 0
         ? adjustedRevenue / breakEvenMonthly
         : null,
-    aboveBreakEven: gap != null && gap < 0 ? Math.abs(gap) : null,
+    aboveBreakEven: gap != null && gap <= 0 ? Math.abs(gap) : null,
     achieved: Boolean(breakEvenMonthly != null && adjustedRevenue != null && adjustedRevenue >= breakEvenMonthly),
     cardFeeSkipped: Boolean(patch.cardPercent && cardBase == null),
   };

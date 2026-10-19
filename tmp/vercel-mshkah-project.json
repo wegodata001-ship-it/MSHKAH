@@ -1,0 +1,16 @@
+﻿{
+  "id": "prj_fzrYUzu7qXLmFZJG5IfKdOQS8DKZ",
+  "name": "mshkah",
+  "owner": {
+    "name": "wegodata001-ship-it's projects",
+    "slug": "wegodata001-ship-its-projects"
+  },
+  "createdAt": 1785415205517,
+  "rootDirectory": null,
+  "nodeVersion": "24.x",
+  "framework": "nextjs",
+  "buildCommand": null,
+  "outputDirectory": null,
+  "installCommand": null,
+  "sandbox": null
+}

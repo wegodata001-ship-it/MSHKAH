@@ -1,0 +1,30 @@
+[
+  {
+    "name": "DESKTOP PAGE",
+    "pass": true
+  },
+  {
+    "name": "OVERDUE CARD",
+    "pass": true
+  },
+  {
+    "name": "121 MIN FORMAT",
+    "pass": true
+  },
+  {
+    "name": "6417 MIN FORMAT",
+    "pass": true
+  },
+  {
+    "name": "HAS ORDERS OR EMPTY STATE",
+    "pass": true
+  },
+  {
+    "name": "MOBILE PAGE",
+    "pass": true
+  },
+  {
+    "name": "MOBILE RAW MINUTES",
+    "pass": true
+  }
+]

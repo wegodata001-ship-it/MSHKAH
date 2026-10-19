@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isActiveUser() {
+      return isSignedIn() && userDoc().data.active == true;
+    }
+
+    function isStaff() {
+      return isActiveUser() && userDoc().data.role in ['Admin', 'Manager', 'Employee'];
+    }
+
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    match /products/{id} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    match /customers/{id} {
+      allow read: if isStaff();
+      allow create: if true;
+      allow update, delete: if isStaff();
+    }
+
+    match /orders/{id} {
+      allow read: if isStaff();
+      allow create: if true;
+      allow update, delete: if isStaff();
+    }
+
+    match /banners/{id} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isStaff());
+      allow write: if false;
+    }
+
+    match /connection-test/{id} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -520,13 +520,13 @@ export async function saveProductCostLink(
     const payload = sanitizeFirestoreData({
       productId: input.productId,
       kind: input.kind,
-      recipeId: input.recipeId ?? null,
-      ingredientId: input.ingredientId ?? null,
-      packQuantity: input.packQuantity ?? null,
-      packUnit: input.packUnit ?? null,
-      estimateAmount: input.estimateAmount ?? null,
-      estimateNote: input.estimateNote ?? null,
-      estimateAt: input.estimateAt ?? null,
+      ...(input.recipeId !== undefined ? { recipeId: input.recipeId } : {}),
+      ...(input.ingredientId !== undefined ? { ingredientId: input.ingredientId } : {}),
+      ...(input.packQuantity !== undefined ? { packQuantity: input.packQuantity } : {}),
+      ...(input.packUnit !== undefined ? { packUnit: input.packUnit } : {}),
+      ...(input.estimateAmount !== undefined ? { estimateAmount: input.estimateAmount } : {}),
+      ...(input.estimateNote !== undefined ? { estimateNote: input.estimateNote } : {}),
+      ...(input.estimateAt !== undefined ? { estimateAt: input.estimateAt } : {}),
       updatedAt: now,
     });
     await setDoc(doc(getDb(), COLLECTIONS.productCostLinks, id), payload, { merge: true });
@@ -588,13 +588,24 @@ export async function completeProductCost(input: {
     const link = await saveProductCostLink({
       productId: input.productId,
       kind: input.kind,
-      recipeId,
-      ingredientId: input.ingredientId,
-      packQuantity: input.packQuantity,
-      packUnit: input.packUnit,
-      estimateAmount: input.kind === "estimate" ? input.estimateAmount : null,
-      estimateNote: input.kind === "estimate" ? input.estimateNote : undefined,
-      estimateAt: input.kind === "estimate" ? today : undefined,
+      ...(input.kind === "estimate"
+        ? {
+            ...(input.existingRecipeId ? { recipeId: input.existingRecipeId } : {}),
+            estimateAmount: input.estimateAmount,
+            estimateNote: input.estimateNote,
+            estimateAt: today,
+          }
+        : {
+            recipeId,
+            estimateAmount: null,
+          }),
+      ...(input.ingredientId
+        ? {
+            ingredientId: input.ingredientId,
+            packQuantity: input.packQuantity,
+            packUnit: input.packUnit,
+          }
+        : {}),
     });
     if (!link.success) return link;
     return success({ recipeId });

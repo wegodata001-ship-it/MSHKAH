@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChefHat, Search } from "lucide-react";
 import { useOrders } from "@/hooks/useOrders";
+import { useClubMembers } from "@/hooks/useClubMembers";
 import { updateOrderStatus } from "@/services";
 import { useAuth } from "@/components/providers/auth-provider";
 import { OrderItemExtrasDialog } from "@/features/admin/orders/order-item-extras-dialog";
@@ -50,6 +51,7 @@ export function OrdersAdmin() {
   const { user } = useAuth();
   const authFetch = useAuthFetch();
   const { orders, loading, error } = useOrders();
+  const { byEmail: clubMembersByEmail } = useClubMembers();
   const [tab, setTab] = useState<OrdersTab>("active");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -397,6 +399,11 @@ export function OrdersAdmin() {
               }}
               onEditItem={(itemIndex) => setExtrasDialog({ order, itemIndex })}
               onPermanentDelete={user && isAdminRole(user.role) ? () => setDeleteOrder(order) : undefined}
+              isClubMember={(() => {
+                const email = order.customerEmail?.trim().toLowerCase();
+                if (!email) return false;
+                return clubMembersByEmail.get(email)?.status === "active";
+              })()}
             />
           ))}
         </div>

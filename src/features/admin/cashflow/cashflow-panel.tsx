@@ -88,11 +88,16 @@ export function CashFlowPanel({
   const [entries, setEntries] = useState<CashFlowEntry[]>([]);
   const [opening, setOpening] = useState<CashOpening | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const [month, setMonth] = useState(monthKey());
   const [rangeStart, setRangeStart] = useState(initial.start);
   const [rangeEnd, setRangeEnd] = useState(initial.end);
   const [openingAmount, setOpeningAmount] = useState("");
   const [openingDate, setOpeningDate] = useState(localIso());
+  const [openingEditing, setOpeningEditing] = useState(false);
+  const [openingSaving, setOpeningSaving] = useState(false);
+  const [openingError, setOpeningError] = useState<string | null>(null);
+  const [openingStatus, setOpeningStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -101,7 +106,17 @@ export function CashFlowPanel({
   const [settlementDrafts, setSettlementDrafts] = useState<Record<string, { date: string; location: "cash" | "card" | "bank" }>>({});
 
   useEffect(() => subscribeToBreakEvenFixedCosts(setFixed), []);
-  useEffect(() => subscribeCashFlowEntries(setEntries, setLoadError), []);
+  useEffect(
+    () =>
+      subscribeCashFlowEntries(
+        (items) => {
+          setEntries(items);
+          setLoadError(null);
+        },
+        (message) => setLoadError(message)
+      ),
+    [retryToken]
+  );
   useEffect(
     () =>
       subscribeCashOpening(
@@ -114,8 +129,15 @@ export function CashFlowPanel({
           setOpening((current) => (current === undefined ? null : current));
         }
       ),
-    []
+    [retryToken]
   );
+
+  useEffect(() => {
+    if (opening && !openingEditing) {
+      setOpeningAmount(String(opening.amount));
+      setOpeningDate(opening.date);
+    }
+  }, [opening, openingEditing]);
 
   const flow = useMemo(
     () =>
@@ -147,13 +169,33 @@ export function CashFlowPanel({
   }
 
   async function saveOpeningBalance() {
-    const amount = Number(openingAmount);
-    if (!Number.isFinite(amount) || !openingDate) {
-      setError(t("admin.cashflow.openingMissing"));
+    const trimmed = openingAmount.trim();
+    if (!trimmed) {
+      setOpeningError(t("admin.cashflow.openingAmountRequired"));
       return;
     }
-    const ok = await persist(() => saveCashOpening({ amount, date: openingDate }));
-    if (ok) setOpeningAmount("");
+    if (!openingDate) {
+      setOpeningError(t("admin.cashflow.openingDateRequired"));
+      return;
+    }
+    const amount = Number(trimmed);
+    if (!Number.isFinite(amount)) {
+      setOpeningError(t("admin.cashflow.openingAmountInvalid"));
+      return;
+    }
+    setOpeningError(null);
+    setOpeningSaving(true);
+    setOpeningStatus("saving");
+    const result = await saveCashOpening({ amount, date: openingDate });
+    setOpeningSaving(false);
+    if (!result.success) {
+      setOpeningStatus("idle");
+      setOpeningError(result.error || t("admin.cashflow.saveFailed"));
+      return;
+    }
+    setOpeningStatus("saved");
+    setOpeningEditing(false);
+    onToast(t("admin.cashflow.openingSaved"));
   }
 
   async function addForecast() {
@@ -353,19 +395,108 @@ export function CashFlowPanel({
             <Loader2 className="h-4 w-4 animate-spin" />
             {t("admin.cashflow.loading")}
           </div>
-        ) : opening == null ? (
-          <div className="mt-4 space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
-            <p className="text-sm font-medium text-amber-900">{t("admin.cashflow.openingMissing")}</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <Input type="number" value={openingAmount} placeholder={t("admin.cashflow.opening")} onChange={(event) => setOpeningAmount(event.target.value)} />
-              <Input type="date" value={openingDate} onChange={(event) => setOpeningDate(event.target.value)} />
-              <Button type="button" variant="turquoise" disabled={saving} onClick={saveOpeningBalance}>
-                {saving ? t("admin.cashflow.saving") : t("admin.cashflow.saveOpening")}
-              </Button>
-            </div>
+        ) : (
+          <div className="mt-4 space-y-2 rounded-xl border border-beige-dark/40 bg-warm-white p-3">
+            {opening != null && !openingEditing ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <div>
+                  <p className="text-xs text-coffee/60">{t("admin.cashflow.opening")}</p>
+                  <p className="text-lg font-semibold tabular-nums">{formatIls(opening.amount)}</p>
+                  <p className="text-xs text-coffee/55">{t("admin.cashflow.openingDate")}: {opening.date}</p>
+                </div>
+                <Button type="button" variant="outline" onClick={() => { setOpeningEditing(true); setOpeningError(null); setOpeningStatus("idle"); }}>
+                  {t("admin.cashflow.editOpening")}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {opening == null ? <p className="text-sm text-coffee/80">{t("admin.cashflow.openingMissing")}</p> : null}
+                <p className="text-xs text-coffee/60">{t("admin.cashflow.openingHelp")}</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto]">
+                  <label className="space-y-1 text-xs">
+                    <span>{t("admin.cashflow.openingAmount")}</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={openingAmount}
+                      onChange={(event) => setOpeningAmount(event.target.value)}
+                      aria-label={t("admin.cashflow.openingAmount")}
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span>{t("admin.cashflow.openingDate")}</span>
+                    <Input
+                      type="date"
+                      value={openingDate}
+                      onChange={(event) => setOpeningDate(event.target.value)}
+                      aria-label={t("admin.cashflow.openingDate")}
+                    />
+                  </label>
+                  <div className="flex items-end gap-2">
+                    <Button type="button" variant="turquoise" disabled={openingSaving} onClick={saveOpeningBalance}>
+                      {openingSaving
+                        ? t("admin.cashflow.saving")
+                        : openingStatus === "saved"
+                          ? t("admin.cashflow.openingSaved")
+                          : t("admin.cashflow.saveOpening")}
+                    </Button>
+                    {opening != null ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={openingSaving}
+                        onClick={() => {
+                          setOpeningEditing(false);
+                          setOpeningError(null);
+                          setOpeningStatus("idle");
+                          setOpeningAmount(String(opening.amount));
+                          setOpeningDate(opening.date);
+                        }}
+                      >
+                        {t("admin.cashflow.cancel")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+                {openingError ? (
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+                    <span>{openingError}</span>
+                    <Button type="button" variant="outline" size="sm" disabled={openingSaving} onClick={saveOpeningBalance}>
+                      {t("admin.cashflow.retry")}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {opening != null && opening.date > rangeStart ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <span>{t("admin.cashflow.openingLater").replace("{date}", opening.date).replace("{range}", rangeStart)}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRangeStart(opening.date);
+                    setMonth(opening.date.slice(0, 7));
+                  }}
+                >
+                  {t("admin.cashflow.alignRangeToOpening")}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        )}
+        {loadError ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm font-medium text-red-700">
+            <span>
+              {t("admin.cashflow.loadFailed")}: {/permission/i.test(loadError) ? t("admin.cashflow.permissions") : loadError}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setRetryToken((value) => value + 1)}>
+              {t("admin.cashflow.retry")}
+            </Button>
           </div>
         ) : null}
-        {loadError && <p className="mt-3 text-sm font-medium text-red-700">{t("admin.cashflow.loadFailed")}: {loadError}</p>}
         {error && <p className="mt-3 text-sm font-medium text-red-700">{error}</p>}
       </AdminCard>
 
@@ -375,6 +506,9 @@ export function CashFlowPanel({
         <Summary label={t("admin.cashflow.payments")} value={formatIls(flow.outflows)} />
         <Summary label={t("admin.cashflow.closing")} value={flow.closing == null ? "—" : formatIls(flow.closing)} negative={flow.closing != null && flow.closing < 0} />
       </div>
+      {!flow.openingSet ? (
+        <p className="rounded-xl bg-beige/60 px-3 py-2 text-sm text-coffee/80">{t("admin.cashflow.noBalance")}</p>
+      ) : null}
 
       <BalanceChart points={flow.points} actualLabel={t("admin.cashflow.actual")} forecastLabel={t("admin.cashflow.forecast")} />
 

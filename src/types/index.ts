@@ -51,6 +51,7 @@ export interface Customer {
   id: string;
   name: string;
   phone: string;
+  email?: string | null;
   address: string;
   ordersCount: number;
   totalSpending: number;

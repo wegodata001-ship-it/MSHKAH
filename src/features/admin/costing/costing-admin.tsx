@@ -711,6 +711,11 @@ export function CostingAdmin() {
           variants={linkedOptions}
           locale={locale}
           saving={saving}
+          priceRecords={priceRecords}
+          purchaseInvoices={invoices}
+          suppliers={suppliers}
+          vatBasis={settings.foodCostVatMode ?? "before"}
+          onToast={toast}
           onClose={() => setRecipeProductId(null)}
           onSave={(input) => void saveRecipe(input)}
         />

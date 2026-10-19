@@ -54,6 +54,11 @@ export const COLLECTIONS = {
   stockCounts: "stockCounts",
   stockCountSessions: "stockCountSessions",
   reportRuns: "reportRuns",
+  loyaltySettings: "loyaltySettings",
+  loyaltyMembers: "loyaltyMembers",
+  loyaltyPointsLedger: "loyaltyPointsLedger",
+  loyaltyEnrollmentTokens: "loyaltyEnrollmentTokens",
+  loyaltyRateLimit: "loyaltyRateLimit",
 } as const;
 
 export const DEFAULT_STORE_ID = "mishkah";

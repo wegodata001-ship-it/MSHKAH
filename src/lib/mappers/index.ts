@@ -99,6 +99,11 @@ export function mapCustomer(doc: FirestoreDoc<FirestoreCustomer>): Customer {
     id: doc.id,
     name: doc.name,
     phone: doc.phone,
+    // Email was always written through the admin form but never surfaced
+    // back to the client. The loyalty club relies on an email key to tag
+    // members, so we expose it here. Older docs that omitted the field
+    // simply resolve to `null`.
+    email: (doc as unknown as { email?: string | null }).email ?? null,
     address: doc.address,
     ordersCount: doc.ordersCount,
     totalSpending: doc.totalSpending ?? 0,

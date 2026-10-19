@@ -17,6 +17,7 @@ import {
   QrCode,
   Calculator,
   BarChart3,
+  Sparkles,
 } from "lucide-react";
 import { adminPath, toInternalAdminPath } from "@/lib/domains/host-routing";
 import type { AdminSurface } from "@/lib/domains/host-routing";
@@ -56,6 +57,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     items: [
       { segment: "orders", labelKey: "admin.orders", icon: ClipboardList },
       { segment: "customers", labelKey: "admin.customers", icon: Users },
+      { segment: "club", labelKey: "admin.club.title", icon: Sparkles, adminOnly: true },
       { segment: "costing", labelKey: "admin.costing", icon: Calculator, adminOnly: true },
       { segment: "reports", labelKey: "admin.reports", icon: BarChart3, adminOnly: true },
     ],
@@ -108,6 +110,7 @@ export const ADMIN_PAGE_TITLES: Record<string, string> = {
   "/admin/printer-test": "admin.printerTest.title",
   "/admin/users": "admin.users.title",
   "/admin/settings": "admin.settings.title",
+  "/admin/club": "admin.club.title",
 };
 
 export function getAdminPageTitleKey(pathname: string): string {

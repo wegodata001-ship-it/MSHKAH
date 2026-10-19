@@ -24,6 +24,7 @@ import { formatDuration, formatOrderAge } from "@/lib/orders/format-age";
 import { orderAgeMs, overdueLevel, stageAgeMs } from "@/lib/orders/overdue";
 import { formatDate, formatPrice, cn } from "@/lib/utils";
 import type { Order, OrderStatus } from "@/types";
+import { ClubMemberBadge } from "@/features/admin/club-member-badge";
 
 const STATUS_STYLE: Record<OperationalOrderStatus, string> = {
   received: "border-amber-300 bg-amber-50 text-amber-800",
@@ -110,6 +111,7 @@ export function OrderCard({
   onCopyNumber,
   onEditItem,
   onPermanentDelete,
+  isClubMember,
 }: {
   order: Order;
   expanded: boolean;
@@ -126,6 +128,7 @@ export function OrderCard({
   onCopyNumber?: () => void;
   onEditItem?: (index: number) => void;
   onPermanentDelete?: () => void;
+  isClubMember?: boolean;
 }) {
   const t = useT();
   const status = operationalStatusOf(order);
@@ -190,6 +193,7 @@ export function OrderCard({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-coffee/55">
             <span className="font-medium text-coffee/75">{order.customerName}</span>
+            {isClubMember ? <ClubMemberBadge compact /> : null}
             <span title={formatJerusalemDateTime(order.createdAt)}>
               {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>

@@ -7,6 +7,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useCustomers } from "@/hooks/useCustomers";
 import { useOrders } from "@/hooks/useOrders";
+import { useClubMembers } from "@/hooks/useClubMembers";
+import { ClubMemberBadge } from "@/features/admin/club-member-badge";
 import { createCustomer, updateCustomer, deleteCustomer } from "@/services";
 import { customerSchema, type CustomerInput } from "@/lib/validation/schemas";
 import { Button } from "@/components/ui/button";
@@ -32,11 +34,26 @@ export function CustomersAdmin() {
   const t = useT();
   const { customers, loading } = useCustomers();
   const { orders } = useOrders();
+  const { byEmail: membersByEmail } = useClubMembers();
   const [editing, setEditing] = useState<Customer | null>(null);
   const [profile, setProfile] = useState<Customer | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [onlyMembers, setOnlyMembers] = useState(false);
+
+  // Resolve club membership once per render for every row; cheap because
+  // `membersByEmail` is a Map keyed on lower-cased email.
+  const customerIsMember = (customer: Customer) => {
+    const email = customer.email?.trim().toLowerCase();
+    if (!email) return undefined;
+    const member = membersByEmail.get(email);
+    return member?.status === "active" ? member : undefined;
+  };
+
+  const visibleCustomers = onlyMembers
+    ? customers.filter((customer) => Boolean(customerIsMember(customer)))
+    : customers;
 
   const statusLabel = (status: OrderStatus) => t(`admin.status.${status}`);
 
@@ -102,10 +119,20 @@ export function CustomersAdmin() {
         title={t("admin.customers.title")}
         subtitle={t("admin.customers.subtitle")}
         actions={
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" />
-            {t("admin.customers.new")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 rounded-xl border border-beige-dark/30 bg-warm-white px-2.5 py-1.5 text-xs text-coffee/80 dark:bg-white/5 dark:text-warm-white/80">
+              <input
+                type="checkbox"
+                checked={onlyMembers}
+                onChange={(event) => setOnlyMembers(event.target.checked)}
+              />
+              {t("admin.customers.clubFilter")}
+            </label>
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              {t("admin.customers.new")}
+            </Button>
+          </div>
         }
       />
 
@@ -130,7 +157,7 @@ export function CustomersAdmin() {
                 </tr>
               </thead>
               <tbody>
-                {customers.map((customer, i) => (
+                {visibleCustomers.map((customer, i) => (
                   <motion.tr
                     key={customer.id}
                     initial={{ opacity: 0 }}
@@ -150,7 +177,10 @@ export function CustomersAdmin() {
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="text-sm font-medium text-dark-brown dark:text-warm-white">{customer.name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-dark-brown dark:text-warm-white">{customer.name}</p>
+                            {customerIsMember(customer) ? <ClubMemberBadge compact /> : null}
+                          </div>
                           <p className="text-xs text-coffee/50 md:hidden">{customer.phone}</p>
                         </div>
                       </button>

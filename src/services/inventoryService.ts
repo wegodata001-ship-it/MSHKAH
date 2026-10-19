@@ -952,6 +952,38 @@ export async function approvePurchaseInvoice(invoice: PurchaseInvoice): Promise<
   return success(undefined);
 }
 
+export type CancelInvoiceResponse = {
+  invoice: PurchaseInvoice;
+  reversedIds: string[];
+};
+
+/**
+ * Request cancellation of a purchase invoice. The server reverses any
+ * stock movements linked to this invoice, flags the invoice `cancelled`,
+ * and keeps the supplier payment record intact (allocations update to
+ * reflect the invoice being gone from the ledger).
+ */
+export async function cancelPurchaseInvoice(input: {
+  invoiceId: string;
+  reason?: string;
+}): Promise<ServiceResult<CancelInvoiceResponse>> {
+  try {
+    if (!input.invoiceId) return failure(new Error("INVOICE_REQUIRED"), "INVOICE_REQUIRED");
+    const viaApi = await clientAdminFetch<CancelInvoiceResponse>(
+      "/api/admin/inventory/invoice/cancel",
+      { invoiceId: input.invoiceId, reason: input.reason }
+    );
+    if (viaApi.ok && viaApi.data?.invoice) return success(viaApi.data);
+    if (viaApi.code === "PERMISSION_DENIED" || viaApi.status === 401 || viaApi.status === 403) {
+      return failure(new Error("PERMISSION_DENIED"), "PERMISSION_DENIED");
+    }
+    const code = viaApi.code || viaApi.error || "CANCEL_FAILED";
+    return failure(new Error(code), code);
+  } catch (error) {
+    return failure(error, "Failed to cancel invoice");
+  }
+}
+
 export async function savePosDraft(input: Omit<PosImport, "id" | "createdAt"> & { id?: string }): Promise<ServiceResult<string>> {
   try {
     if (!input.lines?.length) return failure(new Error("empty-import"), "empty-import");

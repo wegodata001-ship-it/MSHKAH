@@ -36,6 +36,9 @@ export function invoiceSourcePath(invoiceId: string, filename: string, at = new 
 }
 
 export function archiveStatus(invoice: PurchaseInvoice): InvoiceScanStatus {
+  // A cancelled invoice always surfaces as cancelled, regardless of any
+  // historical scanStatus the file might carry.
+  if (invoice.status === "cancelled") return "cancelled";
   if (invoice.scanStatus) return invoice.scanStatus;
   if (invoice.inventoryPostedAt || invoice.stockStatus === "posted") return "posted";
   if (invoice.status === "approved" || invoice.status === "saved") return "approved";
@@ -93,7 +96,7 @@ export function validateInvoiceTotals(input: {
 export function invoiceArchiveQuery(
   invoices: PurchaseInvoice[],
   input: {
-    filter: "all" | "review" | "approved" | "posted" | "failed";
+    filter: "all" | "review" | "approved" | "posted" | "failed" | "cancelled";
     query: string;
     from?: string;
     to?: string;
@@ -102,6 +105,10 @@ export function invoiceArchiveQuery(
   const q = input.query.trim().toLowerCase();
   return invoices.filter((invoice) => {
     const status = archiveStatus(invoice);
+    // Cancelled invoices are hidden by default — only visible in the
+    // explicit "cancelled" filter view.
+    if (input.filter !== "cancelled" && status === "cancelled") return false;
+    if (input.filter === "cancelled" && status !== "cancelled") return false;
     if (input.filter === "review" && status !== "needs_review" && status !== "uploaded" && status !== "scanning") return false;
     if (input.filter === "approved" && status !== "approved" && status !== "ready") return false;
     if (input.filter === "posted" && status !== "posted") return false;

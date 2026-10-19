@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Loader2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Copy, Loader2, Plus, RefreshCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,9 +34,19 @@ import type {
   OverheadSettings,
   RecipeLine,
 } from "@/lib/costing/types";
+import type {
+  PurchaseInvoice,
+  PurchasePriceRecord,
+  Supplier,
+} from "@/lib/inventory/types";
+import { buildIngredientPriceSummary, type IngredientPriceSummary } from "@/lib/costing/price-change";
+import { IngredientPriceInfo } from "@/features/admin/costing/ingredient-price-info";
+import { updateIngredient } from "@/services/costingService";
+import { useAuth } from "@/components/providers/auth-provider";
 import type { ModifierOption } from "@/types/modifiers";
 import { getLocalizedName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
+import { cn } from "@/lib/utils";
 
 type DraftLine = RecipeLine & { key: string };
 
@@ -64,6 +74,11 @@ export function RecipeEditorModal({
   saving,
   onClose,
   onSave,
+  priceRecords = [],
+  purchaseInvoices = [],
+  suppliers = [],
+  vatBasis = "before",
+  onToast,
 }: {
   open: boolean;
   productName: string;
@@ -80,10 +95,19 @@ export function RecipeEditorModal({
     overheadSettings: OverheadSettings;
     targetFoodCostPercent?: number;
   }) => void;
+  priceRecords?: PurchasePriceRecord[];
+  purchaseInvoices?: PurchaseInvoice[];
+  suppliers?: Supplier[];
+  vatBasis?: "before" | "including";
+  onToast?: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
   const ai = useSmartInvoiceEnabled();
   const authFetch = useAuthFetch();
+  const { user } = useAuth();
+  const [applyingIds, setApplyingIds] = useState<string[]>([]);
+  const [selectedUpdates, setSelectedUpdates] = useState<Record<string, boolean>>({});
+  const [confirmManualId, setConfirmManualId] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<RecipeIngredientSuggestion[]>([]);
@@ -120,6 +144,108 @@ export function RecipeEditorModal({
     const ingredient = lookup.get(line.ingredientId);
     return sum + (ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0);
   }, 0);
+
+  const priceSummaries = useMemo(() => {
+    const map = new Map<string, IngredientPriceSummary>();
+    for (const ingredient of allIngredients) {
+      map.set(ingredient.id, buildIngredientPriceSummary(ingredient, priceRecords, purchaseInvoices, suppliers, vatBasis));
+    }
+    return map;
+  }, [allIngredients, priceRecords, purchaseInvoices, suppliers, vatBasis]);
+
+  const pendingUpdates = useMemo(() => {
+    const results: Array<{ ingredient: CostingIngredient; summary: IngredientPriceSummary }> = [];
+    for (const line of lines) {
+      const ingredient = lookup.get(line.ingredientId);
+      if (!ingredient) continue;
+      const summary = priceSummaries.get(ingredient.id);
+      if (!summary?.suggestion?.hasUpdate) continue;
+      if (results.some((item) => item.ingredient.id === ingredient.id)) continue;
+      results.push({ ingredient, summary });
+    }
+    return results;
+  }, [lines, lookup, priceSummaries]);
+
+  useEffect(() => {
+    // Default selection: everything that is a non-manual update.
+    setSelectedUpdates((current) => {
+      const next = { ...current };
+      for (const { ingredient, summary } of pendingUpdates) {
+        if (next[ingredient.id] === undefined) {
+          next[ingredient.id] = !(summary.suggestion?.isManualOverride ?? false);
+        }
+      }
+      // Remove entries no longer offered.
+      for (const key of Object.keys(next)) {
+        if (!pendingUpdates.some((item) => item.ingredient.id === key)) delete next[key];
+      }
+      return next;
+    });
+  }, [pendingUpdates]);
+
+  const selectedUpdateIds = pendingUpdates
+    .filter(({ ingredient, summary }) => {
+      if (summary.suggestion?.isManualOverride) return selectedUpdates[ingredient.id] === true;
+      return selectedUpdates[ingredient.id] !== false;
+    })
+    .map((item) => item.ingredient.id);
+
+  async function applyPriceUpdates(ids: string[]) {
+    if (!ids.length) return;
+    setApplyingIds(ids);
+    try {
+      let errorShown = false;
+      for (const id of ids) {
+        const pending = pendingUpdates.find((item) => item.ingredient.id === id);
+        if (!pending?.summary.suggestion) continue;
+        const ingredient = pending.ingredient;
+        const suggestion = pending.summary.suggestion;
+        const sameSupplier = suggestion.source.supplierId ?? ingredient.lastSupplierId;
+        const result = await updateIngredient(
+          ingredient.id,
+          {
+            name: ingredient.name,
+            originKind: "invoice",
+            category: ingredient.category,
+            purchasePrice: suggestion.nextPurchasePrice,
+            purchaseQuantity: suggestion.nextPurchaseQuantity,
+            purchaseUnit: suggestion.nextPurchaseUnit,
+            supplier: ingredient.supplier,
+            notes: ingredient.notes,
+            barcode: ingredient.barcode,
+            minStock: ingredient.minStock,
+            recommendedStock: ingredient.recommendedStock,
+            active: ingredient.active,
+          },
+          user?.email ?? user?.uid ?? undefined,
+        );
+        // Silence unused-variable lint on fields that are informational only.
+        void sameSupplier;
+        if (!result.success && !errorShown) {
+          errorShown = true;
+          onToast?.(t("admin.recipe.price.updateFailed"), "error");
+        }
+      }
+      if (!errorShown) {
+        const affectedExtra = ids.reduce((sum, id) => {
+          const count = allIngredients.filter((item) => item.id === id).length;
+          return sum + count;
+        }, 0);
+        onToast?.(
+          ids.length > 1
+            ? t("admin.recipe.price.updatedPlural").replace("{count}", String(ids.length))
+            : t("admin.recipe.price.updatedSingle"),
+          "success"
+        );
+        // Note: the local `allIngredients` prop reflects the Firestore live update
+        // once the parent screen re-renders. We intentionally do not patch it here.
+        void affectedExtra;
+      }
+    } finally {
+      setApplyingIds([]);
+      setConfirmManualId(null);
+    }
+  }
 
   useEffect(() => {
     if (!focusKey) return;
@@ -272,6 +398,18 @@ export function RecipeEditorModal({
             </button>
           </div>
         </div>
+        {ingredient ? (
+          <IngredientPriceInfo
+            summary={
+              priceSummaries.get(ingredient.id) ??
+              buildIngredientPriceSummary(ingredient, priceRecords, purchaseInvoices, suppliers, vatBasis)
+            }
+            quantity={line.quantity}
+            recipeUnit={line.unit}
+            purchaseUnit={ingredient.purchaseUnit}
+            dishCost={cost}
+          />
+        ) : null}
       </div>
     );
   };
@@ -321,6 +459,30 @@ export function RecipeEditorModal({
             <span className="text-end">{t("admin.costing.ingredientCost")}</span>
             <span />
           </div>
+          {pendingUpdates.length > 0 ? (
+            <PriceUpdateBanner
+              pending={pendingUpdates}
+              selected={selectedUpdates}
+              onToggle={(id, next) =>
+                setSelectedUpdates((current) => ({ ...current, [id]: next }))
+              }
+              applying={applyingIds}
+              recipeOtherUsageCount={(ingredientId) => {
+                // Count other recipes that use this ingredient — the parent passes
+                // `recipes` through `recipe` prop only for this dish, so we approximate
+                // via the ingredient's `allIngredients` list which represents the whole
+                // menu. A detailed cross-recipe count is computed in costingService on
+                // save (`affectedRecipeCount`). We surface the hint when there is at
+                // least one usage so the manager knows this price is shared.
+                return allIngredients.filter((item) => item.id === ingredientId).length;
+              }}
+              confirmManualId={confirmManualId}
+              onConfirmManual={setConfirmManualId}
+              onApply={(ids) => void applyPriceUpdates(ids)}
+              selectedCount={selectedUpdateIds.length}
+              allSelectedIds={selectedUpdateIds}
+            />
+          ) : null}
           <div className="space-y-3">
             {lines.map((line, index) => renderRow(line, index))}
           </div>
@@ -566,6 +728,174 @@ function Field({
     <div>
       <Label>{label}</Label>
       <Input className="mt-1" type="number" min="0" step="0.01" value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function PriceUpdateBanner({
+  pending,
+  selected,
+  onToggle,
+  applying,
+  recipeOtherUsageCount,
+  confirmManualId,
+  onConfirmManual,
+  onApply,
+  selectedCount,
+  allSelectedIds,
+}: {
+  pending: Array<{ ingredient: CostingIngredient; summary: IngredientPriceSummary }>;
+  selected: Record<string, boolean>;
+  onToggle: (id: string, next: boolean) => void;
+  applying: string[];
+  recipeOtherUsageCount: (ingredientId: string) => number;
+  confirmManualId: string | null;
+  onConfirmManual: (id: string | null) => void;
+  onApply: (ids: string[]) => void;
+  selectedCount: number;
+  allSelectedIds: string[];
+}) {
+  const t = useT();
+  const busy = applying.length > 0;
+  return (
+    <div className="rounded-2xl border border-turquoise/30 bg-turquoise/5 p-3 shadow-soft">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full bg-turquoise/20 text-turquoise">
+            <RefreshCcw className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-dark-brown">
+              {t("admin.recipe.price.updateAvailableTitle")}
+            </p>
+            <p className="mt-0.5 text-xs text-coffee/70">
+              {t("admin.recipe.price.updateAvailableHint")}
+            </p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="turquoise"
+          size="sm"
+          disabled={busy || selectedCount === 0}
+          onClick={() => onApply(allSelectedIds)}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {selectedCount > 1
+            ? t("admin.recipe.price.updateAllSelected").replace("{count}", String(selectedCount))
+            : t("admin.recipe.price.updateSingle")}
+        </Button>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {pending.map(({ ingredient, summary }) => {
+          const suggestion = summary.suggestion!;
+          const isManual = suggestion.isManualOverride;
+          const checked = isManual ? selected[ingredient.id] === true : selected[ingredient.id] !== false;
+          const otherUsage = Math.max(0, recipeOtherUsageCount(ingredient.id) - 1);
+          const direction =
+            summary.comparison.kind === "missing-data"
+              ? null
+              : summary.comparison.direction;
+          const deltaPct =
+            summary.comparison.kind === "missing-data" || summary.comparison.deltaPct == null
+              ? null
+              : summary.comparison.deltaPct;
+          return (
+            <li
+              key={ingredient.id}
+              className="flex flex-col gap-1 rounded-xl bg-warm-white px-3 py-2 shadow-soft"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <label className="flex items-start gap-2 text-sm text-dark-brown">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={checked}
+                    onChange={(event) => onToggle(ingredient.id, event.target.checked)}
+                    disabled={busy}
+                  />
+                  <div>
+                    <p className="font-medium">{ingredient.name}</p>
+                    <p className="text-xs text-coffee/60">
+                      {formatIls(suggestion.nextCostPerBase)} ·{" "}
+                      {suggestion.source.supplierName ?? t("admin.recipe.price.manualSource")}
+                      {suggestion.source.purchaseDate ? ` · ${suggestion.source.purchaseDate}` : ""}
+                    </p>
+                    {direction && deltaPct != null ? (
+                      <p
+                        className={cn(
+                          "mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium",
+                          direction === "up" && "text-red-700",
+                          direction === "down" && "text-emerald-700",
+                          direction === "flat" && "text-coffee/60"
+                        )}
+                      >
+                        {direction === "up"
+                          ? `${t("admin.recipe.price.up")} ${Math.round(Math.abs(deltaPct) * 100)}%`
+                          : direction === "down"
+                            ? `${t("admin.recipe.price.down")} ${Math.round(Math.abs(deltaPct) * 100)}%`
+                            : t("admin.recipe.price.flat")}
+                      </p>
+                    ) : null}
+                    {otherUsage > 0 ? (
+                      <p className="mt-0.5 text-[11px] text-coffee/55">
+                        {t("admin.recipe.price.sharedPriceHint").replace("{count}", String(otherUsage))}
+                      </p>
+                    ) : null}
+                  </div>
+                </label>
+                {isManual ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 ring-1 ring-amber-200">
+                    <AlertCircle className="h-3 w-3" />
+                    {t("admin.recipe.price.manualOverride")}
+                  </span>
+                ) : null}
+              </div>
+              {isManual && confirmManualId === ingredient.id ? (
+                <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                  <p>{t("admin.recipe.price.manualConfirm")}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="turquoise"
+                      disabled={busy}
+                      onClick={() => onApply([ingredient.id])}
+                    >
+                      {t("admin.recipe.price.manualConfirmYes")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => onConfirmManual(null)}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {isManual && confirmManualId !== ingredient.id ? (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || !checked}
+                    onClick={() => onConfirmManual(ingredient.id)}
+                  >
+                    {t("admin.recipe.price.updateSingle")}
+                  </Button>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-[11px] text-coffee/55">
+        {t("admin.recipe.price.noSellingPriceChange")}
+      </p>
     </div>
   );
 }

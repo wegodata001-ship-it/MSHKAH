@@ -148,6 +148,8 @@ export type PurchasePriceRecord = {
   unitCost: number;
   source?: SupplierPriceSource;
   createdAt: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
 };
 
 export type InventoryMovement = {
@@ -188,7 +190,14 @@ export type InventoryMovement = {
   createdAt: string;
 };
 
-export type PurchaseInvoiceStatus = "draft" | "needs_review" | "saved" | "approving" | "approved" | "rejected";
+export type PurchaseInvoiceStatus =
+  | "draft"
+  | "needs_review"
+  | "saved"
+  | "approving"
+  | "approved"
+  | "rejected"
+  | "cancelled";
 export type InvoiceStockStatus = "none" | "partial" | "posted";
 export type PurchaseDocumentType = "invoice" | "tax_invoice" | "receipt" | "tax_receipt" | "delivery" | "credit" | "other";
 export type InvoiceLineMatchKind = "exact" | "suggest" | "mapped" | "new" | "none";
@@ -348,6 +357,11 @@ export type PurchaseInvoice = {
   inventoryPostedAt?: string;
   inventoryPostedBy?: string;
   inventoryPostingId?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancelReason?: string;
+  cancellationId?: string;
+  cancelReversedMovementIds?: string[];
 };
 
 export type PosImportStatus = "draft" | "saved" | "approved" | "blocked-duplicate";

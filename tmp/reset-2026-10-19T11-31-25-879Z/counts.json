@@ -1,0 +1,40 @@
+{
+  "before": {
+    "purchaseInvoices": 19,
+    "supplierOffers": 13,
+    "supplierItemMaps": 15,
+    "purchasePriceRecords": 18,
+    "suppliers": 5,
+    "supplierPayments": 0,
+    "supplierOpenings": 0,
+    "inventoryMovements": 12,
+    "inventoryBalances": 12,
+    "stockCounts": 0,
+    "stockCountSessions": 0,
+    "breakEvenFixedCosts": 0,
+    "breakEvenVariableCosts": 0,
+    "breakEvenSettings": 0,
+    "breakEvenSnapshots": 0,
+    "cashFlowEntries": 0,
+    "ingredients": 68
+  },
+  "after": {
+    "purchaseInvoices": 0,
+    "supplierOffers": 0,
+    "supplierItemMaps": 0,
+    "purchasePriceRecords": 0,
+    "suppliers": 0,
+    "supplierPayments": 0,
+    "supplierOpenings": 0,
+    "inventoryMovements": 0,
+    "inventoryBalances": 0,
+    "stockCounts": 0,
+    "stockCountSessions": 0,
+    "breakEvenFixedCosts": 0,
+    "breakEvenVariableCosts": 0,
+    "breakEvenSettings": 0,
+    "breakEvenSnapshots": 0,
+    "cashFlowEntries": 0,
+    "ingredients": 1
+  }
+}

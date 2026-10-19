@@ -1,0 +1,110 @@
+[
+  {
+    "name": "DESKTOP PAGE",
+    "pass": true
+  },
+  {
+    "name": "DESKTOP IMPORT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "DESKTOP TEMPLATE BUTTON",
+    "pass": true
+  },
+  {
+    "name": "DESKTOP MENU EXPORT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "DESKTOP MENU DRAFT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "EXCEL TEMPLATE DOWNLOAD",
+    "pass": true,
+    "detail": "mishkat-costing-template.xlsx"
+  },
+  {
+    "name": "CURRENT MENU EXPORT",
+    "pass": true,
+    "detail": "mishkat-menu-recipes.xlsx"
+  },
+  {
+    "name": "WIZARD OPEN",
+    "pass": true
+  },
+  {
+    "name": "XLSX IMPORT",
+    "pass": true
+  },
+  {
+    "name": "CSV IMPORT",
+    "pass": true
+  },
+  {
+    "name": "MENU AUTO-DRAFT",
+    "pass": true
+  },
+  {
+    "name": "NO AUTO SAVE",
+    "pass": true
+  },
+  {
+    "name": "MISSING QUANTITY WARNING",
+    "pass": true
+  },
+  {
+    "name": "EXISTING RECIPE PROTECTION",
+    "pass": true
+  },
+  {
+    "name": "MOBILE PAGE",
+    "pass": true
+  },
+  {
+    "name": "MOBILE IMPORT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "MOBILE TEMPLATE BUTTON",
+    "pass": true
+  },
+  {
+    "name": "MOBILE MENU EXPORT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "MOBILE MENU DRAFT BUTTON",
+    "pass": true
+  },
+  {
+    "name": "EXCEL TEMPLATE DOWNLOAD",
+    "pass": true,
+    "detail": "mishkat-costing-template.xlsx"
+  },
+  {
+    "name": "CURRENT MENU EXPORT",
+    "pass": true,
+    "detail": "mishkat-menu-recipes.xlsx"
+  },
+  {
+    "name": "WIZARD OPEN",
+    "pass": true
+  },
+  {
+    "name": "MENU AUTO-DRAFT",
+    "pass": true
+  },
+  {
+    "name": "NO AUTO SAVE",
+    "pass": true
+  },
+  {
+    "name": "MISSING QUANTITY WARNING",
+    "pass": true
+  },
+  {
+    "name": "EXISTING RECIPE PROTECTION",
+    "pass": true
+  }
+]

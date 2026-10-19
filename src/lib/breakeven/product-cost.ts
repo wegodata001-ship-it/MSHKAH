@@ -372,3 +372,140 @@ export function comboRecipeLines(
 export function sellingPriceIsNotCost(sellingPrice: number, foodCost: number | null): boolean {
   return foodCost == null || foodCost !== sellingPrice;
 }
+
+export type CostPartSource = "ingredient" | "product" | "recipe";
+
+export type CostPartDraft = {
+  source: CostPartSource;
+  refId: string;
+  quantity: string;
+  unit: string;
+};
+
+export type CostPartPreview = {
+  name: string;
+  quantity: number | null;
+  unit: string;
+  cost: number | null;
+  problem?: "pick" | "qty" | "cost" | "unit";
+};
+
+export function parseUnitCost(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+function partQuantity(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+export function previewCostParts(
+  drafts: CostPartDraft[],
+  ingredients: CostingIngredient[],
+  recipes: DishRecipe[],
+  products: { id: string; name: string }[],
+  currentProductId?: string
+): { rows: CostPartPreview[]; total: number | null } {
+  const started = drafts.filter((row) => row.refId.trim() || row.quantity.trim());
+  const rows = started.map((row) => previewCostPart(row, ingredients, recipes, products, currentProductId));
+  if (!rows.length || rows.some((row) => row.cost == null)) return { rows, total: null };
+  return { rows, total: rows.reduce((sum, row) => sum + (row.cost ?? 0), 0) };
+}
+
+function previewCostPart(
+  row: CostPartDraft,
+  ingredients: CostingIngredient[],
+  recipes: DishRecipe[],
+  products: { id: string; name: string }[],
+  currentProductId?: string
+): CostPartPreview {
+  const quantity = partQuantity(row.quantity);
+  if (row.source === "recipe" || row.source === "product") {
+    if (row.source === "product") {
+      const product = products.find((item) => item.id === row.refId);
+      const name = product?.name || "";
+      if (!product) return { name, quantity, unit: "unit", cost: null, problem: row.refId ? "cost" : "pick" };
+      if (quantity == null) return { name, quantity: null, unit: "unit", cost: null, problem: "qty" };
+      if (product.id === currentProductId) return { name, quantity, unit: "unit", cost: null, problem: "cost" };
+      const resolved = resolveProductCost({
+        productId: product.id,
+        name,
+        sellingPrice: 1,
+        recipes,
+        ingredients,
+        seen: new Set(currentProductId ? [currentProductId] : []),
+      });
+      if (resolved.costMissing || resolved.foodCost == null) {
+        return { name: resolved.costGaps?.[0]?.name || name, quantity, unit: "unit", cost: null, problem: "cost" };
+      }
+      return { name, quantity, unit: "unit", cost: resolved.foodCost * quantity };
+    }
+    const recipe = recipes.find((item) => item.id === row.refId);
+    const product = products.find((item) => item.id === recipe?.productId);
+    const name = product?.name || recipe?.productId || "";
+    if (!recipe) return { name, quantity, unit: "unit", cost: null, problem: row.refId ? "cost" : "pick" };
+    if (quantity == null) return { name: name || row.refId, quantity: null, unit: "unit", cost: null, problem: "qty" };
+    if (recipe.productId === currentProductId) return { name, quantity, unit: "unit", cost: null, problem: "cost" };
+    const resolved = resolveProductCost({
+      productId: recipe.productId,
+      name: name || recipe.productId,
+      sellingPrice: 1,
+      recipes,
+      ingredients,
+      seen: new Set(currentProductId ? [currentProductId] : []),
+    });
+    if (resolved.costMissing || resolved.foodCost == null) {
+      return { name: resolved.costGaps?.[0]?.name || name, quantity, unit: "unit", cost: null, problem: "cost" };
+    }
+    return { name, quantity, unit: "unit", cost: resolved.foodCost * quantity };
+  }
+  const ingredient = ingredients.find((item) => item.id === row.refId);
+  const name = ingredient?.name || "";
+  if (!ingredient) return { name, quantity, unit: row.unit, cost: null, problem: "pick" };
+  if (quantity == null) return { name, quantity: null, unit: row.unit || ingredient.purchaseUnit, cost: null, problem: "qty" };
+  const unit = recipeUnit(row.unit) ?? recipeUnit(ingredient.purchaseUnit);
+  if (!unit || !unitsCompatible(unit, asPurchaseUnit(ingredient.purchaseUnit))) {
+    return { name, quantity, unit: row.unit, cost: null, problem: "unit" };
+  }
+  if (!ingredientHasCost(ingredient)) return { name, quantity, unit, cost: null, problem: "cost" };
+  return { name, quantity, unit, cost: lineRecipeCost(quantity, unit, ingredient.costPerBaseUnit) };
+}
+
+export function componentRecipeLines(
+  drafts: CostPartDraft[],
+  context?: {
+    recipes: DishRecipe[];
+    ingredients: CostingIngredient[];
+    products: Array<{ id: string; name: string } | Product>;
+    currentProductId?: string;
+  }
+): RecipeLine[] {
+  return drafts.flatMap((row) => {
+    const quantity = partQuantity(row.quantity);
+    if (!row.refId.trim() || quantity == null) return [];
+    if (row.source === "recipe") return [{ ingredientId: "", subRecipeId: row.refId, quantity, unit: "unit" as const }];
+    if (row.source === "product") {
+      const product = context?.products.find((item) => item.id === row.refId);
+      const nested = context ? recipeForProduct(context.recipes, row.refId) : undefined;
+      if (nested && nested.productId !== context?.currentProductId) {
+        return [{ ingredientId: "", subRecipeId: nested.id, quantity, unit: "unit" as const }];
+      }
+      const productName = product && "name" in product ? product.name : product?.name_he || row.refId;
+      const match = context
+        ? findResaleCandidates(row.refId, productName, context.ingredients, product).exact
+        : [];
+      const ingredient = match.length === 1 ? match[0] : undefined;
+      if (!ingredient || !ingredientHasCost(ingredient)) return [];
+      return [{ ingredientId: ingredient.id, quantity, unit: ingredient.baseUnit }];
+    }
+    const unit = recipeUnit(row.unit) ?? "unit";
+    return [{ ingredientId: row.refId, quantity, unit }];
+  });
+}
