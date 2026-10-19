@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -16,7 +16,14 @@ type VerifyError =
   | "no_token"
   | "enrollment_disabled";
 
-export default function ClubVerifyPage() {
+/**
+ * `ClubVerifyContent` holds all the client state and the `useSearchParams`
+ * call. Next.js 15 bails this subtree out of static prerendering, so the
+ * default export must wrap it in a Suspense boundary — otherwise the
+ * production build fails with "useSearchParams() should be wrapped in a
+ * suspense boundary".
+ */
+function ClubVerifyContent() {
   const t = useT();
   const router = useRouter();
   const params = useSearchParams();
@@ -73,54 +80,70 @@ export default function ClubVerifyPage() {
   }
 
   return (
+    <div className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 md:px-6">
+      <div className="rounded-3xl bg-warm-white p-5 shadow-soft">
+        <h1 className="font-display text-xl font-semibold text-dark-brown">
+          {t("club.verify.title")}
+        </h1>
+        <p className="mt-1 text-xs text-coffee/60">
+          {t("club.verify.subtitle").replace("{email}", email)}
+        </p>
+        <div className="mt-4 flex flex-col gap-3">
+          <Input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            dir="ltr"
+            value={code}
+            maxLength={6}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="123456"
+            className="text-center text-xl tracking-widest"
+          />
+          <Button
+            type="button"
+            variant="turquoise"
+            disabled={busy || code.length !== 6}
+            onClick={() => void submit()}
+            className="w-full"
+          >
+            {busy ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("club.verify.verifying")}
+              </>
+            ) : (
+              t("club.verify.submit")
+            )}
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => void resend()} disabled={busy} className="w-full">
+            {t("club.verify.resend")}
+          </Button>
+        </div>
+        {error ? (
+          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+            {t(`club.verify.err.${error}`)}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ClubVerifyFallback() {
+  return (
+    <div className="mx-auto flex max-w-md items-center justify-center px-4 py-10">
+      <Loader2 className="h-6 w-6 animate-spin text-coffee/60" />
+    </div>
+  );
+}
+
+export default function ClubVerifyPage() {
+  return (
     <>
       <PageHeader />
-      <div className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 md:px-6">
-        <div className="rounded-3xl bg-warm-white p-5 shadow-soft">
-          <h1 className="font-display text-xl font-semibold text-dark-brown">
-            {t("club.verify.title")}
-          </h1>
-          <p className="mt-1 text-xs text-coffee/60">
-            {t("club.verify.subtitle").replace("{email}", email)}
-          </p>
-          <div className="mt-4 flex flex-col gap-3">
-            <Input
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              dir="ltr"
-              value={code}
-              maxLength={6}
-              onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="123456"
-              className="text-center text-xl tracking-widest"
-            />
-            <Button
-              type="button"
-              variant="turquoise"
-              disabled={busy || code.length !== 6}
-              onClick={() => void submit()}
-              className="w-full"
-            >
-              {busy ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {t("club.verify.verifying")}
-                </>
-              ) : (
-                t("club.verify.submit")
-              )}
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => void resend()} disabled={busy} className="w-full">
-              {t("club.verify.resend")}
-            </Button>
-          </div>
-          {error ? (
-            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-xs text-red-900">
-              {t(`club.verify.err.${error}`)}
-            </div>
-          ) : null}
-        </div>
-      </div>
+      <Suspense fallback={<ClubVerifyFallback />}>
+        <ClubVerifyContent />
+      </Suspense>
     </>
   );
 }
