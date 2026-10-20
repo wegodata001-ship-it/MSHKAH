@@ -17,8 +17,8 @@ export const adminKpiCard = cn(
   "dark:border-white/10 dark:bg-[#1a1412]/80"
 );
 
-export const adminPageTitle = "font-display text-2xl font-bold text-dark-brown md:text-3xl dark:text-warm-white";
-export const adminPageSubtitle = "mt-1 text-sm text-coffee/60 dark:text-warm-white/60";
+export const adminPageTitle = "font-display text-[28px] font-bold leading-tight text-dark-brown md:text-[32px] dark:text-warm-white";
+export const adminPageSubtitle = "mt-1 text-base text-coffee/70 dark:text-warm-white/70";
 
 export const adminInput = cn(
   "h-10 rounded-xl border-beige-dark/30 bg-beige/20",
@@ -28,7 +28,7 @@ export const adminInput = cn(
 export const adminBtnPrimary = "h-10 rounded-xl px-4 font-medium";
 export const adminBtnOutline = "h-10 rounded-xl px-4 font-medium";
 
-export const adminTableHeader = "bg-beige/40 text-xs font-semibold uppercase tracking-wide text-coffee/70 dark:bg-white/5 dark:text-warm-white/70";
+export const adminTableHeader = "bg-beige/50 text-sm font-bold text-dark-brown dark:bg-white/5 dark:text-warm-white/80";
 export const adminTableRow = "border-b border-beige-dark/10 transition-colors hover:bg-beige/20 dark:border-white/5 dark:hover:bg-white/5";
 
-export const adminBadge = "rounded-full px-2.5 py-0.5 text-[11px] font-medium";
+export const adminBadge = "rounded-full px-2.5 py-1 text-sm font-semibold";

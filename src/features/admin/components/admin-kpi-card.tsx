@@ -39,8 +39,8 @@ export function AdminKpiCard({
           <div className={cn("mb-3 flex h-9 w-9 items-center justify-center rounded-xl", bgClass)}>
             <Icon className={cn("h-4 w-4", colorClass)} />
           </div>
-          <p className={cn("text-xl font-bold md:text-2xl", colorClass)}>{value}</p>
-          <p className="mt-1 text-xs text-coffee/55 dark:text-warm-white/55">{label}</p>
+          <p className={cn("text-2xl font-bold tabular-nums md:text-[28px]", colorClass)}>{value}</p>
+          <p className="mt-1 text-sm font-medium text-coffee/70 dark:text-warm-white/70">{label}</p>
         </>
       )}
     </motion.div>

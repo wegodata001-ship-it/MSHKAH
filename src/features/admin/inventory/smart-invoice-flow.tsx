@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { Camera, FileUp, Loader2, Trash2, Upload } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +26,7 @@ import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/ad
 import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
 import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
+import { InvoiceCaptureStage } from "@/features/admin/inventory/invoice-capture-stage";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
 import { toDateOnly } from "@/lib/dates/normalize";
@@ -167,16 +168,6 @@ export function SmartInvoiceFlow({
   const missing = useMemo(() => (invoice ? missingInvoiceFields(invoice) : []), [invoice]);
   const incompleteLines = useMemo(() => (invoice ? incompleteInvoiceLineCount(invoice.lines) : 0), [invoice]);
 
-  const takeFile = (next: File | null) => {
-    if (!next) return;
-    setFile(next);
-    setError(null);
-    setInvoice(null);
-    setEditedKeys(new Set());
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(URL.createObjectURL(next));
-  };
-
   const scan = async (nextFile: File | null = file, invoiceId = invoice?.id) => {
     if (scanning.current || busy) return;
     if (!nextFile && !invoiceId) return;
@@ -256,110 +247,26 @@ export function SmartInvoiceFlow({
   };
 
   if (!invoice) {
+    const detail = [
+      error,
+      retryAfterSeconds != null ? t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds)) : null,
+      lastRequestId ? `${t("admin.inventory.smart.requestId")}: ${lastRequestId}` : null,
+    ].filter(Boolean).join(" · ");
     return (
-      <AdminCard title={t("admin.inventory.smart.title")}>
-        <label
-          className="flex min-h-48 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-turquoise/40 bg-turquoise/5 px-6 py-10 text-center"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            takeFile(e.dataTransfer.files?.[0] ?? null);
-          }}
-        >
-          <Upload className="h-8 w-8 text-turquoise" />
-          <p className="font-medium">{t("admin.inventory.smart.drop")}</p>
-          <input
-            type="file"
-            accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-            className="hidden"
-            onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
-          />
-        </label>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <label className="inline-flex">
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
-            />
-            <span className="inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm">
-              <Camera className="h-4 w-4" /> {t("admin.inventory.smart.camera")}
-            </span>
-          </label>
-          <label className="inline-flex">
-            <input
-              type="file"
-              accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-              className="hidden"
-              onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
-            />
-            <span className="inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm">
-              <FileUp className="h-4 w-4" /> {t("admin.inventory.attachment")}
-            </span>
-          </label>
-        </div>
-        {file && (
-          <p className="mt-3 text-sm text-coffee/70">
-            {file.name} · {t(`admin.inventory.doc.${file.type.includes("pdf") ? "invoice" : "other"}`)}
-          </p>
-        )}
-        {preview && file && !file.type.includes("pdf") && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={preview} alt="" className="mt-3 max-h-64 rounded-xl border object-contain" />
-        )}
-        {busy && (
-          <p className="mt-3 inline-flex items-center gap-2 text-sm text-coffee/80">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {scanPhaseLabel}
-          </p>
-        )}
-        {error && (
-          <div className="mt-3 space-y-1 rounded-xl border border-red-200 bg-red-50 p-3">
-            <p className="text-sm font-medium text-red-700">{t("admin.inventory.smart.scanIncomplete")}</p>
-            <p className="text-sm text-red-600">{error}</p>
-            {retryAfterSeconds != null && (
-              <p className="text-sm text-coffee/70">{t("admin.inventory.smart.retryAfter").replace("{when}", formatRetryAfterWhen(retryAfterSeconds))}</p>
-            )}
-            {lastRequestId && (
-              <p dir="ltr" className="text-[11px] font-mono text-coffee/50">
-                {t("admin.inventory.smart.requestId")}: {lastRequestId}
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2 pt-1">
-              <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan(file)}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.inventory.smart.retry")}
-              </Button>
-              <label className="inline-flex">
-                <input
-                  type="file"
-                  accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-                  className="hidden"
-                  onChange={(e) => takeFile(e.target.files?.[0] ?? null)}
-                />
-                <span className="inline-flex h-10 cursor-pointer items-center rounded-xl border px-3 text-sm">
-                  {t("admin.inventory.smart.chooseOtherFile")}
-                </span>
-              </label>
-            </div>
-          </div>
-        )}
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          <Button type="button" variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button type="button" variant="outline" onClick={onManual}>{t("admin.inventory.smart.manual")}</Button>
-          <Button type="button" variant="turquoise" disabled={busy || !file} onClick={() => void scan(file)}>
-            {busy ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {scanPhaseLabel}
-              </>
-            ) : (
-              t("admin.inventory.smart.scan")
-            )}
-          </Button>
-        </div>
-      </AdminCard>
+      <InvoiceCaptureStage
+        busy={busy}
+        phaseLabel={scanPhaseLabel}
+        error={detail || null}
+        onScan={(next) => {
+          setFile(next);
+          setError(null);
+          if (preview) URL.revokeObjectURL(preview);
+          setPreview(next.type.startsWith("image/") ? URL.createObjectURL(next) : null);
+          void scan(next);
+        }}
+        onClose={onClose}
+        onManual={onManual}
+      />
     );
   }
 

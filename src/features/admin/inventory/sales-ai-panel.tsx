@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,9 +62,10 @@ function tabKind(tab: Tab): string[] | null {
   return null;
 }
 
-export function SalesAiPanel({ importId }: { importId: string }) {
+export function SalesAiPanel({ importId, autoAnalyze = false }: { importId: string; autoAnalyze?: boolean }) {
   const t = useT();
   const [report, setReport] = useState<Report | null>(null);
+  const autoRan = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
@@ -89,6 +90,14 @@ export function SalesAiPanel({ importId }: { importId: string }) {
     }
     setReport(result.data.report);
   }
+
+  useEffect(() => {
+    if (!autoAnalyze || autoRan.current === importId) return;
+    autoRan.current = importId;
+    void analyze(false);
+    // The analysis is cached server-side. A second mount reuses that report.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAnalyze, importId]);
 
   async function feedback(item: Recommendation, status: "approved" | "rejected") {
     if (!report) return;
@@ -141,6 +150,7 @@ export function SalesAiPanel({ importId }: { importId: string }) {
         </Button>
         <p className="text-xs text-coffee/60">{t("admin.salesAi.noAutoPrice")}</p>
       </div>
+      {busy && <p className="mt-3 text-sm text-coffee/70">{t("admin.insight.aiWorking")}</p>}
       {error && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
       {report && (
         <div className="mt-4 space-y-4">

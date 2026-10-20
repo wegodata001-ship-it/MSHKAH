@@ -86,6 +86,39 @@ export function classifyReportedCost(input: {
   return "unknown";
 }
 
+export function simulateDiscount(input: {
+  currentPrice: number;
+  discountPercent: number;
+  quantity: number;
+  verifiedUnitCost: number | null;
+}): {
+  discountedPrice: number;
+  unitProfitAfter: number | null;
+  quantityToHoldProfit: number | null;
+  losesMoney: boolean;
+} {
+  const rate = Math.min(90, Math.max(0, input.discountPercent)) / 100;
+  const discountedPrice = roundMoney(input.currentPrice * (1 - rate));
+  if (input.verifiedUnitCost == null) {
+    return { discountedPrice, unitProfitAfter: null, quantityToHoldProfit: null, losesMoney: false };
+  }
+  const before = input.currentPrice - input.verifiedUnitCost;
+  const after = roundMoney(discountedPrice - input.verifiedUnitCost);
+  const quantityToHoldProfit =
+    before > 0 && after > 0 ? roundMoney((before * input.quantity) / after) : null;
+  return {
+    discountedPrice,
+    unitProfitAfter: after,
+    quantityToHoldProfit,
+    losesMoney: after < 0,
+  };
+}
+
+export function rankRecommendations<T extends { severity: "high" | "medium" | "low"; id: string }>(cards: T[], limit = 5): T[] {
+  const weight = { high: 0, medium: 1, low: 2 };
+  return [...cards].sort((a, b) => weight[a.severity] - weight[b.severity] || a.id.localeCompare(b.id)).slice(0, limit);
+}
+
 export function simulatePriceChange(input: {
   currentPrice: number;
   nextPrice: number;

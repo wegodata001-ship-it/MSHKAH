@@ -132,6 +132,29 @@ describe("POS apply plan", () => {
     expect(plan.rows[0]?.impacts.some((item) => item.productId === "dish")).toBe(false);
   });
 
+  it("does not change the menu price when the sales average matches or differs", () => {
+    const plan = planPosApply({
+      lines: [line({ posName: "חומוס", quantity: 36, reportedRevenue: 4320, unitPrice: 120, menuProductId: "hummus", matchKind: "exact" })],
+      products: [{ ...hummus, price: 120 }],
+      maps: [],
+      recipes: [],
+      movements: [],
+      imports: [],
+    });
+    expect(plan.rows[0]?.computedUnitPrice).toBe(120);
+    expect(plan.rows[0]?.updatePrice).toBe(false);
+    const different = planPosApply({
+      lines: [line({ posName: "חומוס", quantity: 36, reportedRevenue: 3960, menuProductId: "hummus", matchKind: "exact" })],
+      products: [{ ...hummus, price: 120 }],
+      maps: [],
+      recipes: [],
+      movements: [],
+      imports: [],
+    });
+    expect(different.rows[0]?.computedUnitPrice).toBe(110);
+    expect(different.rows[0]?.updatePrice).toBe(false);
+  });
+
   it("does not treat a zero proposed price as an automatic overwrite", () => {
     const plan = planPosApply({
       lines: [line({ posName: "חומוס", quantity: 2, reportedRevenue: 0, menuProductId: "hummus", matchKind: "exact" })],

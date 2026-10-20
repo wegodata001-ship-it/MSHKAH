@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus } from "lucide-react";
+import Link from "next/link";
+import { Camera, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
+import { useAdminPath } from "@/hooks/useAdminPath";
 import { AdminCard } from "@/features/admin/components/admin-card";
 import { formatIls } from "@/lib/costing/money";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
@@ -65,6 +67,7 @@ type PosPane = "excel" | "z" | "history";
 
 export function InventorySection(props: InventoryHubProps & { pane: InventoryPane }) {
   const t = useT();
+  const adminPath = useAdminPath();
   const [search, setSearch] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
   const [lowStockOnly, setLowStockOnly] = useState(false);
@@ -189,6 +192,12 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             {t("admin.purchaseList.open")}
           </Button>
         )}
+        <Button type="button" variant="turquoise" className="min-h-12" asChild>
+          <Link href={`${adminPath("costing")}?capture=1`}>
+            <Camera className="h-5 w-5" />
+            {t("admin.inventory.smart.camera")}
+          </Link>
+        </Button>
         <Button type="button" variant="turquoise" onClick={props.onAddProduct}>
           <Plus className="h-4 w-4" /> {t("admin.inventory.newProduct")}
         </Button>

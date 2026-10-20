@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { recognizedIsoDate } from "@/lib/inventory/pos-parse";
+import { recognizedIsoDate, suggestPeriodFromFileName } from "@/lib/inventory/pos-parse";
 import { extractPosPeriod } from "@/lib/inventory/pos-parse";
 import {
   adviseFromFacts,
   analyzeSalesLines,
   classifyReportedCost,
+  rankRecommendations,
+  simulateDiscount,
   simulatePriceChange,
 } from "@/lib/inventory/sales-analysis";
 import type { PosSaleLine } from "@/lib/inventory/types";
@@ -24,6 +26,38 @@ function line(overrides: Partial<PosSaleLine>): PosSaleLine {
     ...overrides,
   };
 }
+
+describe("file name period suggestion", () => {
+  it("suggests a range from the file name and never accepts 1970", () => {
+    expect(suggestPeriodFromFileName("sales_2026-10-01_2026-10-31.xlsx")).toEqual({ from: "2026-10-01", to: "2026-10-31" });
+    expect(suggestPeriodFromFileName("report-1970-01-01.xlsx")).toBeNull();
+  });
+});
+
+describe("discount simulation", () => {
+  it("warns when a discount loses money and states how many units hold the profit", () => {
+    const safe = simulateDiscount({ currentPrice: 120, discountPercent: 10, quantity: 36, verifiedUnitCost: 40 });
+    expect(safe.discountedPrice).toBe(108);
+    expect(safe.unitProfitAfter).toBe(68);
+    expect(safe.losesMoney).toBe(false);
+    expect(safe.quantityToHoldProfit).toBeGreaterThan(36);
+    const loss = simulateDiscount({ currentPrice: 50, discountPercent: 30, quantity: 10, verifiedUnitCost: 40 });
+    expect(loss.losesMoney).toBe(true);
+    expect(loss.quantityToHoldProfit).toBeNull();
+  });
+
+  it("ranks high severity first and keeps five", () => {
+    const ranked = rankRecommendations([
+      { id: "b", severity: "low" as const },
+      { id: "a", severity: "high" as const },
+      { id: "c", severity: "medium" as const },
+      { id: "d", severity: "high" as const },
+      { id: "e", severity: "low" as const },
+      { id: "f", severity: "medium" as const },
+    ]);
+    expect(ranked.map((item) => item.id)).toEqual(["a", "d", "c", "f", "b"]);
+  });
+});
 
 describe("recognized dates", () => {
   it("rejects the epoch placeholder instead of treating it as a sales date", () => {

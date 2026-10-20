@@ -291,11 +291,10 @@ export function posApplyBlockReasons(plan: PosApplyPlan): PosApplyBlockReason[] 
   }));
 }
 
-function defaultUpdatePrice(current: number | null, proposed: number | null): boolean {
-  if (proposed == null || !Number.isFinite(proposed)) return false;
-  if (proposed === 0 && (current ?? 0) > 0) return false;
-  if (current == null) return proposed > 0;
-  return Math.abs(proposed - current) > PRICE_GAP && proposed > 0;
+function defaultUpdatePrice(_current: number | null, _proposed: number | null): boolean {
+  // A sales-report average is not the menu price. The admin must opt in
+  // per row before any catalog price is written.
+  return false;
 }
 
 export function planPosApply(input: {

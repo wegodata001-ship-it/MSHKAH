@@ -167,9 +167,15 @@ export function CostingAdmin() {
     const params = new URLSearchParams(window.location.search);
     const hubParam = params.get("hub");
     const tabParam = params.get("tab");
-    if (hubParam === "finance") {
+    if (hubParam === "finance" || params.get("capture") === "1") {
       setHub("finance");
       setTab(tabParam === "breakeven" ? "breakeven" : "invoices");
+    }
+    if (params.get("capture") === "1") {
+      setStartInvoiceIntake(true);
+      params.delete("capture");
+      const next = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
     }
   }, []);
 

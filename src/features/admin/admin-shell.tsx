@@ -4,6 +4,7 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { AdminSidebar, AdminMobileDrawer } from "./admin-sidebar";
+import { AdminMobileNav } from "./components/admin-mobile-nav";
 import { AdminHeader } from "./admin-header";
 import { AuthGuard } from "./auth-guard";
 import { isAdminLoginPath } from "@/lib/domains/host-routing";
@@ -44,10 +45,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25 }}
-              className="min-w-0 flex-1 px-4 py-6 print:p-0 md:px-6 md:py-8"
+              className="min-w-0 flex-1 px-4 py-6 pb-28 print:p-0 md:px-6 md:py-8 lg:pb-8"
             >
               <div className="mx-auto w-full max-w-7xl print:max-w-none">{children}</div>
             </motion.main>
+            <AdminMobileNav onMore={() => setMobileOpen(true)} />
           </div>
         </div>
       </div>

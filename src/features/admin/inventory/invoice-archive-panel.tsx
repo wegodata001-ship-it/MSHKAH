@@ -161,6 +161,7 @@ export function InvoiceArchivePanel({
         menuOpen={menuOpen}
         onMenuToggle={() => setMenuOpen((value) => !value)}
         menuRef={menuRef}
+        onCamera={() => trigger("camera")}
       >
         <HubMenuItem
           icon={<FileUp className="h-4 w-4" />}
@@ -335,6 +336,7 @@ function HubHero({
   menuOpen,
   onMenuToggle,
   menuRef,
+  onCamera,
   children,
 }: {
   title: string;
@@ -342,6 +344,7 @@ function HubHero({
   menuOpen: boolean;
   onMenuToggle: () => void;
   menuRef: React.RefObject<HTMLDivElement | null>;
+  onCamera: () => void;
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -352,7 +355,12 @@ function HubHero({
           <h2 className="text-xl font-semibold text-dark-brown">{title}</h2>
           <p className="mt-1 text-sm text-coffee/70">{subtitle}</p>
         </div>
-        <div className="relative" ref={menuRef}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="turquoise" className="min-h-12 px-5 text-base" onClick={onCamera}>
+            <Camera className="h-5 w-5" />
+            {t("admin.inventory.smart.camera")}
+          </Button>
+          <div className="relative" ref={menuRef}>
           <Button type="button" variant="turquoise" onClick={onMenuToggle} aria-expanded={menuOpen} aria-haspopup="menu">
             <Plus className="h-4 w-4" />
             {t("admin.inventory.hub.addDocument")}
@@ -366,6 +374,7 @@ function HubHero({
               {children}
             </div>
           ) : null}
+          </div>
         </div>
       </div>
     </div>

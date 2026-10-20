@@ -130,6 +130,7 @@ export function DishPricingPanel({
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [stateFilter, setStateFilter] = useState<"all" | DishCostState>("all");
   const [diagnosticFilter, setDiagnosticFilter] = useState<DishDiagnostic | null>(null);
+  const [quickFilter, setQuickFilter] = useState<"all" | "profit" | "low" | "loss" | "missing" | "norecipe" | "nocat" | "hidden">("all");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<string>("");
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -149,9 +150,16 @@ export function DishPricingPanel({
       if (categoryFilter !== "all" && row.product.categoryId !== categoryFilter) return false;
       if (stateFilter !== "all" && row.costState !== stateFilter) return false;
       if (diagnosticFilter && !diagnoseRow(row).includes(diagnosticFilter)) return false;
+      if (quickFilter === "profit" && !(row.grossProfit != null && row.grossProfit > 0.001)) return false;
+      if (quickFilter === "low" && !(row.grossMarginPercent != null && row.grossMarginPercent > 0 && row.grossMarginPercent < 25)) return false;
+      if (quickFilter === "loss" && !(row.grossProfit != null && row.grossProfit < -0.001)) return false;
+      if (quickFilter === "missing" && row.costState !== "missing") return false;
+      if (quickFilter === "norecipe" && row.recipeLineCount > 0) return false;
+      if (quickFilter === "nocat" && Boolean(row.product.categoryId?.trim())) return false;
+      if (quickFilter === "hidden" && !(row.product.hidden || row.product.active === false)) return false;
       return true;
     });
-  }, [pricingRows, search, categoryFilter, stateFilter, diagnosticFilter, locale]);
+  }, [pricingRows, search, categoryFilter, stateFilter, diagnosticFilter, quickFilter, locale]);
 
   const summary = useMemo(() => dishPricingSummary(pricingRows), [pricingRows]);
   const diagnosticsCount = useMemo(() => dishDiagnosticsCount(pricingRows), [pricingRows]);
@@ -254,6 +262,31 @@ export function DishPricingPanel({
             )}
           >
             {t(labelKey)}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {([
+          ["all", pricingRows.length],
+          ["profit", pricingRows.filter((row) => row.grossProfit != null && row.grossProfit > 0.001).length],
+          ["low", pricingRows.filter((row) => row.grossMarginPercent != null && row.grossMarginPercent > 0 && row.grossMarginPercent < 25).length],
+          ["loss", pricingRows.filter((row) => row.grossProfit != null && row.grossProfit < -0.001).length],
+          ["missing", pricingRows.filter((row) => row.costState === "missing").length],
+          ["norecipe", pricingRows.filter((row) => row.recipeLineCount === 0).length],
+          ["nocat", pricingRows.filter((row) => !row.product.categoryId?.trim()).length],
+          ["hidden", pricingRows.filter((row) => row.product.hidden || row.product.active === false).length],
+        ] as const).map(([id, count]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setQuickFilter(id)}
+            className={cn(
+              "shrink-0 rounded-full px-3 py-2 text-sm font-semibold",
+              quickFilter === id ? "bg-turquoise text-warm-white" : "bg-warm-white text-coffee"
+            )}
+          >
+            {t(`admin.dishPricing.quick.${id}`)} · {count}
           </button>
         ))}
       </div>
@@ -391,11 +424,11 @@ function PricingTabBody(props: {
       </div>
       {/* Desktop */}
       <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/20 lg:block">
-        <table className="min-w-[940px] w-full text-sm">
-          <thead className="bg-beige/40 text-coffee/70">
+        <table className="min-w-[940px] w-full text-base">
+          <thead className="bg-beige/50 text-sm font-bold text-dark-brown">
             <tr>
-              <th className="px-3 py-2 text-start">{t("admin.dishPricing.col.name")}</th>
-              <th className="px-3 py-2 text-end">{t("admin.dishPricing.col.price")}</th>
+              <th className="px-4 py-3 text-start">{t("admin.dishPricing.col.name")}</th>
+              <th className="px-4 py-3 text-end">{t("admin.dishPricing.col.price")}</th>
               <th className="px-3 py-2 text-end">{t("admin.dishPricing.col.cost")}</th>
               <th className="px-3 py-2 text-end">{t("admin.dishPricing.col.profit")}</th>
               <th className="px-3 py-2 text-end">{t("admin.dishPricing.col.margin")}</th>
@@ -440,7 +473,7 @@ function PricingRow(props: {
       <td className="px-3 py-2">
         <div className="flex items-center gap-2">
           {hidden && <EyeOff className="h-3.5 w-3.5 text-coffee/55" aria-label={t("admin.dishPricing.hidden")} />}
-          <span className="font-medium">{getProductDisplayName(row.product, props.locale)}</span>
+          <span className="text-[18px] font-semibold text-dark-brown">{getProductDisplayName(row.product, props.locale)}</span>
         </div>
       </td>
       <td className="px-3 py-2 text-end">
@@ -471,15 +504,15 @@ function PricingRow(props: {
           <button
             type="button"
             onClick={() => props.onStartEdit(row)}
-            className="group inline-flex items-center gap-1 rounded-md px-2 py-0.5 hover:bg-beige/50"
+            className="group inline-flex min-h-11 items-center gap-1 rounded-md px-2 py-1 hover:bg-beige/50"
           >
-            {formatIls(row.product.price)}
-            <Edit3 className="h-3 w-3 text-coffee/40 opacity-0 transition-opacity group-hover:opacity-100" />
+            <span className="text-xl font-bold tabular-nums">{formatIls(row.product.price)}</span>
+            <Edit3 className="h-4 w-4 text-coffee/40 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
         )}
       </td>
       <td className="px-3 py-2 text-end">{moneyOrDash(row.effectiveCostNet)}</td>
-      <td className={cn("px-3 py-2 text-end", statusColor(row.foodCostStatus))}>
+      <td className={cn("px-3 py-3 text-end text-xl font-bold tabular-nums", statusColor(row.foodCostStatus))}>
         {moneyOrDash(row.grossProfit)}
       </td>
       <td className="px-3 py-2 text-end">
@@ -585,14 +618,14 @@ function PricingMobileCard(props: {
             <button
               type="button"
               onClick={() => props.onStartEdit(row)}
-              className="rounded-lg bg-beige/50 px-3 py-1 font-semibold"
+              className="min-h-11 rounded-lg bg-beige/50 px-3 py-2 text-xl font-bold tabular-nums"
             >
               {formatIls(row.product.price)}
             </button>
           )}
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-coffee/70">
+      <div className="mt-3 grid grid-cols-3 gap-2 text-sm text-coffee/80">
         <MobileStat label={t("admin.dishPricing.col.cost")} value={moneyOrDash(row.effectiveCostNet)} />
         <MobileStat
           label={t("admin.dishPricing.col.profit")}

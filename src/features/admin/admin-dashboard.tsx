@@ -11,6 +11,7 @@ import {
   Star,
   Activity,
   Layers,
+  Camera,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -168,7 +169,15 @@ export function AdminDashboard() {
 
   return (
     <div className="space-y-5">
-      <AdminPageHeader title={t("admin.dashboard.title")} />
+      <AdminPageHeader
+        title={t("admin.dashboard.title")}
+        actions={
+          <Link href={`${adminPath("costing")}?capture=1`} className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-turquoise px-5 text-base font-semibold text-warm-white">
+            <Camera className="h-5 w-5" />
+            {t("admin.inventory.smart.camera")}
+          </Link>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 md:gap-4">
         {statsCards.map((card, i) => (

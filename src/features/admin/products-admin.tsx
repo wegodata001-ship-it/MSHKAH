@@ -431,12 +431,12 @@ export function ProductsAdmin() {
                 )}
               </div>
               <div className="p-3">
-                <p className="truncate text-sm font-semibold dark:text-warm-white" dir="rtl">{product.name_ar}</p>
+                <p className="truncate text-[18px] font-semibold dark:text-warm-white" dir="rtl">{product.name_ar}</p>
                 <p className="truncate text-xs text-coffee/50">{product.name_en}</p>
                 <Input
                   type="number"
                   defaultValue={product.price}
-                  className="mt-2 h-8 text-sm font-bold"
+                  className="mt-2 h-11 text-xl font-bold tabular-nums"
                   onBlur={(e) => {
                     const val = parseFloat(e.target.value);
                     if (!isNaN(val) && val !== product.price) {
@@ -475,18 +475,18 @@ export function ProductsAdmin() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl">
+                      <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl">
                         <ProductImage image={product.image} categoryId={product.categoryId} alt="" thumbnail />
                       </div>
                       <div>
-                        <p className="text-sm font-medium dark:text-warm-white" dir="rtl">{product.name_ar}</p>
+                        <p className="text-[18px] font-semibold dark:text-warm-white" dir="rtl">{product.name_ar}</p>
                         <p className="text-xs text-coffee/50">{product.name_en}</p>
                       </div>
                     </div>
                   </td>
                   <td className="hidden px-4 py-3 text-sm md:table-cell">{categories.find((c) => c.id === product.categoryId)?.name_en}</td>
                   <td className="px-4 py-3">
-                    <Input type="number" defaultValue={product.price} className="h-8 w-20"
+                    <Input type="number" defaultValue={product.price} className="h-11 w-24 text-xl font-bold tabular-nums"
                       onBlur={(e) => {
                         const val = parseFloat(e.target.value);
                         if (!isNaN(val) && val !== product.price) updateProduct(product.id, { price: val });

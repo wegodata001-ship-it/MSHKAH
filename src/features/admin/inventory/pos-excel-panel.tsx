@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/components/providers/locale-provider";
@@ -14,6 +14,7 @@ import type { PosImport, PosSaleLine } from "@/lib/inventory/types";
 import { applyPosExcelImport, savePosColumnMap, savePosDraft } from "@/services/inventoryService";
 import { PosExcelSummary } from "@/features/admin/inventory/pos-excel-summary";
 import { SalesAiPanel } from "@/features/admin/inventory/sales-ai-panel";
+import { SalesInsightCenter } from "@/features/admin/inventory/sales-insight-center";
 import { dateLooksLikeEpoch } from "@/lib/inventory/pos-excel";
 import type { InventoryHubProps } from "@/features/admin/inventory/inventory-hub";
 
@@ -169,6 +170,32 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
     }, null as number | null),
   };
   const reviewCount = selectedLines.filter((line) => !line.menuProductId || line.reviewReason).length;
+  const plan = useMemo(
+    () =>
+      current
+        ? planPosApply({
+            lines: current.lines,
+            products: props.products,
+            maps: props.maps,
+            recipes: props.recipes,
+            ingredients: props.ingredients,
+            movements: props.movements,
+            imports: props.posImports,
+            fileHash: current.fileHash,
+            sourceItemCount: current.sourceTotals?.itemCount ?? null,
+            sourceQuantitySum: current.sourceTotals?.quantitySum ?? null,
+            sourceRevenueSum: current.sourceTotals?.reportedRevenueSum ?? null,
+            periodNeedsReview: current.periodNeedsReview,
+            periodConfirmed,
+            periodFrom: current.periodFrom,
+            periodTo: current.periodTo,
+            overlapAcknowledged,
+            decisions,
+            excludedKeys,
+          })
+        : null,
+    [current, props.products, props.maps, props.recipes, props.ingredients, props.movements, props.posImports, periodConfirmed, overlapAcknowledged, decisions, excludedKeys]
+  );
 
   return (
     <div className="space-y-4">
@@ -306,9 +333,48 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
             </p>
           )}
           {review?.needsMapping && <p className="mt-3 text-sm text-red-700">{t("admin.pos.needMapping")}</p>}
+          {plan && (
+            <div className="mt-4">
+              <SalesInsightCenter
+                fileName={current.fileName}
+                lines={current.lines}
+                products={props.products}
+                periodFrom={current.periodFrom}
+                periodTo={current.periodTo}
+                periodNeedsReview={current.periodNeedsReview}
+                plan={plan}
+                onSavePeriod={(from, to) => {
+                  const sourceFrom = current.sourcePeriodFrom ?? current.periodFrom;
+                  const sourceTo = current.sourcePeriodTo ?? current.periodTo;
+                  const nextPeriod = from === to ? from : `${from}:${to}`;
+                  setReview({
+                    ...(review ?? {
+                      fileName: opened?.fileName ?? current.fileName,
+                      fileHash: opened?.fileHash ?? current.fileHash,
+                      lines: current.lines,
+                      summary: current.summary,
+                      selectedSheet: current.selectedSheet,
+                      headerRow: current.headerRow,
+                      existingId: opened?.id,
+                      periodNeedsReview: current.periodNeedsReview,
+                    }),
+                    period: nextPeriod,
+                    periodFrom: from,
+                    periodTo: to,
+                    sourcePeriodFrom: review?.sourcePeriodFrom ?? sourceFrom,
+                    sourcePeriodTo: review?.sourcePeriodTo ?? sourceTo,
+                    periodNeedsReview: false,
+                  });
+                  setPeriodConfirmed(true);
+                  setError(null);
+                  props.onToast(t("admin.pos.periodSaved"));
+                }}
+              />
+            </div>
+          )}
           {(savedImportId || opened?.id) && (
             <div className="mt-4">
-              <SalesAiPanel importId={(savedImportId || opened?.id) as string} />
+              <SalesAiPanel importId={(savedImportId || opened?.id) as string} autoAnalyze={Boolean(savedImportId) && savedImportId !== opened?.id} />
             </div>
           )}
 
@@ -338,7 +404,8 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
           )}
 
           {current.lines.length > 0 && (
-            <div className="mt-4">
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm text-coffee/70">{t("admin.pos.excelReview")}</summary>
               <PosExcelPreviewTable
                 lines={current.lines}
                 products={props.products}
@@ -351,7 +418,7 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
                 }}
                 onUpdatePrice={setPriceLine}
               />
-            </div>
+            </details>
           )}
 
           {current.lines.length > 0 && (stage === "ready" || stage === "error") && (
@@ -365,26 +432,7 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
       {current && (stage === "summary" || stage === "applying" || stage === "applied") && (
         <AdminCard title={t("admin.pos.excelSummary")}>
           <PosExcelSummary
-            plan={planPosApply({
-              lines: current.lines,
-              products: props.products,
-              maps: props.maps,
-              recipes: props.recipes,
-              ingredients: props.ingredients,
-              movements: props.movements,
-              imports: props.posImports,
-              fileHash: current.fileHash,
-              sourceItemCount: current.sourceTotals?.itemCount ?? null,
-              sourceQuantitySum: current.sourceTotals?.quantitySum ?? null,
-              sourceRevenueSum: current.sourceTotals?.reportedRevenueSum ?? null,
-              periodNeedsReview: current.periodNeedsReview,
-              periodConfirmed,
-              periodFrom: current.periodFrom,
-              periodTo: current.periodTo,
-              overlapAcknowledged,
-              decisions,
-              excludedKeys,
-            })}
+            plan={plan!}
             products={props.products}
             periodLabel={current.periodFrom && current.periodTo ? `${current.periodFrom} – ${current.periodTo}` : current.period}
             periodFrom={current.periodFrom}
@@ -424,120 +472,8 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
             }}
             onOverlapAck={setOverlapAcknowledged}
             onDecision={(key, decision) => setDecisions((prev) => ({ ...prev, [key]: { ...prev[key], ...decision } }))}
-            onApply={async () => {
-              if (saveLock.current) return;
-              const source = review ?? (opened
-                ? {
-                    fileName: opened.fileName,
-                    fileHash: opened.fileHash,
-                    period: opened.period,
-                    periodFrom: opened.periodFrom,
-                    periodTo: opened.periodTo,
-                    reportGeneratedAt: opened.reportGeneratedAt,
-                    uploadedAt: opened.uploadedAt,
-                    periodNeedsReview: opened.periodNeedsReview,
-                    lines: opened.lines ?? [],
-                    existingId: opened.id,
-                    selectedSheet: opened.sheetName,
-                    headerRow: opened.headerRow,
-                  }
-                : null);
-              if (!source) return;
-              const plan = planPosApply({
-                lines: current.lines,
-                products: props.products,
-                maps: props.maps,
-                recipes: props.recipes,
-                ingredients: props.ingredients,
-                movements: props.movements,
-                imports: props.posImports,
-                fileHash: source.fileHash,
-                sourceItemCount: current.sourceTotals?.itemCount ?? null,
-                sourceQuantitySum: current.sourceTotals?.quantitySum ?? null,
-                sourceRevenueSum: current.sourceTotals?.reportedRevenueSum ?? null,
-                periodNeedsReview: current.periodNeedsReview,
-                periodConfirmed,
-                periodFrom: current.periodFrom,
-                periodTo: current.periodTo,
-                overlapAcknowledged,
-                decisions,
-                excludedKeys,
-              });
-              if (plan.blockers.length && !plan.resumePartial) {
-                setError(t(`admin.pos.block.${plan.blockers[0]}`));
-                return;
-              }
-              saveLock.current = true;
-              setError(null);
-              setApplyResult(null);
-              setStage("applying");
-              const payload: Omit<PosImport, "id" | "createdAt"> & { id?: string } = {
-                kind: "excel-info",
-                fileName: source.fileName,
-                fileHash: source.fileHash,
-                source: "pos-file",
-                period: current.period,
-                periodFrom: current.periodFrom,
-                periodTo: current.periodTo,
-                sourcePeriodFrom: current.sourcePeriodFrom ?? current.periodFrom,
-                sourcePeriodTo: current.sourcePeriodTo ?? current.periodTo,
-                reportGeneratedAt: source.reportGeneratedAt,
-                uploadedAt: source.uploadedAt,
-                periodNeedsReview: current.periodNeedsReview,
-                periodConfirmed,
-                status: "saved",
-                financeStatus: "none",
-                infoOnly: true,
-                lines: current.lines,
-                itemCount: plan.selectedItemCount,
-                quantitySum: plan.selectedQuantitySum,
-                reportedRevenueSum: plan.selectedRevenueSum,
-                sheetName: source.selectedSheet,
-                headerRow: source.headerRow,
-                id: source.existingId,
-                excludedKeys,
-                sourceTotals: current.sourceTotals ?? null,
-              };
-              try {
-                const saved = await savePosDraft(payload);
-                if (saved.success) setSavedImportId(saved.data);
-                if (!saved.success) {
-                  setError(saved.error);
-                  setStage("summary");
-                  return;
-                }
-                const applied = await applyPosExcelImport({
-                  draft: { ...payload, id: saved.data, createdAt: source.uploadedAt || new Date().toISOString() },
-                  rows: plan.rows,
-                  periodConfirmed,
-                  overlapAcknowledged,
-                });
-                if (!applied.success) {
-                  const code = applied.error;
-                  setError(
-                    code === "period-review" || code === "empty-import" || code === "already-applied"
-                      ? t(`admin.pos.block.${code === "empty-import" ? "empty" : code}`)
-                      : code
-                  );
-                  setStage("summary");
-                  return;
-                }
-                if (!applied.data.complete) {
-                  setError(t("admin.pos.applyIncomplete"));
-                  setApplyResult(t("admin.pos.applyIncomplete"));
-                  setStage("summary");
-                  return;
-                }
-                setApplyResult(t("admin.pos.applyDone"));
-                props.onToast(t("admin.pos.applyDone"));
-                setStage("applied");
-              } catch {
-                setError(t("admin.pos.networkFailed"));
-                setStage("summary");
-              } finally {
-                saveLock.current = false;
-              }
-            }}
+            onSaveSales={() => void commitImport("sales")}
+            onApply={() => void commitImport("stock")}
           />
           {stage === "applying" && (
             <p className="mt-3 flex items-center gap-2 text-sm">
@@ -559,7 +495,112 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
       )}
     </div>
   );
+
+  async function commitImport(mode: "sales" | "stock") {
+    if (!current || saveLock.current) return;
+    const source = review ?? (opened
+      ? {
+          fileName: opened.fileName,
+          fileHash: opened.fileHash,
+          period: opened.period,
+          periodFrom: opened.periodFrom,
+          periodTo: opened.periodTo,
+          reportGeneratedAt: opened.reportGeneratedAt,
+          uploadedAt: opened.uploadedAt,
+          periodNeedsReview: opened.periodNeedsReview,
+          lines: opened.lines ?? [],
+          existingId: opened.id,
+          selectedSheet: opened.sheetName,
+          headerRow: opened.headerRow,
+        }
+      : null);
+    if (!source || !plan) return;
+    if (mode === "stock" && plan.blockers.length && !plan.resumePartial) {
+      setError(t(`admin.pos.block.${plan.blockers[0]}`));
+      return;
+    }
+    if (mode === "sales" && (plan.blockers.includes("period-review") || plan.blockers.includes("empty"))) {
+      setError(t(`admin.pos.block.${plan.blockers.find((item) => item === "period-review" || item === "empty")}`));
+      return;
+    }
+    saveLock.current = true;
+    setError(null);
+    setApplyResult(null);
+    setStage(mode === "stock" ? "applying" : "saving");
+    const payload: Omit<PosImport, "id" | "createdAt"> & { id?: string } = {
+      kind: "excel-info",
+      fileName: source.fileName,
+      fileHash: source.fileHash,
+      source: "pos-file",
+      period: current.period,
+      periodFrom: current.periodFrom,
+      periodTo: current.periodTo,
+      sourcePeriodFrom: current.sourcePeriodFrom ?? current.periodFrom,
+      sourcePeriodTo: current.sourcePeriodTo ?? current.periodTo,
+      reportGeneratedAt: source.reportGeneratedAt,
+      uploadedAt: source.uploadedAt,
+      periodNeedsReview: current.periodNeedsReview,
+      periodConfirmed,
+      status: "saved",
+      financeStatus: "none",
+      infoOnly: true,
+      lines: current.lines,
+      itemCount: plan.selectedItemCount,
+      quantitySum: plan.selectedQuantitySum,
+      reportedRevenueSum: plan.selectedRevenueSum,
+      sheetName: source.selectedSheet,
+      headerRow: source.headerRow,
+      id: source.existingId,
+      excludedKeys,
+      sourceTotals: current.sourceTotals ?? null,
+    };
+    try {
+      const saved = await savePosDraft(payload);
+      if (saved.success) setSavedImportId(saved.data);
+      if (!saved.success) {
+        setError(saved.error);
+        setStage("summary");
+        return;
+      }
+      if (mode === "sales") {
+        props.onToast(t("admin.insight.saveSales"));
+        setStage("summary");
+        return;
+      }
+      const applied = await applyPosExcelImport({
+        draft: { ...payload, id: saved.data, createdAt: source.uploadedAt || new Date().toISOString() },
+        rows: plan.rows,
+        periodConfirmed,
+        overlapAcknowledged,
+      });
+      if (!applied.success) {
+        const code = applied.error;
+        setError(
+          code === "period-review" || code === "empty-import" || code === "already-applied"
+            ? t(`admin.pos.block.${code === "empty-import" ? "empty" : code}`)
+            : code
+        );
+        setStage("summary");
+        return;
+      }
+      if (!applied.data.complete) {
+        setError(t("admin.pos.applyIncomplete"));
+        setApplyResult(t("admin.pos.applyIncomplete"));
+        setStage("summary");
+        return;
+      }
+      setApplyResult(t("admin.pos.applyDone"));
+      props.onToast(t("admin.pos.applyDone"));
+      setStage("applied");
+    } catch {
+      setError(t("admin.pos.networkFailed"));
+      setStage("summary");
+    } finally {
+      saveLock.current = false;
+    }
+  }
 }
+
 
 function ProcessSteps({ stage, saved, hasPreview }: { stage: Stage; saved: boolean; hasPreview: boolean }) {
   const t = useT();

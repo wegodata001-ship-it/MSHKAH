@@ -142,6 +142,34 @@ export function headerKey(value: unknown): string {
 }
 
 /** A real sales date. Epoch placeholders such as 1970-01-01 are not dates. */
+/** A date found in a file name is a suggestion. Callers must not save it until an admin confirms. */
+export function suggestPeriodFromFileName(fileName: string): { from: string; to: string } | null {
+  const text = fileName.replace(/[_]+/g, " ");
+  const range = text.match(/(\d{4}-\d{2}-\d{2}).{0,12}(\d{4}-\d{2}-\d{2})/);
+  if (range) {
+    const from = recognizedIsoDate(range[1]);
+    const to = recognizedIsoDate(range[2]);
+    if (from && to && from <= to) return { from, to };
+  }
+  const one = text.match(/(\d{4})[-.](\d{2})[-.](\d{2})/);
+  if (one) {
+    const day = recognizedIsoDate(`${one[1]}-${one[2]}-${one[3]}`);
+    if (day) return { from: day, to: day };
+  }
+  const month = text.match(/(20\d{2})[-.](\d{2})(?!\d)/);
+  if (month) {
+    const year = Number(month[1]);
+    const mon = Number(month[2]);
+    if (mon >= 1 && mon <= 12) {
+      const last = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+      const from = recognizedIsoDate(`${month[1]}-${month[2]}-01`);
+      const to = recognizedIsoDate(`${month[1]}-${month[2]}-${String(last).padStart(2, "0")}`);
+      if (from && to) return { from, to };
+    }
+  }
+  return null;
+}
+
 export function recognizedIsoDate(value?: string | null): string | null {
   if (!value) return null;
   const iso = String(value).trim().slice(0, 10);

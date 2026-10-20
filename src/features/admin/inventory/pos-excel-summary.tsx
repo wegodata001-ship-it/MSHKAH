@@ -26,6 +26,7 @@ export function PosExcelSummary({
   onOverlapAck,
   onDecision,
   onApply,
+  onSaveSales,
 }: {
   plan: PosApplyPlan;
   products: Product[];
@@ -43,6 +44,7 @@ export function PosExcelSummary({
   onOverlapAck: (value: boolean) => void;
   onDecision: (key: string, decision: PosApplyDecision) => void;
   onApply: () => void;
+  onSaveSales?: () => void;
 }) {
   const t = useT();
   const eligible = plan.rows.filter((row) => row.eligible);
@@ -141,9 +143,21 @@ export function PosExcelSummary({
             <Button type="button" variant="outline" onClick={onApply}>{t("admin.pos.retryApply")}</Button>
           </div>
         )}
-        <Button type="button" variant="turquoise" disabled={busy || (!canApply.ok && !plan.resumePartial)} onClick={onApply}>
-          {busy ? t("admin.pos.applying") : t("admin.pos.approveApply")}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {onSaveSales && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy || plan.blockers.includes("period-review") || plan.blockers.includes("empty")}
+              onClick={onSaveSales}
+            >
+              {t("admin.insight.saveSales")}
+            </Button>
+          )}
+          <Button type="button" variant="turquoise" disabled={busy || (!canApply.ok && !plan.resumePartial)} onClick={onApply}>
+            {busy ? t("admin.pos.applying") : t("admin.insight.updateStock")}
+          </Button>
+        </div>
       </div>
     </div>
   );
