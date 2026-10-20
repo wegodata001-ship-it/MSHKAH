@@ -145,13 +145,20 @@ export function planInvoiceCancellation(input: {
   // Pre-compute how much of each source has already been reversed by
   // existing REVERSAL rows referencing it (via `reversesId`).
   const reversedBase = new Map<string, number>();
+  const correctionDelta = new Map<string, number>();
   for (const movement of movements) {
-    if (movement.type !== "REVERSAL") continue;
-    if (!movement.reversesId) continue;
-    reversedBase.set(
-      movement.reversesId,
-      (reversedBase.get(movement.reversesId) ?? 0) + Math.abs(asNumber(movement.quantityBase))
-    );
+    if (movement.type === "REVERSAL" && movement.reversesId) {
+      reversedBase.set(
+        movement.reversesId,
+        (reversedBase.get(movement.reversesId) ?? 0) + Math.abs(asNumber(movement.quantityBase))
+      );
+    }
+    if (movement.type === "ADJUSTMENT" && movement.correctsMovementId) {
+      correctionDelta.set(
+        movement.correctsMovementId,
+        (correctionDelta.get(movement.correctsMovementId) ?? 0) + asNumber(movement.quantityBase)
+      );
+    }
   }
 
   const plans: CancelMovementPlan[] = [];
@@ -161,7 +168,11 @@ export function planInvoiceCancellation(input: {
   for (const movement of sourceMovements) {
     const originalBase = Math.abs(asNumber(movement.quantityBase));
     const alreadyReversed = reversedBase.get(movement.id) ?? 0;
-    const remaining = originalBase - alreadyReversed;
+    const corrected = correctionDelta.get(movement.id) ?? 0;
+    // Cancel the quantity still on the books for this line, not the original
+    // receipt. A later −5 correction must not be reversed a second time as
+    // part of the full 20.
+    const remaining = originalBase + corrected - alreadyReversed;
     if (!movement.productId || originalBase <= 0) {
       brokenLinks.push({
         invoiceLineKey: movement.invoiceLineKey || movement.invoiceLineId || movement.id,

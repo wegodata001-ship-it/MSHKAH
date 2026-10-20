@@ -141,10 +141,25 @@ export function headerKey(value: unknown): string {
     .replace(/^_|_$/g, "");
 }
 
+/** A real sales date. Epoch placeholders such as 1970-01-01 are not dates. */
+export function recognizedIsoDate(value?: string | null): string | null {
+  if (!value) return null;
+  const iso = String(value).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const year = Number(iso.slice(0, 4));
+  if (!Number.isFinite(year) || year <= 1971 || year > 2100) return null;
+  const parsed = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== iso) return null;
+  return iso;
+}
+
 export function asText(value: unknown): string {
   const unwrapped = unwrapCell(value);
   if (unwrapped == null) return "";
-  if (unwrapped instanceof Date) return unwrapped.toISOString().slice(0, 10);
+  if (unwrapped instanceof Date) {
+    if (Number.isNaN(unwrapped.getTime())) return "";
+    return recognizedIsoDate(unwrapped.toISOString().slice(0, 10)) ?? "";
+  }
   return String(unwrapped).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").trim();
 }
 
@@ -276,11 +291,14 @@ const DATE_TOKEN = /(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})/g;
 
 function normalizeDateToken(token: string): string | null {
   const iso = token.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const dmy = token.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
-  if (!dmy) return null;
-  const year = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
-  return `${year.padStart(4, "0")}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+  let candidate: string | null = null;
+  if (iso) candidate = `${iso[1]}-${iso[2]}-${iso[3]}`;
+  else if (dmy) {
+    const year = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+    candidate = `${year.padStart(4, "0")}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+  }
+  return recognizedIsoDate(candidate);
 }
 
 const PERIOD_HINT = /תקופ|period|من|إلى|الى|עד|בין/i;
@@ -308,7 +326,10 @@ export function extractPosPeriod(headerTexts: string[], fallback = ""): PosExcel
   const unique = [...new Set(periodDates)].sort();
   const periodFrom = unique[0] ?? null;
   const periodTo = unique[unique.length - 1] ?? periodFrom;
-  const periodNeedsReview = [...unique, ...generatedDates].some((day) => Number(day.slice(0, 4)) <= 1971);
+  const sawDateText = headerTexts.some((text) =>
+    /(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})/.test(String(text))
+  );
+  const periodNeedsReview = !periodFrom || !periodTo || sawDateText && unique.length === 0;
   return {
     period: periodFrom && periodTo ? (periodFrom === periodTo ? periodFrom : `${periodFrom}:${periodTo}`) : fallback,
     periodFrom,
@@ -355,7 +376,7 @@ function toSaleLine(row: MappedPosRow, products: Product[], maps: PosProductMap[
     transactionCount: row.transactionCount ?? null,
     posCost: row.posCost ?? null,
     posProfit: row.posProfit ?? null,
-    saleDate: row.saleDate,
+    saleDate: recognizedIsoDate(row.saleDate) ?? undefined,
     matchKind: "none",
   };
   if (row.posName || row.posCode) {

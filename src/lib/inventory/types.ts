@@ -172,6 +172,8 @@ export type InventoryMovement = {
   issueBatchId?: string;
   idempotencyKey?: string;
   reversesId?: string;
+  /** Set on an ADJUSTMENT that changes the posted quantity of a purchase movement. */
+  correctsMovementId?: string;
   unitCost?: number;
   unitCostNet?: number;
   unitCostGross?: number;

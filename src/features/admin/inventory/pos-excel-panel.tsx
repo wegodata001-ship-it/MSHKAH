@@ -13,6 +13,8 @@ import { isAutoProductRow, planPosApply, type PosApplyDecision } from "@/lib/inv
 import type { PosImport, PosSaleLine } from "@/lib/inventory/types";
 import { applyPosExcelImport, savePosColumnMap, savePosDraft } from "@/services/inventoryService";
 import { PosExcelSummary } from "@/features/admin/inventory/pos-excel-summary";
+import { SalesAiPanel } from "@/features/admin/inventory/sales-ai-panel";
+import { dateLooksLikeEpoch } from "@/lib/inventory/pos-excel";
 import type { InventoryHubProps } from "@/features/admin/inventory/inventory-hub";
 
 const PARSE_TIMEOUT_MS = 90_000;
@@ -69,6 +71,7 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
   const [decisions, setDecisions] = useState<Record<string, PosApplyDecision>>({});
   const [excludedKeys, setExcludedKeys] = useState<string[]>(props.opened?.excludedKeys ?? []);
   const [applyResult, setApplyResult] = useState<string | null>(null);
+  const [savedImportId, setSavedImportId] = useState<string | null>(props.opened?.id ?? null);
   const [priceLine, setPriceLine] = useState<PosSaleLine | null>(null);
   const [sheetName, setSheetName] = useState("");
   const [headerRow, setHeaderRow] = useState("");
@@ -283,7 +286,7 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
           <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
             <p>{t("admin.pos.fileName")}: {current.fileName}</p>
             <p>{t("admin.pos.sheet")}: {current.selectedSheet || "—"}</p>
-            <p>{t("admin.pos.dataPeriod")}: {current.periodFrom && current.periodTo ? `${current.periodFrom} – ${current.periodTo}` : current.period || "—"}</p>
+            <p>{t("admin.pos.dataPeriod")}: {current.periodFrom && current.periodTo && !dateLooksLikeEpoch(current.periodFrom) ? `${current.periodFrom} – ${current.periodTo}` : t("admin.pos.dateUnrecognized")}</p>
             <p>{t("admin.pos.itemCount")}: {summary.itemCount}</p>
             <p>{t("admin.pos.rowsNeedReview")}: {reviewCount}</p>
             <p>{t("admin.pos.quantitySum")}: {summary.quantitySum}</p>
@@ -303,6 +306,11 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
             </p>
           )}
           {review?.needsMapping && <p className="mt-3 text-sm text-red-700">{t("admin.pos.needMapping")}</p>}
+          {(savedImportId || opened?.id) && (
+            <div className="mt-4">
+              <SalesAiPanel importId={(savedImportId || opened?.id) as string} />
+            </div>
+          )}
 
           {review && (review.needsMapping || review.rawPreview?.length) && !current.lines.length && (
             <ColumnMapEditor
@@ -492,6 +500,7 @@ export function PosExcelPanel(props: InventoryHubProps & { opened?: PosImport | 
               };
               try {
                 const saved = await savePosDraft(payload);
+                if (saved.success) setSavedImportId(saved.data);
                 if (!saved.success) {
                   setError(saved.error);
                   setStage("summary");

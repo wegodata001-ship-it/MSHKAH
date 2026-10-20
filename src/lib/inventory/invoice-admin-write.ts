@@ -1,10 +1,13 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { costPerBaseUnit, purchaseQuantityInBase } from "@/lib/costing/units";
-import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
+import { baseUnitFor, costPerBaseUnit, purchaseQuantityInBase } from "@/lib/costing/units";
+import { invoiceLineQuantityBase, packNeedsCompletion } from "@/lib/inventory/ingredient-core";
 import { findDuplicateInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import { syncInvoiceTotals } from "@/lib/inventory/invoice-finance";
 import { invoicePurchaseMovementId, selectStockPostLines } from "@/lib/inventory/invoice-stock-post";
+import { evaluateStockPostPolicy } from "@/lib/inventory/stock-post-policy";
+import { correctionMovementId, planQuantityCorrection } from "@/lib/inventory/quantity-correction";
+import type { BaseUnit, CostingIngredient } from "@/lib/costing/types";
 import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
 import { unitCostFromPackage } from "@/lib/inventory/stock";
 import { COLLECTIONS } from "@/lib/firebase/collections";
@@ -246,6 +249,31 @@ export async function postInvoiceStock(
   const postedKeys = new Set(
     existingMoves.docs.map((item) => String(item.data().invoiceLineKey || "")).filter(Boolean)
   );
+  const linkedIds = [
+    ...(merged.coversDeliveryIds ?? []),
+    ...(merged.coveredByInvoiceId ? [merged.coveredByInvoiceId] : []),
+  ];
+  const linked = [];
+  for (const linkedId of linkedIds) {
+    const linkedSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(linkedId).get();
+    if (!linkedSnap.exists) continue;
+    const data = linkedSnap.data() as PurchaseInvoice;
+    linked.push({
+      id: linkedSnap.id,
+      documentType: data.documentType,
+      stockStatus: data.stockStatus,
+    });
+  }
+  const policy = evaluateStockPostPolicy({
+    documentType: merged.documentType,
+    coversDeliveryIds: merged.coversDeliveryIds,
+    coveredByInvoiceId: merged.coveredByInvoiceId,
+    linked,
+  });
+  if (!policy.allow) {
+    throw new Error(policy.code);
+  }
+
   const selected = selectStockPostLines(merged, lineKeys);
   if (!selected.length) {
     const anyPosted = merged.lines.some((line) => line.postedToStock || postedKeys.has(line.key));
@@ -254,6 +282,35 @@ export async function postInvoiceStock(
     }
     throw new Error("NO_STOCK_LINES");
   }
+
+  const productBases = new Map<string, BaseUnit>();
+  const unresolvedPacks: Array<{ lineKey: string; rawName: string; productId: string }> = [];
+  for (const line of selected) {
+    if (!line.productId || postedKeys.has(line.key)) continue;
+    let base = productBases.get(line.productId);
+    if (base == null) {
+      const ingredientSnap = await db.collection(COLLECTIONS.ingredients).doc(line.productId).get();
+      const ingredientData = ingredientSnap.exists
+        ? (ingredientSnap.data() as Partial<CostingIngredient>)
+        : undefined;
+      base = ingredientData?.baseUnit ?? (line.unit ? baseUnitFor(line.unit) : "unit");
+      productBases.set(line.productId, base);
+    }
+    if (packNeedsCompletion(line, base)) {
+      unresolvedPacks.push({
+        lineKey: line.key,
+        rawName: line.rawName,
+        productId: line.productId,
+      });
+    }
+  }
+  if (unresolvedPacks.length > 0) {
+    const error = new Error("PACK_UNRESOLVED") as Error & { detail?: unknown };
+    error.name = "PACK_UNRESOLVED";
+    error.detail = { unresolvedPacks };
+    throw error;
+  }
+
   const nextLines = merged.lines.map((line) => ({ ...line }));
   const reusedKeys: string[] = [];
   const writtenKeys: string[] = [];
@@ -390,4 +447,116 @@ export async function postInvoiceStock(
   };
   await db.collection(COLLECTIONS.purchaseInvoices).doc(merged.id!).set(sanitizeFirestoreData(updated), { merge: true });
   return { invoice: updated, postedKeys: writtenKeys, reusedKeys };
+}
+
+/**
+ * Change the posted quantity of one invoice line by the difference only.
+ * The original PURCHASE_IN movement is kept. A repeated call with the same
+ * target quantity reuses the existing adjustment.
+ */
+export async function correctPostedInvoiceQuantity(
+  db: Firestore,
+  input: { invoiceId: string; lineKey: string; correctedQuantity: number; actor?: string }
+): Promise<{ deltaBase: number; noop: boolean; movementId?: string }> {
+  const invoiceSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(input.invoiceId).get();
+  if (!invoiceSnap.exists) throw new Error("NOT_FOUND");
+  const invoice = { id: invoiceSnap.id, ...invoiceSnap.data() } as PurchaseInvoice;
+  if (invoice.status === "cancelled") throw new Error("INVOICE_CANCELLED");
+  const line = invoice.lines.find((item) => item.key === input.lineKey);
+  if (!line?.productId || !line.postedToStock) throw new Error("LINE_NOT_POSTED");
+  if (!Number.isFinite(input.correctedQuantity) || input.correctedQuantity < 0) {
+    throw new Error("INVALID_QUANTITY");
+  }
+
+  const sourceId = invoicePurchaseMovementId(invoice.id!, line.key);
+  const sourceSnap = await db.collection(COLLECTIONS.inventoryMovements).doc(sourceId).get();
+  if (!sourceSnap.exists) throw new Error("MOVEMENT_MISSING");
+  const originalBase = asNumber(sourceSnap.data()?.quantityBase);
+
+  const related = await db
+    .collection(COLLECTIONS.inventoryMovements)
+    .where("invoiceId", "==", invoice.id)
+    .get();
+  const priorDelta = related.docs.reduce((sum, doc) => {
+    const data = doc.data();
+    if (data.type !== "ADJUSTMENT") return sum;
+    if (String(data.correctsMovementId ?? "") !== sourceId) return sum;
+    return sum + asNumber(data.quantityBase);
+  }, 0);
+
+  const correctedLine = { ...line, quantity: input.correctedQuantity };
+  const correctedBase = invoiceLineQuantityBase(correctedLine);
+  if (correctedBase == null) throw new Error("INVALID_QUANTITY");
+
+  const plan = planQuantityCorrection({
+    originalBase,
+    correctedBase,
+    priorDeltaBase: priorDelta,
+  });
+  if (plan.noop) return { deltaBase: 0, noop: true };
+
+  const movementId = correctionMovementId(sourceId, correctedBase);
+  const now = new Date().toISOString();
+  await db.runTransaction(async (tx) => {
+    const moveRef = db.collection(COLLECTIONS.inventoryMovements).doc(movementId);
+    const existing = await tx.get(moveRef);
+    if (existing.exists) return;
+    const balRef = db.collection(COLLECTIONS.inventoryBalances).doc(line.productId!);
+    const bal = await tx.get(balRef);
+    const before = bal.exists ? asNumber(bal.data()?.quantityBase) : 0;
+    const next = before + plan.deltaBase;
+    tx.set(
+      moveRef,
+      sanitizeFirestoreData({
+        productId: line.productId,
+        type: "ADJUSTMENT",
+        quantity: Math.abs(plan.deltaBase),
+        unit: line.unit,
+        quantityBase: plan.deltaBase,
+        correctsMovementId: sourceId,
+        invoiceId: invoice.id,
+        invoiceLineKey: line.key,
+        invoiceLineId: line.key,
+        supplierId: invoice.supplierId || null,
+        actor: input.actor || null,
+        note: `qty-correction:${line.key}`,
+        idempotencyKey: movementId,
+        quantityBefore: before,
+        quantityAfter: next,
+        quantityIn: plan.deltaBase,
+        receivedAt: now,
+        createdAt: now,
+      })
+    );
+    tx.set(
+      balRef,
+      sanitizeFirestoreData({
+        productId: line.productId,
+        quantityBase: next,
+        updatedAt: now,
+      }),
+      { merge: true }
+    );
+  });
+
+  const nextLines = invoice.lines.map((item) =>
+    item.key === line.key ? { ...item, quantity: input.correctedQuantity, postedToStock: true } : item
+  );
+  await db.collection(COLLECTIONS.purchaseInvoices).doc(invoice.id!).set(
+    sanitizeFirestoreData({
+      lines: nextLines,
+      audit: [
+        ...(invoice.audit ?? []),
+        {
+          at: now,
+          actor: input.actor,
+          action: "QUANTITY_CORRECTED",
+          detail: `${line.key}:${plan.deltaBase}`,
+        },
+      ].slice(-20),
+      updatedAt: now,
+    }),
+    { merge: true }
+  );
+  return { deltaBase: plan.deltaBase, noop: false, movementId };
 }

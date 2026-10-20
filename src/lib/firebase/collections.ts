@@ -54,6 +54,8 @@ export const COLLECTIONS = {
   stockCounts: "stockCounts",
   stockCountSessions: "stockCountSessions",
   reportRuns: "reportRuns",
+  productChangeHistory: "productChangeHistory",
+  salesAiReports: "salesAiReports",
   loyaltySettings: "loyaltySettings",
   loyaltyMembers: "loyaltyMembers",
   loyaltyPointsLedger: "loyaltyPointsLedger",

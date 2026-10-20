@@ -306,6 +306,19 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Audit log for dish-pricing changes (price / manual cost / verification
+    // flips). Written only by the admin API route, read-only for admins so
+    // the UI can show change history without granting write access.
+    match /productChangeHistory/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /salesAiReports/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Loyalty club. All customer-facing writes go through server
     // API routes using the Admin SDK (bypassing these rules), so the

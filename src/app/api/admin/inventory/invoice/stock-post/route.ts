@@ -55,6 +55,16 @@ export async function POST(request: NextRequest) {
     if (message === "INVOICE_CANCELLED") {
       return Response.json({ error: "INVOICE_CANCELLED", code: "INVOICE_CANCELLED", invoice: current }, { status: 409 });
     }
+    if (message === "CREDIT_NO_AUTO_IN" || message === "ALREADY_RECEIVED") {
+      return Response.json({ error: message, code: message, invoice: current }, { status: 409 });
+    }
+    if (message === "PACK_UNRESOLVED") {
+      const detail = (error as Error & { detail?: unknown }).detail;
+      return Response.json(
+        { error: "PACK_UNRESOLVED", code: "PACK_UNRESOLVED", invoice: current, detail },
+        { status: 400 }
+      );
+    }
     return Response.json({ error: message, code: "STOCK_POST_FAILED", invoice: current }, { status: 500 });
   }
 }

@@ -111,6 +111,7 @@ function mapMovement(id: string, data: Record<string, unknown>): MovementDoc {
     invoiceLineKey: data.invoiceLineKey ? String(data.invoiceLineKey) : undefined,
     conversionFactor: data.conversionFactor != null ? asNumber(data.conversionFactor) : undefined,
     reversesId: data.reversesId ? String(data.reversesId) : undefined,
+    correctsMovementId: data.correctsMovementId ? String(data.correctsMovementId) : undefined,
     receivedAt: data.receivedAt ? String(data.receivedAt) : "",
     createdAt: data.createdAt ? String(data.createdAt) : "",
   };

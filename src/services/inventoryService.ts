@@ -1479,25 +1479,50 @@ export async function reverseInventoryMovement(movementId: string, actor?: strin
   }
 }
 
+/**
+ * Undo stock posted for an order. Only SALE_OUT / ISSUE_OUT rows are reversed.
+ * The reversal document id is stable, so a second delete does not restore the
+ * same goods twice and does not reverse the reversal itself.
+ */
 export async function reverseOrderInventory(orderId: string): Promise<void> {
-  const snap = await getDocs(query(collection(getDb(), COLLECTIONS.inventoryMovements), where("orderId", "==", orderId)));
+  const key = orderId?.trim();
+  if (!key) return;
+  const movementsSnap = await getDocs(
+    query(collection(getDb(), COLLECTIONS.inventoryMovements), where("orderId", "==", key))
+  );
+  const movements = movementsSnap.docs.map((item) =>
+    mapMovement(item.id, item.data() as Record<string, unknown>)
+  );
+  const alreadyReversed = new Set(
+    movements
+      .filter((row) => row.type === "REVERSAL")
+      .map((row) => row.reversesId)
+      .filter((id): id is string => Boolean(id))
+  );
   const now = nowTimestamp();
-  for (const row of snap.docs) {
-    const data = row.data();
-    await addDoc(
-      collection(getDb(), COLLECTIONS.inventoryMovements),
-      sanitizeFirestoreData({
-        productId: data.productId,
+  for (const movement of movements) {
+    if (movement.type !== "SALE_OUT" && movement.type !== "ISSUE_OUT") continue;
+    if (alreadyReversed.has(movement.id)) continue;
+    const restore = Math.abs(asNumber(movement.quantityBase));
+    if (!(restore > 0)) continue;
+    await commitStockMovement({
+      movementId: `order-reverse-${key}-${movement.id}`,
+      productId: movement.productId,
+      deltaBase: restore,
+      fallbackAvailable: currentStockBase(movements, movement.productId),
+      payload: {
+        productId: movement.productId,
         type: "REVERSAL",
-        quantity: Math.abs(asNumber(data.quantityBase)),
-        unit: data.unit,
-        quantityBase: -asNumber(data.quantityBase),
-        orderId,
-        note: `Reverse ${orderId}`,
+        quantity: restore,
+        unit: movement.unit,
+        quantityBase: restore,
+        reversesId: movement.id,
+        orderId: key,
+        note: `Reverse ${key}`,
         receivedAt: new Date().toISOString(),
         createdAt: now,
-      })
-    );
+      },
+    });
   }
 }
 

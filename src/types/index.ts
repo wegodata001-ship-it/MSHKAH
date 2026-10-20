@@ -25,6 +25,16 @@ export interface Product {
   subcategoryId?: string | null;
   price: number;
   cost: number;
+  /**
+   * `true` when an owner / verified-admin signed off on the manual cost.
+   * `false` or `undefined` means the number was imported (e.g. from an HTML
+   * dump) and must NOT be treated as an authoritative cost in profitability
+   * reports. The dish-pricing module reads this flag; defaults to `false`
+   * for every record that doesn't declare it. We never flip it silently.
+   */
+  costVerified?: boolean;
+  costVerifiedBy?: string | null;
+  costVerifiedAt?: string | null;
   profit: number;
   businessType: BusinessType;
   image: string;

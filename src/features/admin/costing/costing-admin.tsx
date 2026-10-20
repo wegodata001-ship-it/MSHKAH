@@ -78,6 +78,8 @@ import {
   type IngredientFormValue,
 } from "./ingredient-form";
 import { RecipeEditorModal } from "./recipe-editor";
+import { DishPricingPanel } from "@/features/admin/dish-pricing/dish-pricing-panel";
+import { canEditPrice as canEditPriceCheck, canApproveCost as canApproveCostCheck } from "@/lib/auth/roles";
 import { CostingImportWizard, downloadCostingWorkbook } from "./import-wizard";
 import { InventorySection, PosSection, PurchaseSection } from "@/features/admin/inventory/inventory-hub";
 import { BreakEvenPanel } from "@/features/admin/breakeven/breakeven-panel";
@@ -113,7 +115,7 @@ import { currentStockBase } from "@/lib/inventory/stock";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
-type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "breakeven" | "cashflow" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "dish-pricing" | "breakeven" | "cashflow" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -408,6 +410,7 @@ export function CostingAdmin() {
       label: t("admin.finance.hub"),
       tabs: [
         { id: "invoices", label: t("admin.finance.purchases") },
+        { id: "dish-pricing", label: t("admin.dishPricing.tab") },
         { id: "breakeven", label: t("admin.breakeven.tab") },
         { id: "cashflow", label: t("admin.cashflow.tab") },
       ],
@@ -556,6 +559,20 @@ export function CostingAdmin() {
             setHub("inventory");
             setTab("products");
           }}
+        />
+      )}
+
+      {tab === "dish-pricing" && (
+        <DishPricingPanel
+          rows={rows}
+          settings={settings}
+          categories={categories}
+          locale={locale}
+          loading={productsLoading}
+          onEditRecipe={(productId) => setRecipeProductId(productId)}
+          onToast={toast}
+          canEditPrice={canEditPriceCheck(user.role)}
+          canApproveCost={canApproveCostCheck(user.role)}
         />
       )}
 
