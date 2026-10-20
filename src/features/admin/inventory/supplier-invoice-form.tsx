@@ -1,21 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminCard } from "@/features/admin/components/admin-card";
-import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-create-ingredient";
-import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { InvoiceManualLines } from "@/features/admin/inventory/invoice-manual-lines";
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
-import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
+import type { CostingIngredient } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE } from "@/lib/inventory/vat";
-import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
+import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
 import type { PurchaseDocumentType, PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
-import { saveFinanceInvoice, savePurchaseInvoiceDraft } from "@/services/inventoryService";
+import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
+import { savePurchaseInvoiceDraft } from "@/services/inventoryService";
 import { invoiceMismatch } from "@/lib/inventory/invoice-finance";
 import { InvoiceSourcePreview } from "@/features/admin/inventory/invoice-source-preview";
 import { InvoiceStockTransfer } from "@/features/admin/inventory/invoice-stock-transfer";
@@ -65,7 +65,6 @@ export function SupplierInvoiceForm({
 
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
-  const [createForKey, setCreateForKey] = useState<string | null>(null);
   const [askStock, setAskStock] = useState(false);
   const [transfer, setTransfer] = useState(false);
   const [warnNoSupplier, setWarnNoSupplier] = useState(false);
@@ -88,6 +87,13 @@ export function SupplierInvoiceForm({
       ...current,
       lines: current.lines.map((line) => (line.key === key ? finalizeInvoiceLine({ ...line, ...patch }, vatRate) : line)),
     }));
+    if (patch.unit && form.id && form.status !== "cancelled") {
+      void clientAdminFetch("/api/admin/inventory/invoice/line-unit", {
+        invoiceId: form.id,
+        lineKey: key,
+        unit: patch.unit,
+      });
+    }
   };
 
   if (transfer) {
@@ -204,87 +210,18 @@ export function SupplierInvoiceForm({
         </div>
       </div>
 
-      <div className="mt-5 space-y-3">
-        {form.lines.map((line) => (
-          <div
-            key={line.key}
-            id={`invoice-line-${line.key}`}
-            data-invoice-line={line.key}
-            className={`grid gap-2 rounded-2xl border p-3 md:grid-cols-6 ${focusLineKey === line.key ? "border-amber-500 ring-2 ring-amber-500" : "border-beige-dark/15"}`}
-          >
-            {line.originalDescription ? <p className="text-sm font-medium md:col-span-6">{line.originalDescription}</p> : null}
-            <div className="md:col-span-2">
-              <Label>{t("admin.inventory.product")}</Label>
-              <select
-                className="mt-1 h-10 w-full rounded-xl border px-2 text-sm"
-                disabled={locked}
-                value={line.productId ?? ""}
-                onChange={(e) => {
-                  const product = ingredients.find((item) => item.id === e.target.value);
-                  updateLine(line.key, {
-                    productId: e.target.value || undefined,
-                    rawName: product?.name ?? "",
-                    unit: (product?.purchaseUnit as PurchaseUnit) || line.unit,
-                  });
-                }}
-              >
-                <option value="">{t("admin.inventory.matchExisting")}</option>
-                {ingredients.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              {!locked && (
-                <button type="button" className="mt-1 text-xs text-turquoise" onClick={() => setCreateForKey(line.key)}>
-                  + {t("admin.inventory.createProduct")}
-                </button>
-              )}
-            </div>
-            <div>
-              <Label>{t("admin.inventory.qty")}</Label>
-              <Input className="mt-1" type="number" min="0" step="0.01" disabled={locked} value={line.quantity ?? ""} onChange={(e) => updateLine(line.key, { quantity: e.target.value ? Number(e.target.value) : null })} />
-            </div>
-            <div>
-              <Label>{t("admin.costing.unit")}</Label>
-              <select className="mt-1 h-10 w-full rounded-xl border px-2 text-sm" disabled={locked} value={line.unit ?? "kg"} onChange={(e) => updateLine(line.key, { unit: e.target.value as PurchaseUnit })}>
-                {INVOICE_UNITS.map((unit) => (
-                  <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label>{t("admin.inventory.unitCost")}</Label>
-              <Input className="mt-1" type="number" min="0" step="0.01" disabled={locked} value={line.unitPrice ?? ""} onChange={(e) => updateLine(line.key, { unitPrice: e.target.value ? Number(e.target.value) : null })} />
-            </div>
-            <div>
-              <Label>{t("admin.inventory.discount")}</Label>
-              <Input className="mt-1" type="number" min="0" step="0.01" disabled={locked} value={line.discount ?? ""} onChange={(e) => updateLine(line.key, { discount: e.target.value ? Number(e.target.value) : null })} />
-            </div>
-            <div>
-              <Label>{t("admin.inventory.vat")}</Label>
-              <select className="mt-1 h-10 w-full rounded-xl border px-2 text-sm" disabled={locked} value={line.vatType} onChange={(e) => updateLine(line.key, { vatType: e.target.value as PurchaseInvoiceLine["vatType"] })}>
-                <option value="inclusive">{t("admin.inventory.vatInclusive")}</option>
-                <option value="exclusive">{t("admin.inventory.vatExclusive")}</option>
-                <option value="exempt">{t("admin.inventory.vatExempt")}</option>
-              </select>
-            </div>
-            <div className="flex items-end justify-between md:col-span-6">
-              <p className="text-sm">{t("admin.inventory.lineTotal")}: {formatIls(finalizeInvoiceLine(line, vatRate).priceIncludingVat ?? 0)}</p>
-              {!locked && form.lines.length > 1 && (
-                <Button type="button" variant="ghost" size="sm" onClick={() => setForm({ ...form, lines: form.lines.filter((item) => item.key !== line.key) })}>
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
-        ))}
-        {!locked && (
-          <Button type="button" variant="outline" onClick={() => setForm({ ...form, lines: [...form.lines, emptyInvoiceLine(vatRate)] })}>
-            <Plus className="h-4 w-4" /> {t("admin.inventory.addLine")}
-          </Button>
-        )}
-      </div>
+      <InvoiceManualLines
+        lines={form.lines}
+        ingredients={ingredients}
+        supplierName={supplierName}
+        vatRate={vatRate}
+        locked={locked}
+        unitLocked={form.status === "cancelled"}
+        focusLineKey={focusLineKey}
+        onChange={updateLine}
+        onAdd={() => setForm({ ...form, lines: [...form.lines, emptyInvoiceLine(vatRate)] })}
+        onRemove={(key) => setForm({ ...form, lines: form.lines.filter((item) => item.key !== key) })}
+      />
 
       <div className="mt-5 grid gap-2 rounded-2xl bg-beige/40 p-4 text-sm sm:grid-cols-2">
         <p>{t("admin.costing.supplier")}: {supplierName || "—"}</p>
@@ -316,24 +253,25 @@ export function SupplierInvoiceForm({
               onToast(t("admin.costing.saveFailed"), "error");
               return;
             }
-            const result = await saveFinanceInvoice({
+            const result = await savePurchaseInvoiceDraft({
               ...form,
               id,
               supplierName,
               lines,
               status: "draft",
+              stockStatus: "none",
             });
             setSaving(false);
             if (!result.success) {
               onToast(result.error === "DUPLICATE_INVOICE" ? t("admin.inventory.smart.duplicate") : result.error, "error");
               return;
             }
-            setForm((current) => ({ ...current, id: result.data, status: "saved", stockStatus: "none" }));
+            setForm((current) => ({ ...current, id: result.data, status: "draft", stockStatus: "none" }));
             setAskStock(true);
             onToast(t("admin.finance.saved"));
           }}
         >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.finance.saveFinance")}
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("admin.invoice.manual.saveDraft")}
         </Button>
       </div>
       {askStock && (
@@ -369,23 +307,6 @@ export function SupplierInvoiceForm({
         }}
       />
 
-      <QuickCreateIngredientPanel
-        open={createForKey != null}
-        existing={ingredients}
-        onClose={() => setCreateForKey(null)}
-        onCreated={(item) => {
-          if (createForKey) {
-            updateLine(createForKey, { productId: item.id, rawName: item.name, unit: item.purchaseUnit });
-          }
-          setCreateForKey(null);
-        }}
-        onUseExisting={(item) => {
-          if (createForKey) {
-            updateLine(createForKey, { productId: item.id, rawName: item.name, unit: item.purchaseUnit });
-          }
-          setCreateForKey(null);
-        }}
-      />
     </AdminCard>
   );
 }

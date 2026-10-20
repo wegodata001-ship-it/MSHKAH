@@ -1,9 +1,10 @@
 import { roundMoney } from "@/lib/costing/money";
+import { LINE_UNITS } from "@/lib/costing/units";
 import type { PurchaseUnit } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE, splitVat } from "@/lib/inventory/vat";
 import type { PurchaseInvoiceLine, VatType } from "@/lib/inventory/types";
 
-export const INVOICE_UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
+export const INVOICE_UNITS: PurchaseUnit[] = LINE_UNITS;
 
 export function newInvoiceLineKey(): string {
   return `line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

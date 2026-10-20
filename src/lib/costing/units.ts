@@ -1,6 +1,9 @@
-import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
+import type { BaseUnit, PackUnit, PurchaseUnit } from "@/lib/costing/types";
 
-export const PURCHASE_UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
+export const MEASURE_UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
+export const PACK_UNITS: PackUnit[] = ["pack", "carton", "bottle", "bag", "bundle", "tray"];
+export const LINE_UNITS: PurchaseUnit[] = [...MEASURE_UNITS, "bucket", ...PACK_UNITS];
+export const PURCHASE_UNITS: PurchaseUnit[] = LINE_UNITS;
 
 const UNIT_TO_BASE: Record<PurchaseUnit, { base: BaseUnit; factor: number }> = {
   kg: { base: "g", factor: 1000 },
@@ -8,7 +11,18 @@ const UNIT_TO_BASE: Record<PurchaseUnit, { base: BaseUnit; factor: number }> = {
   liter: { base: "ml", factor: 1000 },
   ml: { base: "ml", factor: 1 },
   unit: { base: "unit", factor: 1 },
+  bucket: { base: "unit", factor: 1 },
+  pack: { base: "unit", factor: 0 },
+  carton: { base: "unit", factor: 0 },
+  bottle: { base: "unit", factor: 0 },
+  bag: { base: "unit", factor: 0 },
+  bundle: { base: "unit", factor: 0 },
+  tray: { base: "unit", factor: 0 },
 };
+
+export function isPackUnit(unit: string | null | undefined): unit is PackUnit {
+  return PACK_UNITS.includes(unit as PackUnit);
+}
 
 export function baseUnitFor(purchaseUnit: PurchaseUnit): BaseUnit {
   return UNIT_TO_BASE[purchaseUnit].base;
@@ -19,7 +33,9 @@ export function purchaseQuantityInBase(
   purchaseUnit: PurchaseUnit
 ): number {
   if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) return 0;
-  return purchaseQuantity * UNIT_TO_BASE[purchaseUnit].factor;
+  const factor = UNIT_TO_BASE[purchaseUnit]?.factor ?? 0;
+  if (factor <= 0) return 0;
+  return purchaseQuantity * factor;
 }
 
 /** Price of one base unit (g / ml / unit). */

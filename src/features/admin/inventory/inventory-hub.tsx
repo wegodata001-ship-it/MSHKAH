@@ -38,6 +38,7 @@ import { PosExcelPanel } from "@/features/admin/inventory/pos-excel-panel";
 import { PosHistoryPanel } from "@/features/admin/inventory/pos-history-panel";
 import { PosZPanel } from "@/features/admin/inventory/pos-z-panel";
 import { SupplierInvoiceForm } from "@/features/admin/inventory/supplier-invoice-form";
+import { IngredientCategoriesPanel } from "@/features/admin/inventory/ingredient-categories-panel";
 import { InventoryProductDetails } from "@/features/admin/inventory/inventory-product-details";
 import { InventoryLedgerTable } from "@/features/admin/inventory/inventory-ledger-table";
 import { InvoiceArchivePanel, type AddDocumentAction } from "@/features/admin/inventory/invoice-archive-panel";
@@ -61,12 +62,15 @@ function moneyWithUnit(amount: number, unit: PurchaseUnit, t: (key: string) => s
   return `${formatIls(amount)} ${t(priceUnitKey(unit))}`;
 }
 
-type InventoryPane = "products" | "ledger" | "alerts";
+type InventoryPane = "products" | "ledger" | "alerts" | "categories";
 type PurchasePane = "invoices" | "suppliers" | "compare";
 type PosPane = "excel" | "z" | "history";
 
 export function InventorySection(props: InventoryHubProps & { pane: InventoryPane }) {
   const t = useT();
+  if (props.pane === "categories") {
+    return <IngredientCategoriesPanel ingredients={props.ingredients} movements={props.movements} onToast={props.onToast} />;
+  }
   const adminPath = useAdminPath();
   const [search, setSearch] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
@@ -608,6 +612,7 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
         }}
         onTransfer={setTransferInvoice}
         onDelete={(invoice) => setInvoiceToCancel(invoice)}
+        onToast={props.onToast}
       />
       <InvoiceCancelDialog
         invoice={invoiceToCancel}

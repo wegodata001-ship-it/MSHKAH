@@ -66,6 +66,7 @@ import {
   subscribeToModifierOptions,
 } from "@/services/modifierService";
 import { getLocalizedDescription, getLocalizedName, getProductDisplayName } from "@/lib/i18n/localized-content";
+import type { ReportKind } from "@/lib/reports/export/types";
 import type { Product } from "@/types";
 import { formatPrice } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ import { DishPricingPanel } from "@/features/admin/dish-pricing/dish-pricing-pan
 import { canEditPrice as canEditPriceCheck, canApproveCost as canApproveCostCheck } from "@/lib/auth/roles";
 import { CostingImportWizard, downloadCostingWorkbook } from "./import-wizard";
 import { InventorySection, PosSection, PurchaseSection } from "@/features/admin/inventory/inventory-hub";
+import { ExportMenu } from "@/features/admin/reports/export-menu";
 import { BreakEvenPanel } from "@/features/admin/breakeven/breakeven-panel";
 import { CashFlowPanel } from "@/features/admin/cashflow/cashflow-panel";
 import { productContribution } from "@/lib/breakeven/compute";
@@ -115,7 +117,7 @@ import { currentStockBase } from "@/lib/inventory/stock";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 
 type Hub = "finance" | "inventory" | "suppliers" | "compare" | "costing" | "pos";
-type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "invoices" | "dish-pricing" | "breakeven" | "cashflow" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
+type Tab = "dashboard" | "recipes" | "ingredients" | "history" | "products" | "ledger" | "alerts" | "categories" | "invoices" | "dish-pricing" | "breakeven" | "cashflow" | "suppliers" | "compare" | "pos-excel" | "pos-z" | "pos-history";
 type DishFilter = "all" | "good" | "watch" | "low" | "none";
 
 export function CostingAdmin() {
@@ -426,6 +428,7 @@ export function CostingAdmin() {
       label: t("admin.inventory.hub"),
       tabs: [
         { id: "products", label: t("admin.inventory.tab.products") },
+        { id: "categories", label: t("admin.inventory.categories.manage") },
         { id: "ledger", label: t("admin.inventory.tab.ledger") },
         { id: "alerts", label: t("admin.inventory.tab.alerts") },
       ],
@@ -529,6 +532,11 @@ export function CostingAdmin() {
           </button>
         ))}
       </div>
+      {exportKind(tab) ? (
+        <div className="flex justify-end">
+          <ExportMenu kind={exportKind(tab)!} onError={(message) => toast(message, "error")} />
+        </div>
+      ) : null}
       {activeHub.tabs.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {activeHub.tabs.map((item) => (
@@ -547,8 +555,11 @@ export function CostingAdmin() {
         </div>
       )}
 
-      {(tab === "products" || tab === "ledger" || tab === "alerts") && (
-        <InventorySection {...hubProps} pane={tab === "products" ? "products" : tab === "ledger" ? "ledger" : "alerts"} />
+      {(tab === "products" || tab === "ledger" || tab === "alerts" || tab === "categories") && (
+        <InventorySection
+          {...hubProps}
+          pane={tab === "products" ? "products" : tab === "ledger" ? "ledger" : tab === "alerts" ? "alerts" : "categories"}
+        />
       )}
 
       {(tab === "invoices" || tab === "suppliers" || tab === "compare") && (
@@ -1405,6 +1416,39 @@ function Line({ label, value, strong }: { label: string; value: string; strong?:
       <span>{value}</span>
     </div>
   );
+}
+
+function exportKind(tab: Tab): ReportKind | null {
+  switch (tab) {
+    case "suppliers":
+      return "suppliers";
+    case "compare":
+      return "compare";
+    case "products":
+    case "ingredients":
+    case "categories":
+      return "inventory";
+    case "ledger":
+      return "movements";
+    case "alerts":
+      return "alerts";
+    case "dish-pricing":
+    case "recipes":
+    case "dashboard":
+      return "dishes";
+    case "breakeven":
+      return "breakeven";
+    case "cashflow":
+      return "cashflow";
+    case "pos-z":
+    case "pos-excel":
+    case "pos-history":
+      return "z";
+    case "history":
+      return "prices";
+    default:
+      return null;
+  }
 }
 
 function extraLabel(t: (key: string) => string, name: string) {

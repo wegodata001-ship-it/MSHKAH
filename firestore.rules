@@ -159,6 +159,11 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /purchaseUnits/{id} {
+      allow read, create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     match /dishRecipes/{id} {
       allow read, create, update: if isAdmin();
       allow delete: if isAdmin();

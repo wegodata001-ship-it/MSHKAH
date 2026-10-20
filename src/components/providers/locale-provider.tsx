@@ -86,6 +86,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
       if (defaultVal) return defaultVal;
       const adminFallback = ADMIN_TRANSLATIONS[locale]?.[key] ?? ADMIN_TRANSLATIONS[DEFAULT_LOCALE]?.[key];
       if (adminFallback) return adminFallback;
+      const seed = UI_TRANSLATIONS_SEED[locale]?.[key] ?? UI_TRANSLATIONS_SEED[DEFAULT_LOCALE]?.[key];
+      if (seed) return seed;
       return fallback ?? key;
     },
     [locale, strings]

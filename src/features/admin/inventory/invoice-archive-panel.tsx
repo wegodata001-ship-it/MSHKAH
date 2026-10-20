@@ -6,13 +6,18 @@ import {
   ChevronDown,
   ClipboardList,
   Database,
+  Download,
+  Eye,
+  FileSpreadsheet,
   FileText,
   FileUp,
   Image as ImageIcon,
+  MoreHorizontal,
   PackageCheck,
   Pencil,
   Plus,
   Receipt,
+  RefreshCw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -21,9 +26,19 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import { archiveStatus, invoiceArchiveQuery } from "@/lib/inventory/invoice-archive";
+import { buildInvoiceDocument } from "@/lib/inventory/invoice-document";
 import { headerGross } from "@/lib/inventory/invoice-finance";
 import type { InvoiceScanStatus, PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 import { cn } from "@/lib/utils";
+import { InvoicePdfViewer } from "@/features/admin/inventory/invoice-pdf-viewer";
+import { downloadBlob } from "@/features/admin/inventory/invoice-pdf";
+import { InvoiceRemovalDialog } from "@/features/admin/inventory/invoice-removal-dialog";
+import { ExportMenu, fetchReport, saveBlob } from "@/features/admin/reports/export-menu";
+import {
+  fetchArchivedInvoices,
+  fetchInvoiceBundle,
+  fetchInvoiceSource,
+} from "@/services/invoice-admin-client";
 
 type AddDocumentAction =
   | "scan"
@@ -66,6 +81,7 @@ export function InvoiceArchivePanel({
   onRescan,
   onTransfer,
   onDelete,
+  onToast,
 }: {
   invoices: PurchaseInvoice[];
   suppliers?: Supplier[];
@@ -75,6 +91,7 @@ export function InvoiceArchivePanel({
   onRescan: (invoice: PurchaseInvoice) => void;
   onTransfer: (invoice: PurchaseInvoice) => void;
   onDelete?: (invoice: PurchaseInvoice) => void;
+  onToast?: (message: string, variant?: "success" | "error") => void;
 }) {
   const t = useT();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
@@ -83,17 +100,36 @@ export function InvoiceArchivePanel({
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [scope, setScope] = useState<"active" | "archive">("active");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "with" | "without">("all");
+  const [archived, setArchived] = useState<PurchaseInvoice[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [removal, setRemoval] = useState<"selected" | "all" | null>(null);
+  const [viewer, setViewer] = useState<{
+    doc: ReturnType<typeof buildInvoiceDocument>;
+    source: { mimeType: string; filename?: string | null; bytes: Uint8Array } | null;
+    invoice: PurchaseInvoice;
+    mode: "system" | "source";
+  } | null>(null);
+  const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !moreOpen) return;
     function onDocDown(event: MouseEvent) {
-      if (!menuRef.current) return;
-      if (menuRef.current.contains(event.target as Node)) return;
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || moreRef.current?.contains(target)) return;
       setMenuOpen(false);
+      setMoreOpen(false);
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        setMoreOpen(false);
+      }
     }
     document.addEventListener("mousedown", onDocDown);
     document.addEventListener("keydown", onKey);
@@ -101,32 +137,42 @@ export function InvoiceArchivePanel({
       document.removeEventListener("mousedown", onDocDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menuOpen]);
+  }, [menuOpen, moreOpen]);
 
+  useEffect(() => {
+    void refreshArchive();
+  }, []);
+
+  const listed = scope === "archive" ? archived : invoices;
   const rows = useMemo(
     () =>
-      invoiceArchiveQuery(invoices, { filter, query, from: from || undefined, to: to || undefined }).filter(
-        (invoice) => (supplierId ? invoice.supplierId === supplierId : true)
-      ),
-    [invoices, filter, query, from, to, supplierId]
+      invoiceArchiveQuery(listed, { filter, query, from: from || undefined, to: to || undefined })
+        .filter((invoice) => (supplierId ? invoice.supplierId === supplierId : true))
+        .filter((invoice) => {
+          const hasSource = Boolean(invoice.sourceFile?.storagePath || invoice.fileUrl);
+          if (sourceFilter === "with") return hasSource;
+          if (sourceFilter === "without") return !hasSource;
+          return true;
+        }),
+    [listed, filter, query, from, to, supplierId, sourceFilter]
   );
 
   const counts = useMemo(() => {
     let review = 0;
     let waiting = 0;
     let posted = 0;
-    for (const invoice of invoices) {
+    for (const invoice of listed) {
       const status = archiveStatus(invoice);
       if (status === "needs_review" || status === "uploaded" || status === "scanning") review += 1;
       else if (status === "approved" || status === "ready") waiting += 1;
       else if (status === "posted") posted += 1;
     }
     return { review, waiting, posted };
-  }, [invoices]);
+  }, [listed]);
 
   const supplierOptions = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const invoice of invoices) {
+    for (const invoice of listed) {
       if (invoice.supplierId && invoice.supplierName && !seen.has(invoice.supplierId)) {
         seen.set(invoice.supplierId, invoice.supplierName);
       }
@@ -137,12 +183,93 @@ export function InvoiceArchivePanel({
     return Array.from(seen.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [invoices, suppliers]);
+  }, [listed, suppliers]);
 
   function trigger(action: AddDocumentAction) {
     setMenuOpen(false);
     onAddAction?.(action);
   }
+
+  async function refreshArchive() {
+    setArchived(await fetchArchivedInvoices());
+  }
+
+  function toggleAll(checked: boolean) {
+    setSelected((current) => {
+      const visible = new Set(rows.map((invoice) => invoice.id));
+      if (checked) return Array.from(new Set([...current, ...visible]));
+      return current.filter((id) => !visible.has(id));
+    });
+  }
+
+  function toggleOne(id: string, checked: boolean) {
+    setSelected((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
+  }
+
+  function closePdfPreview() {
+    setPdfPreview((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }
+
+  async function exportInvoice(invoice: PurchaseInvoice, format: "pdf" | "xlsx", view = false) {
+    setPdfBusy(invoice.id);
+    try {
+      const file = await fetchReport({ kind: "invoice", format, scope: "filtered", ids: [invoice.id] });
+      if (view) {
+        const url = URL.createObjectURL(file.blob);
+        setPdfPreview((current) => {
+          if (current) URL.revokeObjectURL(current.url);
+          return { url, name: file.filename };
+        });
+      } else {
+        saveBlob(file.blob, file.filename);
+      }
+    } catch {
+      onToast?.(t("admin.export.err.EXPORT_FAILED"), "error");
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function openSource(invoice: PurchaseInvoice) {
+    setPdfBusy(invoice.id);
+    try {
+      const bundle = await fetchInvoiceBundle(invoice.id);
+      const doc = buildInvoiceDocument({
+        invoice: bundle?.invoice ?? invoice,
+        movements: bundle?.movements,
+        paidAmount: bundle?.paidAmount,
+        paymentsIncluded: Boolean(bundle),
+        productNames: bundle?.productNames,
+      });
+      const source = await fetchInvoiceSource(invoice.id);
+      setViewer({ doc, source, invoice: bundle?.invoice ?? invoice, mode: source ? "source" : "system" });
+    } catch {
+      onToast?.(t("admin.inventory.hub.pdf.failed"), "error");
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  function downloadReport() {
+    const header = ["date", "number", "supplier", "amount", "review", "stock", "source", "id"];
+    const lines = rows.map((invoice) => [
+      invoice.invoiceDate || "",
+      invoice.invoiceNumber || "",
+      invoice.supplierName || "",
+      headerGross(invoice) ?? "",
+      archiveStatus(invoice),
+      stockState(invoice),
+      invoice.sourceFile?.storagePath ? "yes" : "no",
+      invoice.id,
+    ]);
+    const csv = [header, ...lines].map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    downloadBlob(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }), "mishkat-invoices.csv");
+  }
+
+  const allVisibleSelected = rows.length > 0 && rows.every((invoice) => selected.includes(invoice.id));
 
   const scanDisabled = Boolean(aiState && aiState.configured && !aiState.reachable);
   const scanLabel = aiState?.configured && aiState.reachable
@@ -151,7 +278,7 @@ export function InvoiceArchivePanel({
       ? t("admin.inventory.hub.menu.scanRetry")
       : t("admin.inventory.hub.menu.scanDisabled");
 
-  const empty = invoices.length === 0;
+  const empty = rows.length === 0;
 
   return (
     <div className="space-y-4">
@@ -227,105 +354,196 @@ export function InvoiceArchivePanel({
         ]}
       />
 
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex rounded-full border border-beige-dark/30 bg-warm-white p-0.5 text-xs">
+          {(["active", "archive"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => { setScope(item); setSelected([]); }}
+              className={cn("rounded-full px-3 py-1", scope === item ? "bg-turquoise text-white" : "text-coffee/70")}
+            >
+              {t(`admin.inventory.hub.scope.${item}`)}
+            </button>
+          ))}
+        </div>
+        <ExportMenu
+          kind="invoices"
+          ids={selected}
+          filters={{
+            supplierId: supplierId || undefined,
+            from: from || undefined,
+            to: to || undefined,
+            query: query || undefined,
+            status: filter,
+            source: sourceFilter,
+            invoiceScope: scope,
+          }}
+          onError={(message) => onToast?.(message, "error")}
+        />
+        <div className="relative" ref={moreRef}>
+          <Button type="button" variant="outline" onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen} aria-haspopup="menu">
+            <MoreHorizontal className="h-4 w-4" />
+            {t("admin.inventory.hub.more")}
+          </Button>
+          {moreOpen ? (
+            <div role="menu" className="absolute end-0 z-20 mt-2 w-64 rounded-2xl border border-beige-dark/20 bg-warm-white p-1 shadow-elevated">
+              <HubMenuItem icon={<Receipt className="h-4 w-4" />} label={t("admin.inventory.hub.more.select")} onClick={() => { setMoreOpen(false); toggleAll(true); }} />
+              <HubMenuItem icon={<Trash2 className="h-4 w-4" />} label={t("admin.inventory.hub.more.deleteSelected")} disabled={!selected.length} onClick={() => { setMoreOpen(false); setRemoval("selected"); }} />
+              <HubMenuItem icon={<Trash2 className="h-4 w-4" />} label={t("admin.inventory.hub.more.deleteAll")} onClick={() => { setMoreOpen(false); setRemoval("all"); }} />
+              <HubMenuItem icon={<Download className="h-4 w-4" />} label={t("admin.inventory.hub.more.download")} onClick={() => { setMoreOpen(false); downloadReport(); }} />
+              <HubMenuItem icon={<RefreshCw className="h-4 w-4" />} label={t("admin.inventory.hub.more.refresh")} onClick={() => { setMoreOpen(false); void refreshArchive(); }} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {selected.length ? (
+        <div className="flex items-center justify-between rounded-2xl bg-turquoise/10 px-3 py-2 text-sm text-dark-brown">
+          <span>{t("admin.inventory.hub.selected").replace("{count}", String(selected.length))}</span>
+          <button type="button" className="text-xs text-coffee/70" onClick={() => setSelected([])}>{t("admin.inventory.hub.clearSelection")}</button>
+        </div>
+      ) : null}
+      <FilterRow
+        filter={filter}
+        onFilterChange={setFilter}
+        query={query}
+        onQueryChange={setQuery}
+        supplierId={supplierId}
+        onSupplierChange={setSupplierId}
+        suppliers={supplierOptions}
+        from={from}
+        onFromChange={setFrom}
+        to={to}
+        onToChange={setTo}
+        sourceFilter={sourceFilter}
+        onSourceFilter={setSourceFilter}
+        t={t}
+      />
       {empty ? (
         <EmptyState onAdd={() => setMenuOpen(true)} />
       ) : (
         <>
-          <FilterRow
-            filter={filter}
-            onFilterChange={setFilter}
-            query={query}
-            onQueryChange={setQuery}
-            supplierId={supplierId}
-            onSupplierChange={setSupplierId}
-            suppliers={supplierOptions}
-            from={from}
-            onFromChange={setFrom}
-            to={to}
-            onToChange={setTo}
-            t={t}
-          />
-          {rows.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-beige-dark/40 bg-warm-white p-8 text-center text-sm text-coffee/60">
-              {t("admin.inventory.hub.noMatch")}
-            </div>
-          ) : (
-            <>
-              <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/15 bg-warm-white shadow-soft md:block">
-                <table className="w-full min-w-[760px] text-sm">
-                  <thead className="bg-beige/50 text-xs text-coffee/60">
-                    <tr className="h-10">
-                      <th className="px-3 text-start font-medium">{t("admin.inventory.invoiceDate")}</th>
-                      <th className="px-3 text-start font-medium">{t("admin.inventory.invoiceNumber")}</th>
-                      <th className="px-3 text-start font-medium">{t("admin.costing.supplier")}</th>
-                      <th className="px-3 text-end font-medium">{t("admin.inventory.hub.cols.amount")}</th>
-                      <th className="px-3 text-start font-medium">{t("admin.inventory.hub.cols.reviewState")}</th>
-                      <th className="px-3 text-start font-medium">{t("admin.inventory.hub.cols.stockState")}</th>
-                      <th className="px-3 text-end font-medium">{t("admin.inventory.hub.cols.open")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((invoice) => {
-                      const status = archiveStatus(invoice);
-                      const stock = stockState(invoice);
-                      const gross = headerGross(invoice);
-                      return (
-                        <tr key={invoice.id} className="h-14 border-t border-beige-dark/10 hover:bg-beige/30">
-                          <td className="px-3 whitespace-nowrap tabular-nums">
-                            {invoice.invoiceDate || (invoice.uploadedAt || invoice.createdAt || "").slice(0, 10) || "—"}
-                          </td>
-                          <td className="px-3 whitespace-nowrap font-medium">{invoice.invoiceNumber || "—"}</td>
-                          <td className="px-3 truncate">{invoice.supplierName || "—"}</td>
-                          <td className="px-3 whitespace-nowrap text-end tabular-nums font-semibold">
-                            {gross != null ? formatIls(gross) : "—"}
-                          </td>
-                          <td className="px-3"><StatusPill status={status} t={t} /></td>
-                          <td className="px-3"><StockPill state={stock} t={t} /></td>
-                          <td className="px-3 text-end">
-                            <RowActions invoice={invoice} status={status} stock={stock} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div className="grid gap-3 md:hidden">
+          <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/15 bg-warm-white shadow-soft md:block">
+            <table className="w-full min-w-[980px] text-sm">
+              <thead className="bg-beige/50 text-xs text-coffee/60">
+                <tr className="h-10">
+                  <th className="px-3 text-start">
+                    <input type="checkbox" checked={allVisibleSelected} onChange={(event) => toggleAll(event.target.checked)} aria-label={t("admin.inventory.hub.cols.select")} />
+                  </th>
+                  <th className="px-3 text-start font-medium">{t("admin.inventory.invoiceDate")}</th>
+                  <th className="px-3 text-start font-medium">{t("admin.inventory.invoiceNumber")}</th>
+                  <th className="px-3 text-start font-medium">{t("admin.costing.supplier")}</th>
+                  <th className="px-3 text-end font-medium">{t("admin.inventory.hub.cols.amount")}</th>
+                  <th className="px-3 text-start font-medium">{t("admin.inventory.hub.cols.reviewState")}</th>
+                  <th className="px-3 text-start font-medium">{t("admin.inventory.hub.cols.stockState")}</th>
+                  <th className="px-3 text-start font-medium">{t("admin.inventory.hub.cols.documents")}</th>
+                  <th className="px-3 text-end font-medium">{t("admin.inventory.hub.cols.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
                 {rows.map((invoice) => {
                   const status = archiveStatus(invoice);
                   const stock = stockState(invoice);
                   const gross = headerGross(invoice);
                   return (
-                    <div key={invoice.id} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-3 shadow-soft">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-xs text-coffee/55 tabular-nums">
-                            {invoice.invoiceDate || (invoice.uploadedAt || invoice.createdAt || "").slice(0, 10) || "—"}
-                          </p>
-                          <p className="font-semibold text-dark-brown">{invoice.supplierName || "—"}</p>
-                          <p className="text-xs text-coffee/60">
-                            {t("admin.inventory.invoiceNumber")}: {invoice.invoiceNumber || "—"}
-                          </p>
-                        </div>
-                        <p className="text-base font-semibold tabular-nums">
-                          {gross != null ? formatIls(gross) : "—"}
-                        </p>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <StatusPill status={status} t={t} />
-                        <StockPill state={stock} t={t} />
-                      </div>
-                      <div className="mt-3 flex flex-wrap justify-end gap-1">
-                        <RowActions invoice={invoice} status={status} stock={stock} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
-                      </div>
-                    </div>
+                    <tr key={invoice.id} className="border-t border-beige-dark/10 align-top hover:bg-beige/30">
+                      <td className="px-3 py-3">
+                        <input type="checkbox" checked={selected.includes(invoice.id)} onChange={(event) => toggleOne(invoice.id, event.target.checked)} aria-label={invoice.invoiceNumber || invoice.id} />
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap tabular-nums">
+                        {invoice.invoiceDate || (invoice.uploadedAt || invoice.createdAt || "").slice(0, 10) || "—"}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap font-medium">{invoice.invoiceNumber || "—"}</td>
+                      <td className="px-3 py-3">{invoice.supplierName || "—"}</td>
+                      <td className="px-3 py-3 whitespace-nowrap text-end tabular-nums font-semibold">
+                        {gross != null ? formatIls(gross) : "—"}
+                      </td>
+                      <td className="px-3 py-3"><StatusPill status={status} t={t} /></td>
+                      <td className="px-3 py-3"><StockPill state={stock} t={t} /></td>
+                      <td className="px-3 py-3">
+                        <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
+                      </td>
+                      <td className="px-3 py-3 text-end">
+                        <RowActions invoice={invoice} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
+                      </td>
+                    </tr>
                   );
                 })}
-              </div>
-            </>
-          )}
+              </tbody>
+            </table>
+          </div>
+          <div className="grid gap-3 md:hidden">
+            {rows.map((invoice) => {
+              const status = archiveStatus(invoice);
+              const stock = stockState(invoice);
+              const gross = headerGross(invoice);
+              return (
+                <div key={invoice.id} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-3 shadow-soft">
+                  <div className="flex items-start gap-2">
+                    <input className="mt-1" type="checkbox" checked={selected.includes(invoice.id)} onChange={(event) => toggleOne(invoice.id, event.target.checked)} aria-label={invoice.invoiceNumber || invoice.id} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-coffee/55 tabular-nums">
+                        {invoice.invoiceDate || (invoice.uploadedAt || invoice.createdAt || "").slice(0, 10) || "—"}
+                      </p>
+                      <p className="font-semibold text-dark-brown">{invoice.supplierName || "—"}</p>
+                      <p className="text-xs text-coffee/60">
+                        {t("admin.inventory.invoiceNumber")}: {invoice.invoiceNumber || "—"}
+                      </p>
+                    </div>
+                    <p className="text-base font-semibold tabular-nums">{gross != null ? formatIls(gross) : "—"}</p>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <StatusPill status={status} t={t} />
+                    <StockPill state={stock} t={t} />
+                  </div>
+                  <div className="mt-3">
+                    <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap justify-end gap-1">
+                    <RowActions invoice={invoice} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
+      {removal ? (
+        <InvoiceRemovalDialog
+          target={removal}
+          scope={scope}
+          ids={selected}
+          onClose={() => setRemoval(null)}
+          onDone={(message, variant) => {
+            setRemoval(null);
+            setSelected([]);
+            void refreshArchive();
+            onToast?.(message, variant);
+          }}
+        />
+      ) : null}
+      {viewer ? (
+        <InvoicePdfViewer
+          doc={viewer.doc}
+          source={viewer.source}
+          initialMode={viewer.mode}
+          invoiceId={viewer.invoice.id}
+          invoiceNumber={viewer.invoice.invoiceNumber || viewer.invoice.id}
+          onClose={() => setViewer(null)}
+          onToast={onToast}
+        />
+      ) : null}
+      {pdfPreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-brown/50 p-4" onClick={closePdfPreview}>
+          <div className="flex h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-warm-white shadow-elevated" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 border-b border-beige-dark/20 px-4 py-3">
+              <p className="truncate text-sm font-semibold text-dark-brown">{pdfPreview.name}</p>
+              <Button type="button" variant="outline" onClick={closePdfPreview}>{t("admin.export.close")}</Button>
+            </div>
+            <iframe title={pdfPreview.name} src={pdfPreview.url} className="min-h-0 flex-1 bg-white" />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -469,6 +687,8 @@ function FilterRow({
   onFromChange,
   to,
   onToChange,
+  sourceFilter,
+  onSourceFilter,
   t,
 }: {
   filter: (typeof FILTERS)[number];
@@ -482,6 +702,8 @@ function FilterRow({
   onFromChange: (next: string) => void;
   to: string;
   onToChange: (next: string) => void;
+  sourceFilter: "all" | "with" | "without";
+  onSourceFilter: (next: "all" | "with" | "without") => void;
   t: (key: string) => string;
 }) {
   return (
@@ -510,6 +732,15 @@ function FilterRow({
         </select>
         <Input className="h-9 w-36 text-sm" type="date" value={from} onChange={(event) => onFromChange(event.target.value)} />
         <Input className="h-9 w-36 text-sm" type="date" value={to} onChange={(event) => onToChange(event.target.value)} />
+        <select
+          value={sourceFilter}
+          onChange={(event) => onSourceFilter(event.target.value as "all" | "with" | "without")}
+          className="h-9 rounded-xl border border-beige-dark/30 bg-warm-white px-2 text-sm"
+        >
+          <option value="all">{t("admin.inventory.hub.sourceFilter.all")}</option>
+          <option value="with">{t("admin.inventory.hub.sourceFilter.with")}</option>
+          <option value="without">{t("admin.inventory.hub.sourceFilter.without")}</option>
+        </select>
       </div>
       <div className="flex flex-wrap gap-1">
         {FILTERS.map((item) => (
@@ -551,10 +782,50 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+function DocumentActions({
+  invoice,
+  busy,
+  onView,
+  onDownload,
+  onExcel,
+  onSource,
+  t,
+}: {
+  invoice: PurchaseInvoice;
+  busy: boolean;
+  onView: () => void;
+  onDownload: () => void;
+  onExcel: () => void;
+  onSource: () => void;
+  t: (key: string) => string;
+}) {
+  const hasSource = Boolean(invoice.sourceFile?.storagePath || invoice.fileUrl);
+  return (
+    <div className="flex flex-wrap gap-1">
+      <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" disabled={busy} onClick={onView}>
+        <Eye className="h-3.5 w-3.5" />
+        {t("admin.export.viewPdf")}
+      </Button>
+      <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs" disabled={busy} onClick={onDownload}>
+        <Download className="h-3.5 w-3.5" />
+        {t("admin.export.pdf")}
+      </Button>
+      <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs" disabled={busy} onClick={onExcel}>
+        <FileSpreadsheet className="h-3.5 w-3.5" />
+        {t("admin.export.excel")}
+      </Button>
+      <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs" disabled={!hasSource || busy} onClick={onSource}>
+        {t("admin.inventory.hub.pdf.source")}
+      </Button>
+    </div>
+  );
+}
+
 function RowActions({
   invoice,
   status,
   stock,
+  archived,
   onOpen,
   onRescan,
   onTransfer,
@@ -564,6 +835,7 @@ function RowActions({
   invoice: PurchaseInvoice;
   status: InvoiceScanStatus;
   stock: StockState;
+  archived?: boolean;
   onOpen: (invoice: PurchaseInvoice) => void;
   onRescan: (invoice: PurchaseInvoice) => void;
   onTransfer: (invoice: PurchaseInvoice) => void;
@@ -573,19 +845,9 @@ function RowActions({
   const cancelled = status === "cancelled";
   return (
     <div className="flex flex-wrap items-center justify-end gap-1">
-      <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" onClick={() => onOpen(invoice)}>
-        {t("admin.inventory.hub.cols.open")}
+      <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" disabled={archived} onClick={() => onOpen(invoice)}>
+        {t("admin.inventory.hub.pdf.open")}
       </Button>
-      {invoice.sourceFile?.downloadUrl ? (
-        <a
-          className="inline-flex h-8 items-center rounded-lg border border-beige-dark/40 bg-warm-white px-2 text-xs text-dark-brown hover:bg-beige/50"
-          href={invoice.sourceFile.downloadUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {t("admin.inventory.archive.viewSource")}
-        </a>
-      ) : null}
       {!cancelled && (invoice.sourceFile || invoice.fileUrl) ? (
         <Button
           type="button"

@@ -172,8 +172,11 @@ export function ProductsAdmin() {
   const saveInlinePrice = async (product: Product) => {
     const val = parseFloat(inlinePrices[product.id] ?? String(product.price));
     if (!isNaN(val) && val > 0 && val !== product.price) {
-      const cost = product.cost;
-      await updateProduct(product.id, { price: val, profit: Math.round((val - cost) * 100) / 100 });
+      const patch: { price: number; profit?: number } = { price: val };
+      if (product.costVerified === true && product.cost > 0) {
+        patch.profit = Math.round((val - product.cost) * 100) / 100;
+      }
+      await updateProduct(product.id, patch);
     }
   };
 
@@ -440,7 +443,11 @@ export function ProductsAdmin() {
                   onBlur={(e) => {
                     const val = parseFloat(e.target.value);
                     if (!isNaN(val) && val !== product.price) {
-                      updateProduct(product.id, { price: val, profit: Math.round((val - product.cost) * 100) / 100 });
+                      const patch: { price: number; profit?: number } = { price: val };
+                      if (product.costVerified === true && product.cost > 0) {
+                        patch.profit = Math.round((val - product.cost) * 100) / 100;
+                      }
+                      updateProduct(product.id, patch);
                     }
                   }}
                 />

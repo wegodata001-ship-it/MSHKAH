@@ -5,6 +5,7 @@ import { Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
+import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { AdminModal, AdminModalBody, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
 import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
@@ -64,6 +65,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierName?: string;
   vatRate: number;
   locked?: boolean;
+  invoiceId?: string;
   highlightKey?: string | null;
   highlightField?: string | null;
   onChangeLines: (lines: PurchaseInvoiceLine[]) => void;
@@ -79,6 +81,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierName,
   vatRate,
   locked,
+  invoiceId,
   highlightKey,
   highlightField,
   onChangeLines,
@@ -234,7 +237,19 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
 
   const edit = (key: string, patch: Partial<PurchaseInvoiceLine>, when: "type" | "now" = "type") => {
     const base = current(key);
-    if (!base || locked) return;
+    if (!base) return;
+    const nextUnit = patch.unit;
+    const unitOnly = Object.keys(patch).length === 1 && nextUnit != null;
+    if (locked) {
+      if (!unitOnly || !nextUnit || !invoiceId) return;
+      replaceDrafts((prev) => ({ ...prev, [key]: { ...base, unit: nextUnit } }));
+      void clientAdminFetch("/api/admin/inventory/invoice/line-unit", {
+        invoiceId,
+        lineKey: key,
+        unit: nextUnit,
+      });
+      return;
+    }
     revisions.current[key] = (revisions.current[key] ?? 0) + 1;
     replaceDrafts((prev) => ({ ...prev, [key]: finalizeInvoiceLine({ ...base, ...patch }, vatRate) }));
     setSaveState((state) => ({ ...state, [key]: state[key] === "error" ? "error" : state[key] }));
@@ -400,6 +415,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 suppliers={suppliers}
                 supplierId={supplierId}
                 locked={locked}
+                invoiceId={invoiceId}
                 saveState={saveState[line.key]}
                 saveError={saveErrors[line.key]}
                 creating={creating}
@@ -430,6 +446,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
               suppliers={suppliers}
               supplierId={supplierId}
               locked={locked}
+              invoiceId={invoiceId}
               saveState={saveState[line.key]}
               saveError={saveErrors[line.key]}
               creating={creating}
@@ -460,6 +477,7 @@ function LineEditor({
   suppliers,
   supplierId,
   locked,
+  invoiceId,
   saveState,
   saveError,
   creating,
@@ -482,6 +500,7 @@ function LineEditor({
   suppliers?: Supplier[];
   supplierId?: string;
   locked?: boolean;
+  invoiceId?: string;
   saveState?: "saving" | "saved" | "error";
   saveError?: string | null;
   creating: boolean;
@@ -621,7 +640,7 @@ function LineEditor({
         id={`invoice-line-${line.key}-unit`}
         className={cn("h-8 w-full rounded-lg border px-2 text-sm", highlightField === "unit" && "ring-2 ring-amber-500")}
         value={line.unit ?? ""}
-        disabled={locked}
+        disabled={Boolean(locked && !invoiceId)}
         onChange={(e) => onEdit(applyInvoiceUnitChange(line, (e.target.value || null) as PurchaseUnit | null), "now")}
       >
         <option value="">{t("admin.inventory.smart.unitPick")}</option>

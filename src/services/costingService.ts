@@ -16,7 +16,8 @@ import { ServiceError, failure, success, type ServiceResult } from "@/lib/errors
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { nowTimestamp, timestampToIso } from "@/types/firestore";
 import { recipeIngredientCost } from "@/lib/costing/calc";
-import { costPerBaseUnit, baseUnitFor } from "@/lib/costing/units";
+import { baseUnitFor, costPerBaseUnit, isPackUnit, purchaseQuantityInBase } from "@/lib/costing/units";
+import { packFactor } from "@/lib/inventory/pack-cost";
 import {
   DEFAULT_COSTING_SETTINGS,
   type CostingIngredient,
@@ -51,6 +52,9 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
         ? data.originKind
         : undefined,
     category: data.category ? String(data.category) : undefined,
+    categoryId: data.categoryId ? String(data.categoryId) : undefined,
+    packCount: data.packCount != null ? asNumber(data.packCount) : undefined,
+    packContentUnit: data.packContentUnit ? (data.packContentUnit as PurchaseUnit) : undefined,
     purchasePrice,
     purchaseQuantity,
     purchaseUnit,
@@ -195,6 +199,9 @@ export function subscribeToCostingSnapshots(
 export type IngredientWriteInput = {
   name: string;
   category?: string;
+  categoryId?: string;
+  packCount?: number;
+  packContentUnit?: PurchaseUnit;
   purchasePrice: number;
   purchaseQuantity: number;
   purchaseUnit: PurchaseUnit;
@@ -214,14 +221,26 @@ export function isCostingPermissionError(error: unknown): boolean {
 
 function ingredientPayload(input: IngredientWriteInput) {
   const purchaseUnit = input.purchaseUnit;
+  const packed =
+    isPackUnit(purchaseUnit) && input.packContentUnit && input.packCount
+      ? packFactor({ contentCount: input.packCount, contentUnit: input.packContentUnit })
+      : null;
+  const baseUnit = packed?.ok ? packed.base : baseUnitFor(purchaseUnit);
+  const perPack = packed?.ok
+    ? input.purchaseQuantity * packed.factor
+    : purchaseQuantityInBase(input.purchaseQuantity, purchaseUnit);
+  const costPerBase = perPack > 0 ? input.purchasePrice / perPack : 0;
   return sanitizeFirestoreData({
     name: input.name.trim(),
     category: input.category?.trim() || null,
+    categoryId: input.categoryId?.trim() || null,
+    packCount: input.packCount ?? null,
+    packContentUnit: input.packContentUnit ?? null,
     purchasePrice: input.purchasePrice,
     purchaseQuantity: input.purchaseQuantity,
     purchaseUnit,
-    baseUnit: baseUnitFor(purchaseUnit),
-    costPerBaseUnit: costPerBaseUnit(input.purchasePrice, input.purchaseQuantity, purchaseUnit),
+    baseUnit,
+    costPerBaseUnit: costPerBase,
     supplier: input.supplier?.trim() || null,
     notes: input.notes?.trim() || null,
     barcode: input.barcode?.trim() || null,
@@ -261,11 +280,13 @@ export async function createIngredient(input: IngredientWriteInput): Promise<Ser
 
 export async function setIngredientCategory(
   id: string,
-  category: string | null
+  category: string | null,
+  categoryId?: string | null
 ): Promise<ServiceResult<void>> {
   try {
     await updateDoc(doc(getDb(), COLLECTIONS.ingredients, id), {
       category: category?.trim() || null,
+      categoryId: categoryId?.trim() || null,
       updatedAt: nowTimestamp(),
     });
     return success(undefined);

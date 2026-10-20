@@ -211,6 +211,16 @@ export type InvoiceAuditEvent = {
   actor?: string;
   action: string;
   detail?: string;
+  before?: string;
+  after?: string;
+};
+
+export type InvoiceGeneratedDocument = {
+  version: number;
+  storagePath: string;
+  createdAt: string;
+  createdBy?: string;
+  bytes?: number;
 };
 
 export type SupplierItemMap = {
@@ -263,6 +273,10 @@ export type PurchaseInvoiceLine = {
   cheaperSupplierName?: string;
   cheaperSupplierPrice?: number | null;
   category?: string;
+  categoryId?: string;
+  packCount?: number | null;
+  packContentUnit?: PurchaseUnit | null;
+  customUnitId?: string;
   note?: string;
   matchConfirmed?: boolean;
   plannedProductName?: string;
@@ -364,6 +378,10 @@ export type PurchaseInvoice = {
   cancelReason?: string;
   cancellationId?: string;
   cancelReversedMovementIds?: string[];
+  archivedAt?: string;
+  archivedBy?: string;
+  archiveReason?: string;
+  generatedDocuments?: InvoiceGeneratedDocument[];
 };
 
 export type PosImportStatus = "draft" | "saved" | "approved" | "blocked-duplicate";

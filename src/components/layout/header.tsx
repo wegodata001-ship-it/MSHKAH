@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ShoppingBag, User } from "lucide-react";
+import { ShoppingBag, Sparkles, User } from "lucide-react";
 import { motion, useScroll, useMotionValueEvent } from "framer-motion";
 import { useState } from "react";
 import { usePathname } from "next/navigation";
@@ -82,6 +82,17 @@ export function SiteHeader() {
 
         {/* Actions — end (left in RTL) */}
         <div className="ms-auto flex items-center gap-2 md:gap-3">
+          <Link
+            href="/club"
+            className={cn(
+              "inline-flex h-10 items-center gap-1.5 rounded-full bg-turquoise px-3 text-xs font-semibold text-warm-white transition-colors hover:bg-turquoise/90 md:px-4 md:text-sm",
+              pathname.startsWith("/club") && "ring-2 ring-turquoise/30"
+            )}
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+            <span className="sm:hidden">{t("nav.joinClubShort")}</span>
+            <span className="hidden sm:inline">{t("nav.joinClub")}</span>
+          </Link>
           <LanguageSwitcher variant="dropdown" className="sm:hidden" />
           <LanguageSwitcher compact className="hidden sm:inline-flex" />
 

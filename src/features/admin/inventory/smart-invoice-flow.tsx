@@ -728,6 +728,7 @@ export function SmartInvoiceFlow({
             supplierId={invoice.supplierId}
             supplierName={invoice.supplierName}
             vatRate={vatRate}
+            invoiceId={invoice.id}
             locked={locked || postedDuplicate}
             highlightKey={highlightKey}
             highlightField={highlightField}

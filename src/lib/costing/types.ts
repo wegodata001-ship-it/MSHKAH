@@ -1,4 +1,6 @@
-export type PurchaseUnit = "kg" | "g" | "liter" | "ml" | "unit";
+export type MeasureUnit = "kg" | "g" | "liter" | "ml" | "unit";
+export type PackUnit = "pack" | "carton" | "bottle" | "bag" | "bundle" | "tray";
+export type PurchaseUnit = MeasureUnit | PackUnit | "bucket";
 export type BaseUnit = "g" | "ml" | "unit";
 export type PriceRoundMode = "none" | "shekel" | "half" | "ninety" | "five";
 export type ProfitStatus = "good" | "watch" | "low" | "none";
@@ -14,6 +16,9 @@ export type CostingIngredient = {
   purchasePrice: number;
   purchaseQuantity: number;
   purchaseUnit: PurchaseUnit;
+  packCount?: number;
+  packContentUnit?: PurchaseUnit;
+  categoryId?: string;
   baseUnit: BaseUnit;
   costPerBaseUnit: number;
   supplier?: string;

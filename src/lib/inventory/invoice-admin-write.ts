@@ -1,5 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { baseUnitFor, costPerBaseUnit, purchaseQuantityInBase } from "@/lib/costing/units";
+import { baseUnitFor, costPerBaseUnit, isPackUnit, purchaseQuantityInBase } from "@/lib/costing/units";
 import { invoiceLineQuantityBase, packNeedsCompletion } from "@/lib/inventory/ingredient-core";
 import { findDuplicateInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
@@ -396,18 +396,40 @@ export async function postInvoiceStock(
       reusedKeys.push(line.key);
     } else {
       writtenKeys.push(line.key);
-      await db.collection(COLLECTIONS.ingredients).doc(line.productId).set(
-        {
-          purchasePrice: gross || net,
+      const ingredientRef = db.collection(COLLECTIONS.ingredients).doc(line.productId);
+      const ingredientSnap = await ingredientRef.get();
+      const previousPrice = ingredientSnap.exists ? asNumber(ingredientSnap.data()?.purchasePrice) : 0;
+      const nextPrice = gross || net;
+      const contentBase = line.packContentUnit && !isPackUnit(line.packContentUnit) ? baseUnitFor(line.packContentUnit) : null;
+      await ingredientRef.set(
+        sanitizeFirestoreData({
+          purchasePrice: nextPrice,
           purchaseQuantity: line.quantity,
           purchaseUnit: line.unit,
-          costPerBaseUnit: qtyBase > 0 ? (net || gross) / qtyBase : costPerBaseUnit(net || gross, line.quantity!, line.unit!),
+          ...(line.packCount != null ? { packCount: line.packCount } : {}),
+          ...(line.packContentUnit ? { packContentUnit: line.packContentUnit } : {}),
+          ...(line.category ? { category: line.category } : {}),
+          ...(line.categoryId ? { categoryId: line.categoryId } : {}),
+          ...(contentBase ? { baseUnit: contentBase } : {}),
+          costPerBaseUnit: qtyBase > 0 ? nextPrice / qtyBase : line.unit && !isPackUnit(line.unit) ? costPerBaseUnit(nextPrice, line.quantity!, line.unit) : 0,
           supplier: merged.supplierName || null,
           lastSupplierId: merged.supplierId || null,
           lastReceivedAt: merged.receivedAt,
           updatedAt: now,
-        },
+        }),
         { merge: true }
+      );
+      await db.collection(COLLECTIONS.ingredientPriceHistory).add(
+        sanitizeFirestoreData({
+          ingredientId: line.productId,
+          previousPrice,
+          newPrice: nextPrice,
+          previousQuantity: asNumber(ingredientSnap.data()?.purchaseQuantity),
+          newQuantity: line.quantity,
+          changedAt: now,
+          changedBy: merged.approvedBy || null,
+          invoiceId: merged.id,
+        })
       );
       await upsertSupplierOffer(db, merged, line);
       await upsertSupplierItemMap(db, merged, line);

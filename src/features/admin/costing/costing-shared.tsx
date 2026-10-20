@@ -29,6 +29,13 @@ export function unitLabelKey(unit: string): string {
   if (unit === "ml") return "admin.costing.unit.ml";
   if (unit === "kg") return "admin.costing.unit.kg";
   if (unit === "liter") return "admin.costing.unit.liter";
+  if (unit === "bucket") return "admin.costing.unit.bucket";
+  if (unit === "pack") return "admin.costing.unit.pack";
+  if (unit === "carton") return "admin.costing.unit.carton";
+  if (unit === "bottle") return "admin.costing.unit.bottle";
+  if (unit === "bag") return "admin.costing.unit.bag";
+  if (unit === "bundle") return "admin.costing.unit.bundle";
+  if (unit === "tray") return "admin.costing.unit.tray";
   return "admin.costing.unit.unit";
 }
 
