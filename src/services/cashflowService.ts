@@ -25,7 +25,10 @@ function mapEntry(id: string, data: Record<string, unknown>): CashFlowEntry {
     : [];
   return {
     id,
-    kind: data.kind === "settlement" || data.kind === "transfer" || data.kind === "override" || data.kind === "link" ? data.kind : "forecast",
+    kind:
+      data.kind === "settlement" || data.kind === "transfer" || data.kind === "override" || data.kind === "link" || data.kind === "check"
+        ? data.kind
+        : "forecast",
     direction: data.direction === "in" || data.direction === "out" ? data.direction : undefined,
     amount: asNumber(data.amount) ?? undefined,
     date: data.date ? String(data.date) : undefined,
@@ -42,6 +45,14 @@ function mapEntry(id: string, data: Record<string, unknown>): CashFlowEntry {
     zReportId: data.zReportId ? String(data.zReportId) : undefined,
     paymentMethod: data.paymentMethod ? String(data.paymentMethod) : undefined,
     moneyLocation: data.moneyLocation === "cash" || data.moneyLocation === "card" || data.moneyLocation === "bank" ? data.moneyLocation : undefined,
+    checkState:
+      data.checkState === "future" || data.checkState === "deposited" || data.checkState === "cleared" || data.checkState === "bounced" || data.checkState === "cancelled"
+        ? data.checkState
+        : undefined,
+    checkNumber: data.checkNumber ? String(data.checkNumber) : undefined,
+    bankName: data.bankName ? String(data.bankName) : undefined,
+    clearedDate: data.clearedDate ? String(data.clearedDate) : undefined,
+    sourceKey: data.sourceKey ? String(data.sourceKey) : undefined,
     history,
   };
 }

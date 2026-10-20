@@ -4,7 +4,9 @@ import type { BreakEvenFixedCost } from "@/lib/breakeven/types";
 import {
   billingDayFromDate,
   buildCashFlow,
+  cashPosition,
   clampBillingDate,
+  dailyForecast,
   fixedCashAmount,
   paymentDates,
   posExcelCashInflows,
@@ -244,5 +246,64 @@ describe("cash flow schedule", () => {
     });
     expect(paid.lines.map((line) => line.status)).toEqual(["done"]);
     expect(paid.inflows).toBe(300);
+  });
+
+  it("keeps an uncleared check out of the actual balance and shows it only as expected", () => {
+    const check: CashFlowEntry = {
+      id: "chk",
+      kind: "check",
+      direction: "out",
+      amount: 5000,
+      date: "2026-10-30",
+      checkState: "future",
+      checkNumber: "100",
+    };
+    const open = buildCashFlow({ fixed: [], entries: [check], opening: { amount: 15000, date: "2026-10-01" }, ...october });
+    const position = cashPosition(open);
+    expect(position.actual).toBe(15000);
+    expect(position.expectedOut).toBe(5000);
+    expect(position.projected).toBe(10000);
+    const cleared = buildCashFlow({
+      fixed: [],
+      entries: [{ ...check, checkState: "cleared", clearedDate: "2026-10-30" }],
+      opening: { amount: 15000, date: "2026-10-01" },
+      ...october,
+    });
+    expect(cashPosition(cleared).actual).toBe(10000);
+    const bounced = buildCashFlow({
+      fixed: [],
+      entries: [{ ...check, checkState: "bounced" }],
+      opening: { amount: 15000, date: "2026-10-01" },
+      ...october,
+    });
+    expect(cashPosition(bounced).actual).toBe(15000);
+    expect(cashPosition(bounced).expectedOut).toBe(0);
+  });
+
+  it("does not treat an unsettled card Z as money already in the bank", () => {
+    const flow = buildCashFlow({
+      fixed: [],
+      zPayments: [{ reportId: "z9", businessDate: "2026-10-18", method: "אשראי", amount: 5000 }],
+      opening: { amount: 15000, date: "2026-10-01" },
+      ...october,
+    });
+    expect(cashPosition(flow).actual).toBe(15000);
+    expect(cashPosition(flow).expectedIn).toBe(5000);
+    expect(flow.needsSettlement[0]?.date).toBe("2026-10-20");
+    const days = dailyForecast(flow, "2026-10-20", "2026-10-20");
+    expect(days[0]).toMatchObject({ opening: 15000, expectedIn: 5000, closing: 20000 });
+  });
+
+  it("leaves only the unpaid part of a supplier invoice as expected cash out", () => {
+    const flow = buildCashFlow({
+      fixed: [],
+      invoices: [{ id: "inv", supplierName: "בריוש", invoiceNumber: "10219", dueDate: "2026-10-29", gross: 3000 }],
+      entries: [{ id: "part", kind: "settlement", direction: "out", amount: 1000, date: "2026-10-05", appliesToKey: "invoice:inv" }],
+      opening: { amount: 15000, date: "2026-10-01" },
+      ...october,
+    });
+    expect(flow.lines.find((line) => line.forecast)?.outflow).toBe(2000);
+    expect(cashPosition(flow).actual).toBe(14000);
+    expect(cashPosition(flow).expectedOut).toBe(2000);
   });
 });

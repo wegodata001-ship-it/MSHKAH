@@ -12,6 +12,9 @@ import { purchaseInvoicesForCashFlow } from "@/lib/inventory/supplier-ledger";
 import type { PosZReport, PurchaseInvoice } from "@/lib/inventory/types";
 import {
   buildCashFlow,
+  cashPosition,
+  checksDueSoon,
+  dailyForecast,
   type CashFlowEntry,
   type CashFlowLine,
   type CashFlowStatus,
@@ -101,7 +104,9 @@ export function CashFlowPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [tab, setTab] = useState<"overview" | "moves" | "invoices" | "checks" | "z" | "forecast">("overview");
   const [forecast, setForecast] = useState({ description: "", amount: "", date: localIso(), direction: "out" as "in" | "out" });
+  const [checkDraft, setCheckDraft] = useState({ number: "", party: "", amount: "", due: localIso(), direction: "out" as "in" | "out", bank: "" });
   const [transfer, setTransfer] = useState({ description: "", amount: "", date: localIso() });
   const [settlementDrafts, setSettlementDrafts] = useState<Record<string, { date: string; location: "cash" | "card" | "bank" }>>({});
 
@@ -154,6 +159,9 @@ export function CashFlowPanel({
       }),
     [entries, fixed, invoices, opening, rangeEnd, rangeStart, vatRate, zReports]
   );
+  const position = useMemo(() => cashPosition(flow), [flow]);
+  const days = useMemo(() => dailyForecast(flow, rangeStart, rangeEnd).filter((day) => day.expectedIn || day.expectedOut || day.date === localIso()), [flow, rangeEnd, rangeStart]);
+  const soonChecks = checksDueSoon(flow.lines, localIso());
 
   async function persist(action: () => Promise<{ success: boolean; error?: string }>) {
     setSaving(true);
@@ -214,6 +222,48 @@ export function CashFlowPanel({
       })
     );
     if (ok) setForecast({ description: "", amount: "", date: localIso(), direction: "out" });
+  }
+
+  async function addCheck() {
+    const amount = Number(checkDraft.amount);
+    if (!checkDraft.number.trim() || !Number.isFinite(amount) || amount <= 0 || !checkDraft.due) return;
+    const sourceKey = `check:${checkDraft.direction}:${checkDraft.number.trim()}:${checkDraft.due}`;
+    if (entries.some((entry) => entry.sourceKey === sourceKey && entry.status !== "cancelled")) {
+      setError(t("admin.cashflow.duplicate"));
+      return;
+    }
+    const ok = await persist(() =>
+      saveCashFlowEntry({
+        id: "",
+        kind: "check",
+        direction: checkDraft.direction,
+        amount,
+        date: checkDraft.due,
+        description: checkDraft.number.trim(),
+        counterparty: checkDraft.party.trim(),
+        bankName: checkDraft.bank.trim(),
+        checkNumber: checkDraft.number.trim(),
+        checkState: "future",
+        sourceKey,
+        status: "expected",
+        history: [{ at: entryStamp(), change: "check" }],
+      })
+    );
+    if (ok) setCheckDraft({ number: "", party: "", amount: "", due: localIso(), direction: "out", bank: "" });
+  }
+
+  async function markCheck(entryId: string, checkState: "cleared" | "bounced") {
+    const current = entries.find((entry) => entry.id === entryId);
+    if (!current) return;
+    await persist(() =>
+      saveCashFlowEntry({
+        ...current,
+        checkState,
+        status: checkState === "cleared" ? "done" : "cancelled",
+        clearedDate: checkState === "cleared" ? localIso() : current.clearedDate,
+        history: [...(current.history ?? []), { at: entryStamp(), change: checkState }],
+      })
+    );
   }
 
   async function addTransfer() {
@@ -363,8 +413,87 @@ export function CashFlowPanel({
     cancelled: t("admin.cashflow.status.cancelled"),
   };
 
+  const visibleLines = flow.lines.filter((line) => {
+    if (tab === "invoices") return line.source === "invoice";
+    if (tab === "checks") return line.source === "check";
+    if (tab === "z") return line.source === "z";
+    return true;
+  });
+
   return (
     <div className="space-y-4">
+      <div>
+        <h2 className="text-[28px] font-semibold text-dark-brown">{t("admin.cashflow.title")}</h2>
+        <p className="mt-1 text-base text-coffee/70">{t("admin.cashflow.lead")}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <Kpi label={t("admin.cashflow.actualBalance")} value={position.actual == null ? "—" : formatIls(position.actual)} />
+        <Kpi label={t("admin.cashflow.expectedIn")} value={formatIls(position.expectedIn)} />
+        <Kpi label={t("admin.cashflow.expectedOut")} value={formatIls(position.expectedOut)} />
+        <Kpi label={t("admin.cashflow.projected")} value={position.projected == null ? "—" : formatIls(position.projected)} />
+        <Kpi label={t("admin.cashflow.checksSoon")} value={String(soonChecks.length)} />
+        <Kpi label={t("admin.cashflow.overdue")} value={String(flow.lines.filter((line) => line.status === "overdue").length)} />
+      </div>
+      {position.actual == null && <p className="text-sm text-amber-800">{t("admin.cashflow.needOpening")}</p>}
+      {position.projected != null && position.projected < 0 && (
+        <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-800">{t("admin.cashflow.negative")}</p>
+      )}
+      {flow.needsSettlement.length > 0 && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">{t("admin.cashflow.zOpen").replace("{count}", String(flow.needsSettlement.length))}</p>
+      )}
+      <div className="flex gap-2 overflow-x-auto">
+        {(["overview", "moves", "invoices", "checks", "z", "forecast"] as const).map((item) => (
+          <button key={item} type="button" onClick={() => setTab(item)} className={`shrink-0 rounded-full px-3 py-2 text-sm font-semibold ${tab === item ? "bg-turquoise text-warm-white" : "bg-warm-white text-coffee"}`}>
+            {t(`admin.cashflow.tab.${item}`)}
+          </button>
+        ))}
+      </div>
+      {tab === "forecast" && (
+        <div className="space-y-2">
+          {days.length === 0 && <p className="text-sm text-coffee/60">{t("admin.cashflow.needOpening")}</p>}
+          {days.map((day) => (
+            <div key={day.date} className={`grid grid-cols-2 gap-2 rounded-2xl border px-3 py-3 text-sm lg:grid-cols-4 ${day.closing < 0 ? "border-red-300 bg-red-50" : "border-beige-dark/20 bg-warm-white"}`}>
+              <p className="font-semibold">{day.date}</p>
+              <p>{t("admin.cashflow.dayOpen")}: {formatIls(day.opening)}</p>
+              <p className="text-emerald-700">{t("admin.cashflow.expectedIn")}: {formatIls(day.expectedIn)}</p>
+              <p className="text-red-700">{t("admin.cashflow.expectedOut")}: {formatIls(day.expectedOut)}</p>
+              <p className="font-bold">{t("admin.cashflow.dayClose")}: {formatIls(day.closing)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === "checks" && (
+        <AdminCard title={t("admin.cashflow.tab.checks")}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Input placeholder={t("admin.cashflow.checkNumber")} value={checkDraft.number} onChange={(event) => setCheckDraft({ ...checkDraft, number: event.target.value })} />
+            <Input placeholder={t("admin.cashflow.party")} value={checkDraft.party} onChange={(event) => setCheckDraft({ ...checkDraft, party: event.target.value })} />
+            <Input placeholder={t("admin.cashflow.amount")} value={checkDraft.amount} onChange={(event) => setCheckDraft({ ...checkDraft, amount: event.target.value })} inputMode="decimal" />
+            <Input type="date" value={checkDraft.due} onChange={(event) => setCheckDraft({ ...checkDraft, due: event.target.value })} />
+            <Input placeholder={t("admin.cashflow.bank")} value={checkDraft.bank} onChange={(event) => setCheckDraft({ ...checkDraft, bank: event.target.value })} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant={checkDraft.direction === "out" ? "turquoise" : "outline"} onClick={() => setCheckDraft({ ...checkDraft, direction: "out" })}>{t("admin.cashflow.checkOut")}</Button>
+            <Button type="button" variant={checkDraft.direction === "in" ? "turquoise" : "outline"} onClick={() => setCheckDraft({ ...checkDraft, direction: "in" })}>{t("admin.cashflow.checkIn")}</Button>
+            <Button type="button" variant="turquoise" className="min-h-11" disabled={saving} onClick={() => void addCheck()}>{t("admin.cashflow.addCheck")}</Button>
+          </div>
+        </AdminCard>
+      )}
+      <div className="space-y-2 lg:hidden">
+        {visibleLines.map((line) => (
+          <article key={line.id} className="rounded-2xl border border-beige-dark/20 bg-warm-white p-3">
+            <p className="text-lg font-semibold">{line.counterparty || line.description}</p>
+            <p className="text-sm text-coffee/70">{line.description}</p>
+            <p className="mt-1 text-xl font-bold tabular-nums">{line.outflow ? formatIls(line.outflow) : formatIls(line.inflow)}</p>
+            <p className="text-sm">{line.date || "—"} · {statusLabel[line.status]}{line.forecast ? ` · ${t("admin.cashflow.notActual")}` : ""}</p>
+            {line.source === "check" && line.entryId && line.forecast && (
+              <div className="mt-2 flex gap-2">
+                <Button type="button" variant="outline" className="min-h-11" onClick={() => void markCheck(line.entryId!, "cleared")}>{t("admin.cashflow.markCleared")}</Button>
+                <Button type="button" variant="ghost" className="min-h-11" onClick={() => void markCheck(line.entryId!, "bounced")}>{t("admin.cashflow.markBounced")}</Button>
+              </div>
+            )}
+          </article>
+        ))}
+      </div>
       <AdminCard title={t("admin.cashflow.title")}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="space-y-1 text-xs">
@@ -594,7 +723,7 @@ export function CashFlowPanel({
       )}
 
       <AdminCard title={t("admin.cashflow.title")}>
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto lg:block">
           <table className="min-w-full text-sm">
             <thead className={adminTableHeader}>
               <tr className="text-start">
@@ -609,7 +738,7 @@ export function CashFlowPanel({
               </tr>
             </thead>
             <tbody>
-              {flow.lines.map((line) => (
+              {visibleLines.map((line) => (
                 <tr key={line.id} className={`${adminTableRow} ${line.forecast ? "bg-amber-50/80" : ""}`}>
                   <td className="p-2">{line.date ?? "—"}</td>
                   <td className="p-2">{line.description}</td>
@@ -748,5 +877,14 @@ function BalanceChart({
         {forecastPath.length > 1 && <path d={path(forecastPath)} fill="none" stroke="#d97706" strokeWidth="2" strokeDasharray="4 3" />}
       </svg>
     </AdminCard>
+  );
+}
+
+function Kpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-beige-dark/15 bg-warm-white px-3 py-3">
+      <p className="text-sm text-coffee/65">{label}</p>
+      <p className="mt-1 text-2xl font-bold tabular-nums text-dark-brown">{value}</p>
+    </div>
   );
 }

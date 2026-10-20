@@ -43,3 +43,6 @@ printer-agent-standalone/vendor/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local inventory reset backups — do not commit business data
+/backups/

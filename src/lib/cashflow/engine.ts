@@ -3,11 +3,12 @@ import type { BreakEvenFixedCost, PaymentSchedule } from "@/lib/breakeven/types"
 
 export type { PaymentSchedule };
 export type CashFlowStatus = "expected" | "partial" | "done" | "overdue" | "cancelled";
-export type CashFlowSource = "fixed" | "invoice" | "manual" | "z" | "transfer";
+export type CashFlowSource = "fixed" | "invoice" | "manual" | "z" | "transfer" | "check";
+export type CheckState = "future" | "deposited" | "cleared" | "bounced" | "cancelled";
 
 export type CashFlowEntry = {
   id: string;
-  kind: "forecast" | "settlement" | "transfer" | "override" | "link";
+  kind: "forecast" | "settlement" | "transfer" | "override" | "link" | "check";
   direction?: "in" | "out";
   amount?: number;
   date?: string;
@@ -24,6 +25,11 @@ export type CashFlowEntry = {
   zReportId?: string;
   paymentMethod?: string;
   moneyLocation?: "cash" | "card" | "bank";
+  checkState?: CheckState;
+  checkNumber?: string;
+  bankName?: string;
+  clearedDate?: string;
+  sourceKey?: string;
   history?: { at: string; change: string }[];
 };
 
@@ -67,6 +73,21 @@ export type CashFlowLine = {
 };
 
 export type CashFlowPoint = { date: string; balance: number; actual: boolean };
+
+export type CashPosition = {
+  actual: number | null;
+  expectedIn: number;
+  expectedOut: number;
+  projected: number | null;
+};
+
+export type CashDay = {
+  date: string;
+  opening: number;
+  expectedIn: number;
+  expectedOut: number;
+  closing: number;
+};
 
 export type CashFlowBuild = {
   openingSet: boolean;
@@ -309,6 +330,28 @@ export function buildCashFlow(input: {
   }
 
   const lines: CashFlowLine[] = [];
+  for (const entry of activeEntries) {
+    if (entry.kind !== "check" || entry.amount == null || !entry.direction) continue;
+    if (entry.checkState === "bounced" || entry.checkState === "cancelled" || entry.status === "cancelled") continue;
+    const due = entry.date;
+    const cleared = entry.checkState === "cleared";
+    const movementDate = cleared ? entry.clearedDate || due : due;
+    if (!movementDate || movementDate < input.rangeStart || movementDate > input.rangeEnd) continue;
+    lines.push({
+      id: `check-${entry.id}`,
+      date: movementDate,
+      description: entry.checkNumber || entry.description || "",
+      counterparty: entry.counterparty || entry.bankName || "",
+      inflow: entry.direction === "in" ? entry.amount : 0,
+      outflow: entry.direction === "out" ? entry.amount : 0,
+      status: cleared ? "done" : movementDate < input.today ? "overdue" : "expected",
+      forecast: !cleared,
+      source: "check",
+      balance: null,
+      countsInBalance: cleared && counts(movementDate, input.opening),
+      entryId: entry.id,
+    });
+  }
   for (const obligation of obligations) {
     const applied = activeEntries.filter(
       (entry) => entry.kind === "settlement" && entry.appliesToKey === obligation.key && entry.amount != null && entry.date
@@ -415,9 +458,10 @@ export function buildCashFlow(input: {
       }
       continue;
     }
+    const expectedDate = zExpectedDate(payment);
     needsSettlement.push({
       id: `z-open-${payment.reportId}-${payment.method}`,
-      date: null,
+      date: expectedDate,
       description: payment.method,
       counterparty: payment.businessDate || "",
       inflow: payment.amount,
@@ -470,6 +514,59 @@ export function buildCashFlow(input: {
     needsSettlement,
     points,
   };
+}
+
+export function cashPosition(flow: CashFlowBuild): CashPosition {
+  const forecast = [...flow.lines, ...flow.needsSettlement].filter((line) => line.forecast && !line.internal);
+  const expectedIn = roundMoney(forecast.reduce((sum, line) => sum + line.inflow, 0));
+  const expectedOut = roundMoney(forecast.reduce((sum, line) => sum + line.outflow, 0));
+  if (!flow.openingSet || flow.opening == null) return { actual: null, expectedIn, expectedOut, projected: null };
+  const done = flow.lines.filter((line) => !line.forecast && line.countsInBalance && !line.internal);
+  const actual = roundMoney(
+    flow.opening + done.reduce((sum, line) => sum + line.inflow, 0) - done.reduce((sum, line) => sum + line.outflow, 0)
+  );
+  return { actual, expectedIn, expectedOut, projected: roundMoney(actual + expectedIn - expectedOut) };
+}
+
+export function dailyForecast(flow: CashFlowBuild, start: string, end: string): CashDay[] {
+  if (!flow.openingSet || flow.opening == null || !parseIso(start) || !parseIso(end) || start > end) return [];
+  const events = [...flow.lines, ...flow.needsSettlement].filter((line) => line.date && !line.internal);
+  let open = flow.opening;
+  for (const line of events) {
+    if (!line.date || line.date < flow.openingDate! || line.date >= start) continue;
+    if (!line.forecast && line.countsInBalance) open = roundMoney(open + line.inflow - line.outflow);
+  }
+  const rows: CashDay[] = [];
+  let cursor = start;
+  while (cursor <= end && rows.length < 120) {
+    const day = events.filter((line) => line.date === cursor);
+    const expectedIn = roundMoney(day.reduce((sum, line) => sum + line.inflow, 0));
+    const expectedOut = roundMoney(day.reduce((sum, line) => sum + line.outflow, 0));
+    const closing = roundMoney(open + expectedIn - expectedOut);
+    rows.push({ date: cursor, opening: open, expectedIn, expectedOut, closing });
+    open = closing;
+    cursor = addDays(cursor, 1);
+  }
+  return rows;
+}
+
+export function checksDueSoon(lines: CashFlowLine[], today: string, withinDays = 7): CashFlowLine[] {
+  const limit = addDays(today, withinDays);
+  return lines.filter((line) => line.source === "check" && line.forecast && line.date && line.date >= today && line.date <= limit);
+}
+
+function zExpectedDate(payment: CashZPayment): string | null {
+  const base = payment.businessDate?.slice(0, 10) || "";
+  if (!parseIso(base)) return null;
+  return /אשראי|credit|card|ויזה|מאסטר/i.test(payment.method) ? addDays(base, 2) : base;
+}
+
+function addDays(value: string, days: number): string {
+  const parsed = parseIso(value);
+  if (!parsed) return value;
+  const date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export function appendHistory(entry: CashFlowEntry, at: string, change: string): CashFlowEntry {
