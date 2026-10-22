@@ -2,7 +2,7 @@ import type { PurchaseUnit } from "@/lib/costing/types";
 
 export type VatType = "inclusive" | "exclusive" | "exempt" | "unknown";
 export type InvoiceTaxMode = "inclusive" | "exclusive" | "exempt" | "unknown";
-export type InvoiceLineType = "INVENTORY_ITEM" | "SERVICE" | "DISCOUNT" | "SHIPPING" | "GENERAL" | "UNKNOWN";
+export type InvoiceLineType = "INVENTORY_ITEM" | "SERVICE" | "DISCOUNT" | "SHIPPING" | "RETURN" | "DEPOSIT" | "SUMMARY" | "GENERAL" | "UNKNOWN";
 export type InvoiceScanStatus =
   | "uploaded"
   | "scanning"
@@ -50,6 +50,10 @@ export type InvoiceTotalsValidation = {
   vatDiff: number | null;
   grossDiff: number | null;
   hasMismatch: boolean;
+  invoiceTotalFromSource?: number | null;
+  calculatedLinesTotal?: number | null;
+  differenceAmount?: number | null;
+  validationStatus?: "pass" | "review" | "missing";
 };
 export type FoodCostVatMode = "before" | "including";
 export type CostBasis = "latest" | "weighted";
@@ -349,6 +353,11 @@ export type PurchaseInvoice = {
   sourceNet?: number | null;
   sourceVat?: number | null;
   sourceGross?: number | null;
+  /** Final amount printed on the source document. Never replaced by the line sum. */
+  invoiceTotalFromSource?: number | null;
+  calculatedLinesTotal?: number | null;
+  differenceAmount?: number | null;
+  validationStatus?: "pass" | "review" | "missing";
   computedNet?: number | null;
   computedVat?: number | null;
   computedGross?: number | null;

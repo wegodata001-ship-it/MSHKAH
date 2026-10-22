@@ -82,6 +82,31 @@ export function invoiceMismatch(invoice: PurchaseInvoice): InvoiceMismatch {
   };
 }
 
+export function compareInvoiceTotals(
+  invoice: Pick<PurchaseInvoice, "sourceNet" | "netAmount" | "subtotal" | "sourceVat" | "vatAmount" | "vatTotal" | "sourceGross" | "grossAmount" | "grandTotal" | "lines">
+) {
+  const sourceNet = invoice.sourceNet ?? invoice.netAmount ?? invoice.subtotal ?? null;
+  const sourceVat = invoice.sourceVat ?? invoice.vatAmount ?? invoice.vatTotal ?? null;
+  const sourceGross = invoice.sourceGross ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
+  const totals = invoiceFinanceTotals(invoice.lines);
+  const calculatedLinesTotal = totals.itemCount ? totals.gross : null;
+  const differenceAmount = sourceGross == null || calculatedLinesTotal == null ? null : roundMoney(calculatedLinesTotal - sourceGross);
+  const headerConsistent = sourceNet != null && sourceVat != null && sourceGross != null && Math.abs(roundMoney(sourceNet + sourceVat - sourceGross)) <= TOLERANCE;
+  const validationStatus = sourceGross == null ? "missing" : differenceAmount != null && Math.abs(differenceAmount) <= TOLERANCE ? "pass" : "review";
+  return {
+    sourceNet,
+    sourceVat,
+    sourceGross,
+    invoiceTotalFromSource: sourceGross,
+    calculatedNet: totals.net,
+    calculatedVat: totals.vat,
+    calculatedLinesTotal,
+    differenceAmount,
+    headerConsistent,
+    validationStatus,
+  } as const;
+}
+
 export function syncInvoiceTotals(invoice: PurchaseInvoice): PurchaseInvoice {
   return {
     ...invoice,

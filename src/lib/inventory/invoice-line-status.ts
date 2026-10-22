@@ -29,7 +29,7 @@ export type InvoiceLineReviewStatus = {
 };
 
 export function isAncillaryInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType">): boolean {
-  return line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT";
+  return line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT" || line.lineType === "RETURN" || line.lineType === "DEPOSIT" || line.lineType === "SUMMARY";
 }
 
 export function isPackagingInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription" | "productId">): boolean {

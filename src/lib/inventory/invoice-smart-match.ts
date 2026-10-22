@@ -1,3 +1,4 @@
+import { roundMoney } from "@/lib/costing/money";
 import { aliasOverlap } from "@/lib/costing/ingredient-aliases";
 import { normalizeIngredientName } from "@/lib/costing/names";
 import { MATCH_SUGGEST_MIN, rankProductMatches } from "@/lib/inventory/product-match";
@@ -5,7 +6,7 @@ import type { CostingIngredient } from "@/lib/costing/types";
 import { asVatType, guessUnit, needsReview, PRICE_ANOMALY_RATIO, type ExtractedInvoice } from "@/lib/inventory/invoice-extract";
 import { validateInvoiceTotals } from "@/lib/inventory/invoice-archive";
 import { cheapestOffer, offerNormalizedCost, unitCostFromPackage } from "@/lib/inventory/stock";
-import { detectedVatRate, splitVat } from "@/lib/inventory/vat";
+import { detectedVatRate } from "@/lib/inventory/vat";
 import { finalizeInvoiceLine, invoiceFinanceTotals, newInvoiceLineKey } from "@/lib/inventory/invoice-lines";
 import { toDateOnly } from "@/lib/dates/normalize";
 import type {
@@ -135,7 +136,6 @@ export function buildReviewedInvoice(input: {
     const unitPrice = line.unitPrice;
     const detectedVat = asVatType(line.vatType);
     const vatType = detectedVat ?? "unknown";
-    const amount = line.lineNet ?? line.lineGross ?? line.lineTotal ?? (qty && unitPrice != null ? qty * unitPrice - (line.discount || 0) : null);
     const detectedLineRate = detectedVatRate(line.vatRate);
     const storedVatRate = detectedLineRate ?? (vatType === "unknown" ? null : vatRate);
     const computeVatRate = detectedLineRate ?? vatRate;
@@ -143,18 +143,38 @@ export function buildReviewedInvoice(input: {
       match.kind === "mapped" || match.kind === "exact"
         ? 0.99
         : ranked[0]?.score ?? (match.kind === "suggest" && match.item ? aliasOverlap(line.name, match.item.name) : null);
-    const vat =
-      vatType === "unknown"
-        ? {
-            priceBeforeVat: line.lineNet ?? line.priceBeforeVat,
-            vatAmount: line.vatAmount,
-            priceIncludingVat: line.lineGross ?? line.priceIncludingVat,
-          }
-        : splitVat({ amount: amount || 0, vatType, vatRate: computeVatRate });
+    const priced = finalizeInvoiceLine(
+      {
+        key: newInvoiceLineKey(),
+        rawName: line.originalDescription || line.name,
+        originalDescription: line.originalDescription || line.name,
+        quantity: qty,
+        unit,
+        unitPrice: line.unitPriceNet ?? unitPrice,
+        discount: line.discountAmount ?? line.discount,
+        discountPercent: line.discountPercent,
+        discountAmount: line.discountAmount ?? line.discount,
+        lineTotal: line.lineTotal,
+        lineNet: line.lineNet,
+        lineGross: line.lineGross,
+        vatType,
+        taxMode: vatType,
+        vatRate: storedVatRate,
+        priceBeforeVat: line.priceBeforeVat,
+        vatAmount: line.vatAmount,
+        priceIncludingVat: line.priceIncludingVat,
+        unitPriceNet: line.unitPriceNet,
+        unitPriceGross: line.unitPriceGross,
+        lineType: line.lineType,
+        lineNumber: line.lineNumber,
+        rawText: line.rawText,
+      },
+      computeVatRate
+    );
     const normalized =
-      qty && unit && (vat.priceIncludingVat ?? vat.priceBeforeVat)
+      qty && unit && (priced.priceIncludingVat ?? priced.priceBeforeVat)
         ? unitCostFromPackage(
-            vat.priceIncludingVat ?? vat.priceBeforeVat ?? 0,
+            priced.priceIncludingVat ?? priced.priceBeforeVat ?? 0,
             line.conversionFactor && line.conversionFactor > 0 ? qty * line.conversionFactor : qty,
             unit
           )
@@ -183,54 +203,30 @@ export function buildReviewedInvoice(input: {
     else if (confirmed && match.packConflict) rowStatus = "review";
     else if (confirmed && change != null && Math.abs(change) >= PRICE_ANOMALY_RATIO) rowStatus = "price-anomaly";
     else if (confirmed && (needsReview(confidence) || needsReview(matchConfidence))) rowStatus = "review";
-    return finalizeInvoiceLine(
-      {
-        key: newInvoiceLineKey(),
-        rawName: line.originalDescription || line.name,
-        originalDescription: line.originalDescription || line.name,
-        productId: confirmed ? match.item?.id : undefined,
-        plannedProductName: confirmed ? undefined : line.originalDescription || line.name,
-        quantity: qty,
-        unit,
-        unitPrice: line.unitPriceNet ?? unitPrice,
-        discount: line.discountAmount ?? line.discount,
-        discountPercent: line.discountPercent,
-        discountAmount: line.discountAmount ?? line.discount,
-        lineTotal: amount,
-        lineNet: line.lineNet ?? vat.priceBeforeVat,
-        lineGross: line.lineGross ?? vat.priceIncludingVat,
-        vatType,
-        taxMode: vatType,
-        vatRate: storedVatRate,
-        priceBeforeVat: line.priceBeforeVat ?? vat.priceBeforeVat ?? null,
-        vatAmount: line.vatAmount ?? vat.vatAmount ?? null,
-        priceIncludingVat: line.priceIncludingVat ?? vat.priceIncludingVat ?? null,
-        unitPriceNet: line.unitPriceNet,
-        unitPriceGross: line.unitPriceGross,
-        confidence,
-        matchConfidence,
-        matchKind: match.kind,
-        sku: line.sku ?? undefined,
-        barcode: line.barcode ?? undefined,
-        conversionNote: match.packConflict ? "pack-conflict" : line.conversionNote ?? undefined,
-        conversionFactor: line.conversionFactor,
-        needsReview: Boolean(match.packConflict) || vatType === "unknown" || rowStatus === "review" || rowStatus === "price-anomaly",
-        rowStatus: vatType === "unknown" && rowStatus === "matched" ? "review" : rowStatus,
-        previousNormalized,
-        newNormalized: normalized,
-        priceChangePercent: change != null ? change * 100 : null,
-        cheaperSupplierName: cheaper ? input.suppliers.find((item) => item.id === cheaper.supplierId)?.name : undefined,
-        cheaperSupplierPrice: cheaper ? cheapCost : null,
-        category: match.item?.category,
-        matchConfirmed: confirmed,
-        candidates: ranked,
-        lineType: line.lineType,
-        lineNumber: line.lineNumber,
-        rawText: line.rawText,
-        skipInventory: line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT",
-      },
-      computeVatRate
-    );
+    const ancillary = priced.lineType === "SHIPPING" || priced.lineType === "SERVICE" || priced.lineType === "DISCOUNT" || priced.lineType === "RETURN" || priced.lineType === "DEPOSIT" || priced.lineType === "SUMMARY";
+    return {
+      ...priced,
+      productId: confirmed ? match.item?.id : undefined,
+      plannedProductName: confirmed ? undefined : line.originalDescription || line.name,
+      confidence,
+      matchConfidence,
+      matchKind: match.kind,
+      sku: line.sku ?? undefined,
+      barcode: line.barcode ?? undefined,
+      conversionNote: match.packConflict ? "pack-conflict" : line.conversionNote ?? priced.conversionNote,
+      conversionFactor: line.conversionFactor,
+      needsReview: Boolean(priced.needsReview) || Boolean(match.packConflict) || vatType === "unknown" || rowStatus === "review" || rowStatus === "price-anomaly",
+      rowStatus: priced.needsReview ? "review" : vatType === "unknown" && rowStatus === "matched" ? "review" : rowStatus,
+      previousNormalized,
+      newNormalized: normalized,
+      priceChangePercent: change != null ? change * 100 : null,
+      cheaperSupplierName: cheaper ? input.suppliers.find((item) => item.id === cheaper.supplierId)?.name : undefined,
+      cheaperSupplierPrice: cheaper ? cheapCost : null,
+      category: match.item?.category,
+      matchConfirmed: confirmed,
+      candidates: ranked,
+      skipInventory: ancillary || priced.skipInventory,
+    };
   });
 
   const headerNeedsReview =
@@ -276,6 +272,10 @@ export function buildReviewedInvoice(input: {
     sourceNet: input.extraction.subtotal.value,
     sourceVat: input.extraction.vatTotal.value,
     sourceGross: input.extraction.grandTotal.value,
+    invoiceTotalFromSource: input.extraction.grandTotal.value,
+    calculatedLinesTotal: computed.itemCount ? computed.gross : null,
+    differenceAmount: input.extraction.grandTotal.value == null || !computed.itemCount ? null : roundMoney(computed.gross - input.extraction.grandTotal.value),
+    validationStatus: validation.validationStatus,
     computedNet: computed.net,
     computedVat: computed.vat,
     computedGross: computed.gross,

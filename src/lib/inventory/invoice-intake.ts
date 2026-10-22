@@ -1,3 +1,4 @@
+import { roundMoney } from "@/lib/costing/money";
 import { toDateOnly } from "@/lib/dates/normalize";
 import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
 import {
@@ -100,11 +101,19 @@ export function canApproveInvoice(invoice: PurchaseInvoice): boolean {
 
 export function applyComputedTotals(invoice: PurchaseInvoice): PurchaseInvoice {
   const totals = invoiceFinanceTotals(invoice.lines);
+  const sourceGross = invoice.invoiceTotalFromSource ?? invoice.sourceGross ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
+  const difference = sourceGross == null || !totals.itemCount ? null : roundMoney(totals.gross - sourceGross);
   return {
     ...invoice,
+    invoiceTotalFromSource: sourceGross,
+    calculatedLinesTotal: totals.itemCount ? totals.gross : null,
+    differenceAmount: difference,
+    validationStatus: sourceGross == null ? "missing" : difference != null && Math.abs(difference) <= 0.05 ? "pass" : "review",
     computedNet: totals.net,
     computedVat: totals.vat,
     computedGross: totals.gross,
+    grossAmount: invoice.grossAmount ?? invoice.grandTotal ?? sourceGross,
+    sourceGross: invoice.sourceGross ?? sourceGross,
     validation: invoice.validation,
   };
 }

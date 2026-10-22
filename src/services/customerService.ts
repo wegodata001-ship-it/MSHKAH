@@ -16,6 +16,7 @@ import {
 import { getDb } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firebase/collections";
 import { ServiceError, type ServiceResult, success, failure } from "@/lib/errors";
+import { isPlaceholderName } from "@/lib/customers/identity";
 import { mapCustomer } from "@/lib/mappers";
 import { customerSchema, type CustomerInput } from "@/lib/validation/schemas";
 import { nowTimestamp } from "@/types/firestore";
@@ -39,7 +40,7 @@ const GUEST_CUSTOMER_INPUT: CustomerInput = {
 };
 
 function filterCustomers(customers: Customer[], search?: string): Customer[] {
-  let result = [...customers];
+  let result = customers.filter((customer) => !isPlaceholderName(customer.name));
   if (search) {
     const q = search.toLowerCase();
     result = result.filter(

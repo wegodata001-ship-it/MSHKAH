@@ -135,6 +135,15 @@ export default function CheckoutPage() {
     setError(null);
     try {
       void getOrCreateGuestCustomer();
+      const customerResponse = await fetch("/api/checkout/customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), phone: phone.trim(), email: normalizedEmail || undefined }),
+      }).catch(() => null);
+      const customerData = customerResponse?.ok
+        ? ((await customerResponse.json()) as { customerId?: string })
+        : null;
+      const customerId = customerData?.customerId || GUEST_CUSTOMER_ID;
 
       const orderNotes = [
         notes.trim(),
@@ -146,7 +155,7 @@ export default function CheckoutPage() {
 
       let orderId = pendingOrderId;
       if (!orderId) {
-        const result = await createOrderFromCart(items, GUEST_CUSTOMER_ID, name, {
+        const result = await createOrderFromCart(items, customerId, name, {
           subtotal,
           discount,
           total,
@@ -168,6 +177,13 @@ export default function CheckoutPage() {
           return;
         }
         orderId = result.data.id;
+        if (customerId !== GUEST_CUSTOMER_ID) {
+          await fetch("/api/checkout/customer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ customerId, orderId }),
+          }).catch(() => null);
+        }
       }
 
       if (payment === "card") {

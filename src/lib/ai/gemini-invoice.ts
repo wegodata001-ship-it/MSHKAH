@@ -15,15 +15,26 @@ Read labels such as: מספר חשבונית, חשבונית מס, קבלה, ס�
 Read only what is visible. Never invent missing VAT, prices, quantities, currency, dates, suppliers, SKUs, or conversions.
 If a field is not visible, use null. Do not use 0, "", or 18% as a guess.
 0 is allowed only when the document actually prints 0.
+Never choose the largest number on the page as the invoice total.
 
 invoiceNumber / documentNumber must be the printed document number (example: 01/002182).
 invoiceDate is תאריך חשבונית / תאריך. dueDate is מועד תשלום / לתשלום עד / תאריך פירעון.
-subtotal is סה"כ לפני מע"מ. vatTotal is מע"מ ₪. grandTotal is סה"כ לתשלום / כולל מע"מ.
+subtotalBeforeDiscount is סה"כ לפני הנחה.
+subtotalBeforeVat / subtotal is סה"כ לפני מע"מ, after discounts.
+discountTotal is the printed הנחה.
+vatTotal is the printed מע"מ amount, not a recalculation.
+totalToPay is סה"כ לתשלום. totalIncludingVat is סה"כ כולל מע"מ.
+grandTotal must be that same payable total, not a previous balance and not יתרה לתשלום.
+If יתרה לתשלום is a different number, leave it out of grandTotal.
 vatRate is the printed rate (18 or 0.18). Keep thousand separators out of JSON numbers.
 
-Extract EVERY table row. lines cannot be [] if a product table is visible.
+Extract EVERY product table row. lines cannot be [] if a product table is visible.
+Do not add the summary block (סה"כ, מע"מ, סה"כ לתשלום) as a product line.
 For each line set lineType:
-INVENTORY_ITEM | SERVICE | DISCOUNT | SHIPPING | GENERAL | UNKNOWN.
+INVENTORY_ITEM | SERVICE | DISCOUNT | RETURN | DEPOSIT | SHIPPING | SUMMARY | GENERAL | UNKNOWN.
+A printed line total is the source amount. Put the before-VAT line total in lineNet and the including-VAT line total in lineGross.
+Do not replace a printed line total with quantity times unit price.
+If those two disagree, still return both and set confidence below 0.8.
 
 If the document says VAT included / כולל מע"מ / شامل الضريبة, taxMode=inclusive.
 If it says VAT excluded / לא כולל מע"מ / قبل الضريبة, taxMode=exclusive.
@@ -207,6 +218,9 @@ function asLineType(value: string | null): InvoiceLineType | null {
   if (raw === "INVENTORY_ITEM" || raw === "PRODUCT" || raw === "ITEM") return "INVENTORY_ITEM";
   if (raw === "SERVICE") return "SERVICE";
   if (raw === "DISCOUNT") return "DISCOUNT";
+  if (raw === "RETURN" || raw === "CREDIT") return "RETURN";
+  if (raw === "DEPOSIT") return "DEPOSIT";
+  if (raw === "SUMMARY" || raw === "TOTAL") return "SUMMARY";
   if (raw === "SHIPPING" || raw === "DELIVERY") return "SHIPPING";
   if (raw === "GENERAL") return "GENERAL";
   if (raw === "UNKNOWN") return "UNKNOWN";
@@ -287,6 +301,13 @@ export function isEmptyInvoiceExtraction(extraction: ExtractedInvoice): boolean 
   );
 }
 
+function choosePayableTotal(json: Record<string, unknown>): unknown {
+  if (parseVisibleNumber(json.totalToPay) != null) return json.totalToPay;
+  if (parseVisibleNumber(json.totalIncludingVat) != null) return json.totalIncludingVat;
+  if (parseVisibleNumber(json.grandTotal) != null) return json.grandTotal;
+  return null;
+}
+
 function rootObject(json: Record<string, unknown>): Record<string, unknown> {
   const nested = json.invoice ?? json.data ?? json.extraction ?? json.result;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
@@ -336,9 +357,9 @@ export function parseInvoiceExtractionResult(text: string): {
       paymentTerms: field(json.paymentTerms, str),
       headerDiscount: field(json.headerDiscount ?? json.discountAmount ?? json.discountTotal, parseVisibleNumber),
       vatRate: field(json.vatRate, parseVisibleNumber),
-      subtotal: field(json.subtotal ?? json.subtotalBeforeVat, parseVisibleNumber),
+      subtotal: field(json.subtotalBeforeVat ?? json.subtotal, parseVisibleNumber),
       vatTotal: field(json.vatTotal ?? json.vatAmount, parseVisibleNumber),
-      grandTotal: field(json.grandTotal ?? json.totalIncludingVat ?? json.totalToPay, parseVisibleNumber),
+      grandTotal: field(choosePayableTotal(json), parseVisibleNumber),
       subtotalBeforeDiscount: field(json.subtotalBeforeDiscount, parseVisibleNumber),
       discountTotal: field(json.discountTotal ?? json.discountAmount ?? json.headerDiscount, parseVisibleNumber),
       shipping: field(json.shipping, parseVisibleNumber),

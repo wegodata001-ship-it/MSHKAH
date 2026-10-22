@@ -21,7 +21,7 @@ import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap, transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
-import { invoiceMismatch, headerGross } from "@/lib/inventory/invoice-finance";
+import { compareInvoiceTotals, headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
 import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
 import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
@@ -286,7 +286,6 @@ export function SmartInvoiceFlow({
   const stockPosted = invoice.stockStatus === "posted" || Boolean(invoice.inventoryPostedAt);
   const locked = stockPosted;
   const postedDuplicate = Boolean(invoice.duplicateSnapshot?.posted || (invoice.duplicateOf && invoices.find((item) => item.id === invoice.duplicateOf && isPostedInvoice(item))));
-  const mismatch = invoiceMismatch(applyComputedTotals(invoice));
   const invoiceDate = toDateOnly(invoice.invoiceDate) || "";
   const receivedAt = toDateOnly(invoice.receivedAt) || "";
   const dueDate = toDateOnly(invoice.dueDate) || "";
@@ -740,34 +739,7 @@ export function SmartInvoiceFlow({
             onUpdateLine={saveWorkingLine}
           />
           {summary && (
-            <div className="mt-3 grid gap-1 rounded-xl bg-beige/40 p-2.5 text-sm sm:grid-cols-2">
-              {/* Only display the source totals when the scan actually read them. Showing
-                 ₪0.00 would misrepresent an empty/failed extraction as a zero-value invoice. */}
-              <p>
-                {t("admin.inventory.smart.sourceAmounts")}:{" "}
-                {formatMoneyOrDash(invoice.sourceNet ?? invoice.netAmount, t)}
-                {" / "}
-                {formatMoneyOrDash(invoice.sourceVat ?? invoice.vatAmount, t)}
-                {" / "}
-                {formatMoneyOrDash(invoice.sourceGross ?? invoice.grossAmount, t)}
-              </p>
-              <p>
-                {t("admin.inventory.smart.computedAmounts")}:{" "}
-                {summary.itemCount
-                  ? `${formatIls(summary.beforeVat)} / ${formatIls(summary.vat)} / ${formatIls(summary.includingVat)}`
-                  : t("admin.inventory.smart.notDetected")}
-              </p>
-              <p className="font-semibold">
-                {t("admin.finance.linesGross")}:{" "}
-                {summary.itemCount ? formatIls(summary.includingVat) : t("admin.inventory.smart.notDetected")}
-              </p>
-              <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
-              {summary.itemCount > 0 && (invoice.validation ?? mismatch).hasMismatch && (
-                <p className="sm:col-span-2 text-amber-800">
-                  {t("admin.inventory.smart.diff")}: {formatIls((invoice.validation?.grossDiff ?? mismatch.grossDiff) ?? (summary.includingVat - (invoice.sourceGross ?? invoice.grossAmount ?? 0)))}
-                </p>
-              )}
-            </div>
+            <InvoiceTotalSummary invoice={{ ...invoice, lines: invoice.lines }} t={t} />
           )}
         </div>
       </AdminCard>
@@ -1082,7 +1054,7 @@ export function SmartInvoiceFlow({
       {askStock && invoice && (
         <AdminCard title={t("admin.finance.savedTitle")}>
           <p className="text-sm">
-            {t("admin.finance.grossTotal")}: {formatIls(headerGross(invoice) ?? summary?.includingVat ?? 0)}
+            {t("admin.finance.grossTotal")}: {formatMoneyOrDash(headerGross(invoice), t)}
             {" · "}
             {t("admin.costing.supplier")}: {invoice.supplierName || "—"}
             {" · "}
@@ -1157,6 +1129,24 @@ export function SmartInvoiceFlow({
  * to show "₪0.00" when the scanner returned no data for a field, because
  * that reads as "the invoice is for zero" rather than "we didn't read it".
  */
+function InvoiceTotalSummary({ invoice, t }: { invoice: PurchaseInvoice; t: (key: string) => string }) {
+  const check = compareInvoiceTotals(invoice);
+  const matched = check.validationStatus === "pass";
+  return (
+    <div className={cn("mt-3 grid gap-1 rounded-xl p-2.5 text-sm sm:grid-cols-2", matched ? "bg-beige/40" : "bg-amber-50")}>
+      <p>{t("admin.inventory.smart.totalBeforeVat")}: {formatMoneyOrDash(check.sourceNet, t)}</p>
+      <p>{t("admin.inventory.smart.totalVat")}: {formatMoneyOrDash(check.sourceVat, t)}</p>
+      <p className="font-semibold">{t("admin.inventory.smart.sourceInvoiceTotal")}: {formatMoneyOrDash(check.invoiceTotalFromSource, t)}</p>
+      <p>{t("admin.inventory.smart.calculatedLinesTotal")}: {formatMoneyOrDash(check.calculatedLinesTotal, t)}</p>
+      <p>{t("admin.inventory.smart.difference")}: {formatMoneyOrDash(check.differenceAmount, t)}</p>
+      <p>{t("admin.inventory.smart.validationStatus")}: {matched ? t("admin.inventory.smart.statusMatch") : check.validationStatus === "missing" ? t("admin.inventory.smart.notDetected") : t("admin.inventory.smart.statusReview")}</p>
+      <p className="sm:col-span-2 font-medium">
+        {matched ? t("admin.inventory.smart.matchMessage") : check.validationStatus === "review" ? t("admin.inventory.smart.mismatchMessage") : t("admin.inventory.smart.notDetected")}
+      </p>
+    </div>
+  );
+}
+
 function formatMoneyOrDash(value: number | null | undefined, t: (key: string) => string): string {
   if (value == null || !Number.isFinite(value)) return t("admin.inventory.smart.notDetected");
   return formatIls(value);
