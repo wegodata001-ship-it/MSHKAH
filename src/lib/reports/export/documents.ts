@@ -9,7 +9,7 @@ import type { BreakEvenFixedCost, BreakEvenSettings, BreakEvenVariableCost } fro
 import { buildCashFlow, cashPosition, type CashFlowEntry } from "@/lib/cashflow/engine";
 import { archiveStatus } from "@/lib/inventory/invoice-archive";
 import { buildInvoiceDocument, unitDocumentLabel } from "@/lib/inventory/invoice-document";
-import { headerGross, headerNet, headerVat } from "@/lib/inventory/invoice-finance";
+import { headerGross, headerNet, headerVat, originalInvoiceGross } from "@/lib/inventory/invoice-finance";
 import { purchaseInvoicesForCashFlow } from "@/lib/inventory/supplier-ledger";
 import { currentStockBase } from "@/lib/inventory/stock";
 import type { InventoryMovement, PosZReport, PurchaseInvoice, PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
@@ -180,6 +180,8 @@ function invoiceListSheet(invoices: PurchaseInvoice[], payments: ReportSource["p
       { header: "לפני מע״מ", kind: "money", width: 1.2 },
       { header: "מע״מ", kind: "money", width: 1 },
       { header: "לתשלום", kind: "money", width: 1.2 },
+      { header: "סכום מקור", kind: "money", width: 1.2 },
+      { header: "סכום מתוקן", kind: "money", width: 1.2 },
       { header: "שולם", kind: "money", width: 1 },
       { header: "מזהה מקור", width: 2 },
     ],
@@ -194,6 +196,8 @@ function invoiceListSheet(invoices: PurchaseInvoice[], payments: ReportSource["p
       headerNet(invoice),
       headerVat(invoice),
       headerGross(invoice),
+      originalInvoiceGross(invoice),
+      invoice.manuallyEdited ? invoice.editedInvoiceTotal ?? null : null,
       paidFor(invoice.id, payments),
       invoice.sourceFile?.storagePath || null,
     ]),

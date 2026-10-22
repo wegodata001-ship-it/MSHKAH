@@ -341,6 +341,8 @@ export function buildInvoiceDocument(input: InvoiceDocumentContext): InvoiceDocu
       { label: "שיעור מע״מ במסמך", value: formatVatRate(invoice.vatRate) },
       { label: "סוג מע״מ במסמך", value: invoice.vatMode ? VAT_MODE_LABELS[invoice.vatMode] ?? invoice.vatMode : "לא נשמר" },
       { label: "סכום כולל מע״מ", value: moneyOrMissing(gross) },
+      { label: "סכום מסמך המקור", value: moneyOrMissing(invoice.originalInvoiceTotal ?? invoice.invoiceTotalFromSource ?? invoice.sourceGross ?? gross) },
+      { label: "סכום שתוקן ידנית", value: invoice.manuallyEdited ? moneyOrMissing(invoice.editedInvoiceTotal) : "לא תוקן" },
       { label: "סכום ששולם", value: paid == null ? "לא נשמר" : formatIls(paid) },
       { label: "יתרה לתשלום", value: balance == null ? "לא נשמר" : formatIls(balance) },
     ],

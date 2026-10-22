@@ -2,7 +2,7 @@ import type { PurchaseUnit } from "@/lib/costing/types";
 
 export type VatType = "inclusive" | "exclusive" | "exempt" | "unknown";
 export type InvoiceTaxMode = "inclusive" | "exclusive" | "exempt" | "unknown";
-export type InvoiceLineType = "INVENTORY_ITEM" | "SERVICE" | "DISCOUNT" | "SHIPPING" | "RETURN" | "DEPOSIT" | "SUMMARY" | "GENERAL" | "UNKNOWN";
+export type InvoiceLineType = "INVENTORY_ITEM" | "SERVICE" | "DISCOUNT" | "SHIPPING" | "RETURN" | "DEPOSIT" | "SUMMARY" | "ADJUSTMENT" | "GENERAL" | "UNKNOWN";
 export type InvoiceScanStatus =
   | "uploaded"
   | "scanning"
@@ -210,6 +210,15 @@ export type InvoiceLineMatchKind = "exact" | "suggest" | "mapped" | "new" | "non
 export type InvoiceRowStatus = "matched" | "review" | "new" | "unknown-unit" | "price-anomaly" | "unmapped";
 export type InvoiceVatStatus = "detected" | "needs_review";
 
+export type InvoiceTotalRevision = {
+  at: string;
+  actor?: string;
+  reason: string;
+  field: string;
+  before: string;
+  after: string;
+};
+
 export type InvoiceAuditEvent = {
   at: string;
   actor?: string;
@@ -355,9 +364,18 @@ export type PurchaseInvoice = {
   sourceGross?: number | null;
   /** Final amount printed on the source document. Never replaced by the line sum. */
   invoiceTotalFromSource?: number | null;
+  /** Same as invoiceTotalFromSource. Kept after a manual edit. */
+  originalInvoiceTotal?: number | null;
+  /** Payable total typed by an admin. Null until someone edits the totals. */
+  editedInvoiceTotal?: number | null;
+  adjustmentAmount?: number | null;
   calculatedLinesTotal?: number | null;
   differenceAmount?: number | null;
   validationStatus?: "pass" | "review" | "missing";
+  manuallyEdited?: boolean;
+  editedAt?: string;
+  editedBy?: string;
+  totalHistory?: InvoiceTotalRevision[];
   computedNet?: number | null;
   computedVat?: number | null;
   computedGross?: number | null;

@@ -21,7 +21,8 @@ import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap, transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
-import { compareInvoiceTotals, headerGross } from "@/lib/inventory/invoice-finance";
+import { headerGross } from "@/lib/inventory/invoice-finance";
+import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
 import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
 import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
@@ -689,16 +690,16 @@ export function SmartInvoiceFlow({
               <Input className="min-w-0" value={invoice.paymentMethod ?? ""} disabled={locked} onChange={(e) => update({ paymentMethod: e.target.value || null })} />
             </Field>
             <Field label={t("admin.finance.netTotal")}>
-              <Input className="min-w-0" type="number" value={invoice.netAmount ?? invoice.subtotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ netAmount: e.target.value === "" ? null : Number(e.target.value), subtotal: e.target.value === "" ? null : Number(e.target.value), sourceNet: e.target.value === "" ? null : Number(e.target.value) })} />
+              <Input className="min-w-0" type="number" value={invoice.netAmount ?? invoice.subtotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ netAmount: e.target.value === "" ? null : Number(e.target.value), subtotal: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Field label={t("admin.inventory.vatRate")}>
               <Input className="min-w-0" type="number" value={vatRateValue} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ vatRate: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Field label={t("admin.finance.vatTotal")}>
-              <Input className="min-w-0" type="number" value={invoice.vatAmount ?? invoice.vatTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ vatAmount: e.target.value === "" ? null : Number(e.target.value), vatTotal: e.target.value === "" ? null : Number(e.target.value), sourceVat: e.target.value === "" ? null : Number(e.target.value) })} />
+              <Input className="min-w-0" type="number" value={invoice.vatAmount ?? invoice.vatTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ vatAmount: e.target.value === "" ? null : Number(e.target.value), vatTotal: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Field label={t("admin.finance.grossTotal")}>
-              <Input className="min-w-0" type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value === "" ? null : Number(e.target.value), grandTotal: e.target.value === "" ? null : Number(e.target.value), sourceGross: e.target.value === "" ? null : Number(e.target.value) })} />
+              <Input className="min-w-0" type="number" value={invoice.grossAmount ?? invoice.grandTotal ?? ""} placeholder={t("admin.inventory.smart.notDetected")} disabled={locked} onChange={(e) => update({ grossAmount: e.target.value === "" ? null : Number(e.target.value), grandTotal: e.target.value === "" ? null : Number(e.target.value) })} />
             </Field>
             <Button type="button" variant="outline" className="h-8 self-end text-xs" disabled={busy} onClick={() => void scan(invoice.sourceFile ? null : file, invoice.id)}>
               {busy ? (
@@ -739,7 +740,26 @@ export function SmartInvoiceFlow({
             onUpdateLine={saveWorkingLine}
           />
           {summary && (
-            <InvoiceTotalSummary invoice={{ ...invoice, lines: invoice.lines }} t={t} />
+            <InvoiceTotalCard
+              invoice={invoice}
+              locked={locked || postedDuplicate}
+              onToast={onToast}
+              onReplace={(next) => {
+                invoiceRef.current = next;
+                setInvoice(next);
+              }}
+              onPersist={async (current) => {
+                const result = await persistDraft(applyComputedTotals(current));
+                if (!result.success) {
+                  onToast(result.error === "PERMISSION_DENIED" ? t("admin.inventory.totals.adminOnly") : result.error || t("admin.costing.saveFailed"), "error");
+                  return;
+                }
+                const stored = { ...applyComputedTotals(current), id: result.data, status: current.status };
+                invoiceRef.current = stored;
+                setInvoice(stored);
+                onToast(t("admin.inventory.totals.saved"));
+              }}
+            />
           )}
         </div>
       </AdminCard>
@@ -1129,24 +1149,6 @@ export function SmartInvoiceFlow({
  * to show "₪0.00" when the scanner returned no data for a field, because
  * that reads as "the invoice is for zero" rather than "we didn't read it".
  */
-function InvoiceTotalSummary({ invoice, t }: { invoice: PurchaseInvoice; t: (key: string) => string }) {
-  const check = compareInvoiceTotals(invoice);
-  const matched = check.validationStatus === "pass";
-  return (
-    <div className={cn("mt-3 grid gap-1 rounded-xl p-2.5 text-sm sm:grid-cols-2", matched ? "bg-beige/40" : "bg-amber-50")}>
-      <p>{t("admin.inventory.smart.totalBeforeVat")}: {formatMoneyOrDash(check.sourceNet, t)}</p>
-      <p>{t("admin.inventory.smart.totalVat")}: {formatMoneyOrDash(check.sourceVat, t)}</p>
-      <p className="font-semibold">{t("admin.inventory.smart.sourceInvoiceTotal")}: {formatMoneyOrDash(check.invoiceTotalFromSource, t)}</p>
-      <p>{t("admin.inventory.smart.calculatedLinesTotal")}: {formatMoneyOrDash(check.calculatedLinesTotal, t)}</p>
-      <p>{t("admin.inventory.smart.difference")}: {formatMoneyOrDash(check.differenceAmount, t)}</p>
-      <p>{t("admin.inventory.smart.validationStatus")}: {matched ? t("admin.inventory.smart.statusMatch") : check.validationStatus === "missing" ? t("admin.inventory.smart.notDetected") : t("admin.inventory.smart.statusReview")}</p>
-      <p className="sm:col-span-2 font-medium">
-        {matched ? t("admin.inventory.smart.matchMessage") : check.validationStatus === "review" ? t("admin.inventory.smart.mismatchMessage") : t("admin.inventory.smart.notDetected")}
-      </p>
-    </div>
-  );
-}
-
 function formatMoneyOrDash(value: number | null | undefined, t: (key: string) => string): string {
   if (value == null || !Number.isFinite(value)) return t("admin.inventory.smart.notDetected");
   return formatIls(value);

@@ -166,7 +166,7 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
   if (printed) {
     const qty = Number(line.quantity);
     const hasQty = Number.isFinite(qty) && qty !== 0;
-    const nonProduct = role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || role === "SHIPPING" || role === "SERVICE";
+    const nonProduct = role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || role === "SHIPPING" || role === "SERVICE" || role === "ADJUSTMENT";
     return {
       ...line,
       lineType: role ?? line.lineType,
@@ -190,7 +190,7 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
       unitPriceGross: hasQty && printed.gross != null ? roundMoney(printed.gross / qty) : line.unitPriceGross ?? null,
     };
   }
-  const classified: PurchaseInvoiceLine = role && role !== line.lineType ? { ...line, lineType: role, skipInventory: role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || line.skipInventory } : line;
+  const classified: PurchaseInvoiceLine = role && role !== line.lineType ? { ...line, lineType: role, skipInventory: role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || role === "ADJUSTMENT" || line.skipInventory } : line;
   const qty = Number(line.quantity);
   const hasQty = Number.isFinite(qty) && qty > 0;
   const computedNet = lineNetAmount(line);

@@ -46,6 +46,16 @@ export function headerGross(invoice: Pick<PurchaseInvoice, "grossAmount" | "gran
   return invoice.grossAmount ?? invoice.grandTotal ?? null;
 }
 
+export function originalInvoiceGross(invoice: Pick<PurchaseInvoice, "originalInvoiceTotal" | "invoiceTotalFromSource" | "sourceGross">): number | null {
+  return invoice.originalInvoiceTotal ?? invoice.invoiceTotalFromSource ?? invoice.sourceGross ?? null;
+}
+
+/** The payable amount an admin is checking. A manual edit wins over the printed source total. */
+export function payableInvoiceGross(invoice: Pick<PurchaseInvoice, "manuallyEdited" | "editedInvoiceTotal" | "originalInvoiceTotal" | "invoiceTotalFromSource" | "sourceGross" | "grossAmount" | "grandTotal">): number | null {
+  if (invoice.manuallyEdited && invoice.editedInvoiceTotal != null) return invoice.editedInvoiceTotal;
+  return originalInvoiceGross(invoice) ?? headerGross(invoice);
+}
+
 export type InvoiceMismatch = {
   hasMismatch: boolean;
   lineNet: number;
@@ -83,21 +93,25 @@ export function invoiceMismatch(invoice: PurchaseInvoice): InvoiceMismatch {
 }
 
 export function compareInvoiceTotals(
-  invoice: Pick<PurchaseInvoice, "sourceNet" | "netAmount" | "subtotal" | "sourceVat" | "vatAmount" | "vatTotal" | "sourceGross" | "grossAmount" | "grandTotal" | "lines">
+  invoice: Pick<PurchaseInvoice, "sourceNet" | "netAmount" | "subtotal" | "sourceVat" | "vatAmount" | "vatTotal" | "sourceGross" | "grossAmount" | "grandTotal" | "lines" | "manuallyEdited" | "editedInvoiceTotal" | "originalInvoiceTotal" | "invoiceTotalFromSource" | "headerDiscount" | "discountTotal" | "adjustmentAmount" | "rounding" | "vatRate">
 ) {
   const sourceNet = invoice.sourceNet ?? invoice.netAmount ?? invoice.subtotal ?? null;
   const sourceVat = invoice.sourceVat ?? invoice.vatAmount ?? invoice.vatTotal ?? null;
-  const sourceGross = invoice.sourceGross ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
+  const sourceGross = originalInvoiceGross(invoice) ?? headerGross(invoice);
+  const payable = payableInvoiceGross(invoice);
   const totals = invoiceFinanceTotals(invoice.lines);
   const calculatedLinesTotal = totals.itemCount ? totals.gross : null;
-  const differenceAmount = sourceGross == null || calculatedLinesTotal == null ? null : roundMoney(calculatedLinesTotal - sourceGross);
+  const differenceAmount = payable == null || calculatedLinesTotal == null ? null : roundMoney(calculatedLinesTotal - payable);
   const headerConsistent = sourceNet != null && sourceVat != null && sourceGross != null && Math.abs(roundMoney(sourceNet + sourceVat - sourceGross)) <= TOLERANCE;
-  const validationStatus = sourceGross == null ? "missing" : differenceAmount != null && Math.abs(differenceAmount) <= TOLERANCE ? "pass" : "review";
+  const validationStatus = payable == null ? "missing" : differenceAmount != null && Math.abs(differenceAmount) <= TOLERANCE ? "pass" : "review";
   return {
     sourceNet,
     sourceVat,
     sourceGross,
     invoiceTotalFromSource: sourceGross,
+    payable,
+    workingNet: headerNet(invoice),
+    workingVat: headerVat(invoice),
     calculatedNet: totals.net,
     calculatedVat: totals.vat,
     calculatedLinesTotal,

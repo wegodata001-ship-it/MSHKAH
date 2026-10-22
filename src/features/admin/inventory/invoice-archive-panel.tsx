@@ -28,6 +28,7 @@ import { formatIls } from "@/lib/costing/money";
 import { archiveStatus, invoiceArchiveQuery } from "@/lib/inventory/invoice-archive";
 import { buildInvoiceDocument } from "@/lib/inventory/invoice-document";
 import { headerGross } from "@/lib/inventory/invoice-finance";
+import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import type { InvoiceScanStatus, PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 import { cn } from "@/lib/utils";
 import { InvoicePdfViewer } from "@/features/admin/inventory/invoice-pdf-viewer";
@@ -113,6 +114,8 @@ export function InvoiceArchivePanel({
     mode: "system" | "source";
   } | null>(null);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+  const [totalsInvoice, setTotalsInvoice] = useState<PurchaseInvoice | null>(null);
+  const [savedTotals, setSavedTotals] = useState<Record<string, PurchaseInvoice>>({});
   const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -403,6 +406,24 @@ export function InvoiceArchivePanel({
           <button type="button" className="text-xs text-coffee/70" onClick={() => setSelected([])}>{t("admin.inventory.hub.clearSelection")}</button>
         </div>
       ) : null}
+      {totalsInvoice ? (
+        <div className="rounded-2xl border border-beige-dark/15 bg-warm-white p-2">
+          <div className="flex justify-end">
+            <Button type="button" variant="ghost" className="h-8 text-xs" onClick={() => setTotalsInvoice(null)}>{t("common.cancel")}</Button>
+          </div>
+          <InvoiceTotalCard
+            invoice={totalsInvoice}
+            showLineActions={false}
+            onToast={onToast}
+            onReplace={(next) => {
+              setTotalsInvoice(next);
+              setSavedTotals((current) => ({ ...current, [next.id]: next }));
+              setArchived((rows) => rows.map((row) => (row.id === next.id ? next : row)));
+            }}
+            onPersist={async () => onToast?.(t("admin.inventory.totals.saved"))}
+          />
+        </div>
+      ) : null}
       <FilterRow
         filter={filter}
         onFilterChange={setFilter}
@@ -442,9 +463,10 @@ export function InvoiceArchivePanel({
               </thead>
               <tbody>
                 {rows.map((invoice) => {
-                  const status = archiveStatus(invoice);
-                  const stock = stockState(invoice);
-                  const gross = headerGross(invoice);
+                  const shown = savedTotals[invoice.id] ?? invoice;
+                  const status = archiveStatus(shown);
+                  const stock = stockState(shown);
+                  const gross = headerGross(shown);
                   return (
                     <tr key={invoice.id} className="border-t border-beige-dark/10 align-top hover:bg-beige/30">
                       <td className="px-3 py-3">
@@ -464,7 +486,7 @@ export function InvoiceArchivePanel({
                         <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
                       </td>
                       <td className="px-3 py-3 text-end">
-                        <RowActions invoice={invoice} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
+                        <RowActions invoice={shown} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} onEditTotals={setTotalsInvoice} t={t} />
                       </td>
                     </tr>
                   );
@@ -474,9 +496,10 @@ export function InvoiceArchivePanel({
           </div>
           <div className="grid gap-3 md:hidden">
             {rows.map((invoice) => {
-              const status = archiveStatus(invoice);
-              const stock = stockState(invoice);
-              const gross = headerGross(invoice);
+              const shown = savedTotals[invoice.id] ?? invoice;
+              const status = archiveStatus(shown);
+              const stock = stockState(shown);
+              const gross = headerGross(shown);
               return (
                 <div key={invoice.id} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-3 shadow-soft">
                   <div className="flex items-start gap-2">
@@ -500,7 +523,7 @@ export function InvoiceArchivePanel({
                     <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
                   </div>
                   <div className="mt-2 flex flex-wrap justify-end gap-1">
-                    <RowActions invoice={invoice} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} t={t} />
+                    <RowActions invoice={shown} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} onEditTotals={setTotalsInvoice} t={t} />
                   </div>
                 </div>
               );
@@ -830,6 +853,7 @@ function RowActions({
   onRescan,
   onTransfer,
   onDelete,
+  onEditTotals,
   t,
 }: {
   invoice: PurchaseInvoice;
@@ -840,6 +864,7 @@ function RowActions({
   onRescan: (invoice: PurchaseInvoice) => void;
   onTransfer: (invoice: PurchaseInvoice) => void;
   onDelete?: (invoice: PurchaseInvoice) => void;
+  onEditTotals: (invoice: PurchaseInvoice) => void;
   t: (key: string) => string;
 }) {
   const cancelled = status === "cancelled";
@@ -847,6 +872,9 @@ function RowActions({
     <div className="flex flex-wrap items-center justify-end gap-1">
       <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" disabled={archived} onClick={() => onOpen(invoice)}>
         {t("admin.inventory.hub.pdf.open")}
+      </Button>
+      <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" onClick={() => onEditTotals(invoice)}>
+        {t("admin.inventory.totals.editTotals")}
       </Button>
       {!cancelled && (invoice.sourceFile || invoice.fileUrl) ? (
         <Button

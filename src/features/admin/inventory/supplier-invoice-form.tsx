@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminCard } from "@/features/admin/components/admin-card";
 import { InvoiceManualLines } from "@/features/admin/inventory/invoice-manual-lines";
+import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import { useT } from "@/components/providers/locale-provider";
-import { formatIls } from "@/lib/costing/money";
 import type { CostingIngredient } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE } from "@/lib/inventory/vat";
 import { emptyInvoiceLine, finalizeInvoiceLine, invoiceSummary } from "@/lib/inventory/invoice-lines";
@@ -210,6 +210,7 @@ export function SupplierInvoiceForm({
         </div>
       </div>
 
+      <div id="invoice-lines">
       <InvoiceManualLines
         lines={form.lines}
         ingredients={ingredients}
@@ -222,14 +223,28 @@ export function SupplierInvoiceForm({
         onAdd={() => setForm({ ...form, lines: [...form.lines, emptyInvoiceLine(vatRate)] })}
         onRemove={(key) => setForm({ ...form, lines: form.lines.filter((item) => item.key !== key) })}
       />
-
-      <div className="mt-5 grid gap-2 rounded-2xl bg-beige/40 p-4 text-sm sm:grid-cols-2">
-        <p>{t("admin.costing.supplier")}: {supplierName || "—"}</p>
-        <p>{t("admin.inventory.summaryItems")}: {summary.itemCount}</p>
-        <p>{t("admin.inventory.costBeforeVat")}: {formatIls(summary.beforeVat)}</p>
-        <p>{t("admin.inventory.vat")}: {formatIls(summary.vat)}</p>
-        <p className="font-semibold sm:col-span-2">{t("admin.inventory.invoiceTotal")}: {formatIls(summary.includingVat)}</p>
       </div>
+
+      <InvoiceTotalCard
+        invoice={{ ...form, supplierName, lines: summary.lines }}
+        locked={form.status === "cancelled" || form.stockStatus === "posted"}
+        onToast={onToast}
+        onReplace={(next) => setForm(next)}
+        onPersist={async (current) => {
+          const result = await savePurchaseInvoiceDraft({
+            ...current,
+            supplierName,
+            status: current.status === "saved" || current.status === "approved" ? current.status : "draft",
+            stockStatus: current.stockStatus || "none",
+          });
+          if (!result.success) {
+            onToast(result.error || t("admin.costing.saveFailed"), "error");
+            return;
+          }
+          setForm((prev) => ({ ...prev, ...current, id: result.data }));
+          onToast(t("admin.inventory.totals.saved"));
+        }}
+      />
       {mismatch.hasMismatch && (
         <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{t("admin.finance.mismatch")}</p>
       )}

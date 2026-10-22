@@ -101,19 +101,23 @@ export function canApproveInvoice(invoice: PurchaseInvoice): boolean {
 
 export function applyComputedTotals(invoice: PurchaseInvoice): PurchaseInvoice {
   const totals = invoiceFinanceTotals(invoice.lines);
-  const sourceGross = invoice.invoiceTotalFromSource ?? invoice.sourceGross ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
-  const difference = sourceGross == null || !totals.itemCount ? null : roundMoney(totals.gross - sourceGross);
+  const original = invoice.originalInvoiceTotal ?? invoice.invoiceTotalFromSource ?? invoice.sourceGross ?? null;
+  const payable = invoice.manuallyEdited && invoice.editedInvoiceTotal != null
+    ? invoice.editedInvoiceTotal
+    : original ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
+  const difference = payable == null || !totals.itemCount ? null : roundMoney(totals.gross - payable);
   return {
     ...invoice,
-    invoiceTotalFromSource: sourceGross,
+    originalInvoiceTotal: invoice.originalInvoiceTotal ?? original,
+    invoiceTotalFromSource: invoice.invoiceTotalFromSource ?? original,
     calculatedLinesTotal: totals.itemCount ? totals.gross : null,
     differenceAmount: difference,
-    validationStatus: sourceGross == null ? "missing" : difference != null && Math.abs(difference) <= 0.05 ? "pass" : "review",
+    validationStatus: payable == null ? "missing" : difference != null && Math.abs(difference) <= 0.05 ? "pass" : "review",
     computedNet: totals.net,
     computedVat: totals.vat,
     computedGross: totals.gross,
-    grossAmount: invoice.grossAmount ?? invoice.grandTotal ?? sourceGross,
-    sourceGross: invoice.sourceGross ?? sourceGross,
+    grossAmount: invoice.grossAmount ?? invoice.grandTotal ?? payable,
+    sourceGross: invoice.sourceGross ?? original,
     validation: invoice.validation,
   };
 }
