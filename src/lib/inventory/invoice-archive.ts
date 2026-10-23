@@ -1,6 +1,7 @@
 import { roundMoney } from "@/lib/costing/money";
 import { toDateOnly } from "@/lib/dates/normalize";
-import { invoiceFinanceTotals, lineHasAmount } from "@/lib/inventory/invoice-lines";
+import { invoiceFinanceTotals, isNonStockInvoiceLine } from "@/lib/inventory/invoice-lines";
+import { invoiceLineReviewStatus } from "@/lib/inventory/invoice-line-status";
 import type {
   InvoiceScanStatus,
   InvoiceSourceKind,
@@ -205,11 +206,7 @@ export function missingInvoiceFields(invoice: PurchaseInvoice): InvoiceMissingFi
 }
 
 export function incompleteInvoiceLineCount(lines: PurchaseInvoiceLine[]): number {
-  return lines.filter((line) => {
-    const named = Boolean(line.rawName?.trim());
-    const hasQtyPrice = line.quantity != null && line.unitPrice != null;
-    return !named || (!hasQtyPrice && !lineHasAmount(line));
-  }).length;
+  return lines.filter((line) => !isNonStockInvoiceLine(line) && !invoiceLineReviewStatus(line).ready).length;
 }
 
 export function mergeScannedInvoice(

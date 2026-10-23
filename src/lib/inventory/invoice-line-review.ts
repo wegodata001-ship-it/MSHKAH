@@ -1,9 +1,9 @@
 import { findDuplicateIngredient, normalizeIngredientName } from "@/lib/costing/names";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { packNeedsCompletion } from "@/lib/inventory/ingredient-core";
-import { lineHasAmount } from "@/lib/inventory/invoice-lines";
-import { isSafeInvoiceMatch } from "@/lib/inventory/product-match";
-import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
+import { isNonStockInvoiceLine, lineHasAmount } from "@/lib/inventory/invoice-lines";
+import { isSafeInvoiceMatch, qualifiersConflict } from "@/lib/inventory/product-match";
+import type { PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 
 export type InvoiceReviewFilter = "all" | "needs" | "review" | "unmapped" | "new" | "confirmed";
 export type InvoiceMatchStatus = "confirmed" | "possible" | "none" | "new";
@@ -17,8 +17,7 @@ export function isConfirmedInvoiceMatch(line: PurchaseInvoiceLine): boolean {
 }
 
 function lineSkipsStock(line: PurchaseInvoiceLine): boolean {
-  if (line.postedToStock || line.skipInventory) return true;
-  if (line.lineType === "SHIPPING" || line.lineType === "SERVICE" || line.lineType === "DISCOUNT") return true;
+  if (line.postedToStock || isNonStockInvoiceLine(line)) return true;
   if (line.productId) return false;
   if (line.lineType === "GENERAL") return true;
   return /פלסטיק|אריז|קרטון|שקית|ניילון/.test(`${line.rawName || ""} ${line.originalDescription || ""}`);
@@ -69,7 +68,7 @@ export function plannedCreateGroups(lines: PurchaseInvoiceLine[]): { key: string
     const key = supplierProductKey(line);
     const name = plannedIngredientName(line);
     const normalized = normalizeIngredientName(name);
-    const existing = groups.find((group) => group.key === key || (normalized && normalizeIngredientName(group.name) === normalized));
+    const existing = groups.find((group) => !qualifiersConflict(group.name, name) && (group.key === key || (normalized && normalizeIngredientName(group.name) === normalized)));
     if (existing) {
       existing.lineKeys.push(line.key);
       continue;
@@ -135,6 +134,70 @@ export function invoiceLineMatchesFilter(
   if (filter === "new") return status === "new";
   if (filter === "unmapped") return status === "none";
   return status === "possible" || Boolean(line.needsReview && status !== "confirmed" && status !== "new");
+}
+
+export type InvoiceNameEdit = {
+  lineKey: string;
+  name: string;
+  at: string;
+  actor?: string;
+  /** When true, the caller may also rename the inventory product. The line itself never does that. */
+  updateInventory?: boolean;
+};
+
+/** Apply a name correction on one invoice line. Amounts, quantity, and product id stay unchanged. */
+export function correctInvoiceLineName(
+  invoice: PurchaseInvoice,
+  input: InvoiceNameEdit
+): { ok: true; invoice: PurchaseInvoice; productId?: string } | { ok: false; error: "LINE_NOT_FOUND" | "EMPTY_NAME" } {
+  const trimmed = input.name.trim();
+  if (!trimmed) return { ok: false, error: "EMPTY_NAME" };
+  const line = (invoice.lines ?? []).find((row) => row.key === input.lineKey);
+  if (!line) return { ok: false, error: "LINE_NOT_FOUND" };
+  if (trimmed === (line.correctedInvoiceName || line.rawName) && !input.updateInventory) {
+    return { ok: true, invoice };
+  }
+  const patch = editInvoiceLineName(line, trimmed);
+  const nextLine: PurchaseInvoiceLine = {
+    ...line,
+    ...patch,
+    nameHistory: [
+      ...(line.nameHistory ?? []),
+      { at: input.at, actor: input.actor, from: line.correctedInvoiceName || line.rawName, to: trimmed, scope: input.updateInventory ? "inventory" : "invoice" },
+    ],
+  };
+  if (input.updateInventory && line.productId) nextLine.inventoryProductName = trimmed;
+  return {
+    ok: true,
+    productId: input.updateInventory ? line.productId : undefined,
+    invoice: {
+      ...invoice,
+      lines: invoice.lines.map((row) => (row.key === line.key ? nextLine : row)),
+      audit: [
+        ...(invoice.audit ?? []),
+        {
+          at: input.at,
+          actor: input.actor,
+          action: input.updateInventory ? "line-name-and-inventory" : "line-name",
+          before: line.rawName,
+          after: trimmed,
+        },
+      ].slice(-20),
+    },
+  };
+}
+
+/** Correct the name on this invoice line only. The inventory product name stays as it is. */
+export function editInvoiceLineName(line: PurchaseInvoiceLine, nextName: string): Partial<PurchaseInvoiceLine> {
+  const trimmed = nextName.trim();
+  if (!trimmed || trimmed === line.rawName) return {};
+  const original = line.originalScannedName || line.originalDescription || line.rawName;
+  return {
+    originalScannedName: original,
+    originalDescription: line.originalDescription || original,
+    correctedInvoiceName: trimmed,
+    rawName: trimmed,
+  };
 }
 
 export function applyInvoiceLineSave<T extends { lines: PurchaseInvoiceLine[] }>(invoice: T, line: PurchaseInvoiceLine): T {

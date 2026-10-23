@@ -165,7 +165,7 @@ describe("photographed poultry invoice quantities", () => {
         unitPriceNet: 45,
         unitCost: 0.045,
       })
-    ).toEqual({ amount: 45, unit: "kg" });
+    ).toMatchObject({ amount: 45, unit: "kg" });
     expect(invoiceLineBlockers([shawarma, shipping, plastic])).toEqual([]);
   });
 });

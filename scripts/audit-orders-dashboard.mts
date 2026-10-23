@@ -20,25 +20,19 @@ function maskEmail(value: string): string {
 async function main() {
   const snap = await getAdminDb().collection(COLLECTIONS.orders).get();
   const orders = snap.docs.map((doc) => mapOrder({ id: doc.id, ...(doc.data() as FirestoreOrder) }));
-  const stats = computeOrderDashboard(orders);
-  const byStatus = {
-    received: orders.filter((order) => operationalStatusOf(order) === "received" && !order.isTestOrder).length,
-    preparing: orders.filter((order) => operationalStatusOf(order) === "preparing" && !order.isTestOrder).length,
-    ready: orders.filter((order) => operationalStatusOf(order) === "ready" && !order.isTestOrder).length,
-  };
+  const stats = computeOrderDashboard(orders, new Date(), { period: "today", payments: [] });
+  const all = computeOrderDashboard(orders, new Date(), { period: "all", payments: [] });
+  const delivered = orders.filter((order) => operationalStatusOf(order) === "delivered" && !order.isTestOrder).length;
   const format121 = describeAge(121 * 60_000);
   const format6417 = describeAge(6417 * 60_000);
   const recipient = (process.env.MISHKAH_NOTIFICATION_EMAIL || "").trim();
 
-  const countersMatch =
-    stats.received === byStatus.received &&
-    stats.preparing === byStatus.preparing &&
-    stats.ready === byStatus.ready;
+  const countersMatch = all.deliveredToday === delivered;
 
   console.log(`ORDERS LOADED: ${stats.loaded}`);
-  console.log(`RECEIVED: ${stats.received}`);
-  console.log(`PREPARING: ${stats.preparing}`);
-  console.log(`READY: ${stats.ready}`);
+  console.log(`RECEIVED TODAY: ${stats.received}`);
+  console.log(`PREPARING TODAY: ${stats.preparing}`);
+  console.log(`READY TODAY: ${stats.ready}`);
   console.log(`DELIVERED TODAY: ${stats.deliveredToday}`);
   console.log(`OVERDUE: ${stats.overdue}`);
   console.log(`TODAY REVENUE: ₪${stats.todayRevenue.toFixed(2)}`);

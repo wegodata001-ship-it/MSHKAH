@@ -3,6 +3,7 @@ import { roundMoney } from "@/lib/costing/money";
 import { baseUnitFor } from "@/lib/costing/units";
 import type { CompareDisplayUnit, CompareVatMode, MaterialCompareRow } from "@/lib/inventory/material-group";
 import { toDisplayUnitCost } from "@/lib/inventory/material-group";
+import { shownRecordUnitPrices } from "@/lib/inventory/last-price";
 import { unitCostFromPackage } from "@/lib/inventory/stock";
 import type { PurchasePriceRecord } from "@/lib/inventory/types";
 
@@ -122,7 +123,16 @@ export function compareHistoryLines(
       const packQuantity = row.packageQuantity ?? row.quantity ?? null;
       const packUnit = row.unit;
       const packPrice = packPriceOnBasis(row, mode);
-      const priced = unitPriceOnBasis(packPrice, packQuantity, packUnit);
+      const stored = shownRecordUnitPrices(row, records.filter((item) => item.productId === productId));
+      const dividedNet = packQuantity && packQuantity > 0 ? row.priceBeforeVat / packQuantity : null;
+      const explicit = row.unitPriceNet != null || row.lineTotalNet != null || row.lineTotalGross != null;
+      const corrected = stored.dividedTwice && stored.excludingVat != null && dividedNet != null && Math.abs(stored.excludingVat - dividedNet) > 0.05;
+      const priced = explicit || corrected
+        ? {
+            unitPrice: mode === "net" ? stored.excludingVat : stored.includingVat,
+            displayUnit: (row.purchaseUnit || row.unit) === "kg" ? "kg" as const : (row.purchaseUnit || row.unit) === "liter" ? "liter" as const : "unit" as const,
+          }
+        : unitPriceOnBasis(packPrice, packQuantity, packUnit);
       const vat = savedVatParts(row);
       return {
         id: row.id,

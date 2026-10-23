@@ -66,6 +66,9 @@ function mapIngredient(id: string, data: Record<string, unknown>): CostingIngred
     minStock: data.minStock != null ? asNumber(data.minStock) : undefined,
     recommendedStock: data.recommendedStock != null ? asNumber(data.recommendedStock) : undefined,
     lastSupplierId: data.lastSupplierId ? String(data.lastSupplierId) : undefined,
+    adminPriceCorrection: data.adminPriceCorrection && typeof data.adminPriceCorrection === "object"
+      ? data.adminPriceCorrection as CostingIngredient["adminPriceCorrection"]
+      : undefined,
     lastReceivedAt: data.lastReceivedAt ? timestampToIso(data.lastReceivedAt as never) : undefined,
     compareGroupId: data.compareGroupId ? String(data.compareGroupId) : undefined,
     compareGroupName: data.compareGroupName ? String(data.compareGroupName) : undefined,

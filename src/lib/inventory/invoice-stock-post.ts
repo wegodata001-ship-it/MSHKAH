@@ -1,4 +1,5 @@
 import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
+import { isNonStockInvoiceLine } from "@/lib/inventory/invoice-lines";
 import { isAncillaryInvoiceLine, isPackagingInvoiceLine } from "@/lib/inventory/invoice-line-status";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
 import type { PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
@@ -15,6 +16,7 @@ export function stockPostableLine(line: PurchaseInvoiceLine): boolean {
   return Boolean(
     !line.skipInventory &&
       !line.postedToStock &&
+      !isNonStockInvoiceLine(line) &&
       !isAncillaryInvoiceLine(line) &&
       !isPackagingInvoiceLine(line) &&
       line.transferToInventory !== false &&

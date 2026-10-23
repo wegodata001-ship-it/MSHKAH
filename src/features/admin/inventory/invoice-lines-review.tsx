@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Loader2, MoreHorizontal, Plus } from "lucide-react";
+import { Loader2, MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
@@ -9,7 +9,8 @@ import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { AdminModal, AdminModalBody, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
 import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
-import { formatIls } from "@/lib/costing/money";
+import { formatIls, roundMoney } from "@/lib/costing/money";
+import { applyInvoiceLineMoney, linePriceBasis, shownLinePrices, type LinePriceBasis } from "@/lib/inventory/unit-price";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import {
   assignLinesToIngredient,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/inventory/ingredient-core";
 import {
   confirmInvoiceMatchPatch,
+  editInvoiceLineName,
   confirmSafeInvoiceMatches,
   isExistingIngredientAssignment,
   planNewIngredientPatch,
@@ -28,7 +30,7 @@ import {
   newInvoiceProductPatch,
   type InvoiceReviewFilter,
 } from "@/lib/inventory/invoice-line-review";
-import { finalizeInvoiceLine, INVOICE_UNITS } from "@/lib/inventory/invoice-lines";
+import { finalizeInvoiceLine, INVOICE_UNITS, invoiceTableTotals } from "@/lib/inventory/invoice-lines";
 import {
   applyInvoiceUnitChange,
   invoiceLineEditStamp,
@@ -64,6 +66,8 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierId?: string;
   supplierName?: string;
   vatRate: number;
+  sourcePayable?: number | null;
+  sourceNet?: number | null;
   locked?: boolean;
   invoiceId?: string;
   highlightKey?: string | null;
@@ -80,6 +84,8 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
   supplierId,
   supplierName,
   vatRate,
+  sourcePayable,
+  sourceNet,
   locked,
   invoiceId,
   highlightKey,
@@ -387,19 +393,19 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
         onApply={() => void applyUnits()}
       />
 
-      <div className="hidden overflow-x-auto rounded-2xl border border-beige-dark/15 lg:block">
-        <table className="w-full min-w-[1180px] border-collapse text-sm">
+      <div className="hidden rounded-2xl border border-beige-dark/15 lg:block">
+        <table className="w-full table-fixed border-collapse text-sm">
           <thead className="bg-beige/50 text-xs text-coffee/60">
             <tr className="h-8">
-              <th className="w-8 px-2" />
-              <th className="px-2 text-start font-medium">{t("admin.inventory.smart.colInvoice")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.smart.unifiedMaterial")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.costing.category")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.qty")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.costing.unit")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.unitPrice")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.vat")}</th>
-              <th className="px-2 text-start font-medium">{t("admin.inventory.smart.saveColumn")}</th>
+              <th className="w-[16%] px-2 text-start font-medium">{t("admin.inventory.smart.colInvoice")}</th>
+              <th className="w-[14%] px-2 text-start font-medium">{t("admin.inventory.smart.unifiedMaterial")}</th>
+              <th className="w-[12%] px-2 text-start font-medium">{t("admin.costing.category")}</th>
+              <th className="w-[8%] px-2 text-start font-medium">{t("admin.inventory.qty")}</th>
+              <th className="w-[10%] px-2 text-start font-medium">{t("admin.costing.unit")}</th>
+              <th className="w-[10%] px-2 text-start font-medium">{t("admin.inventory.unitPrice")}</th>
+              <th className="w-[11%] px-2 text-start font-medium">{t("admin.inventory.lineTotal")}</th>
+              <th className="w-[12%] px-2 text-start font-medium">{t("admin.inventory.vat")}</th>
+              <th className="w-[7%] px-2 text-start font-medium">{t("admin.inventory.smart.saveColumn")}</th>
             </tr>
           </thead>
           <tbody>
@@ -416,6 +422,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 supplierId={supplierId}
                 locked={locked}
                 invoiceId={invoiceId}
+                vatRate={vatRate}
                 saveState={saveState[line.key]}
                 saveError={saveErrors[line.key]}
                 creating={creating}
@@ -447,6 +454,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
               supplierId={supplierId}
               locked={locked}
               invoiceId={invoiceId}
+              vatRate={vatRate}
               saveState={saveState[line.key]}
               saveError={saveErrors[line.key]}
               creating={creating}
@@ -463,6 +471,7 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
           </div>
         ))}
       </div>
+      <LineMoneySummary lines={working} sourcePayable={sourcePayable} sourceNet={sourceNet} />
     </div>
   );
 });
@@ -478,6 +487,7 @@ function LineEditor({
   supplierId,
   locked,
   invoiceId,
+  vatRate,
   saveState,
   saveError,
   creating,
@@ -501,6 +511,7 @@ function LineEditor({
   supplierId?: string;
   locked?: boolean;
   invoiceId?: string;
+  vatRate: number;
   saveState?: "saving" | "saved" | "error";
   saveError?: string | null;
   creating: boolean;
@@ -518,6 +529,8 @@ function LineEditor({
   const [name, setName] = useState(line.rawName);
   const [category, setCategory] = useState(line.category ?? "");
   const [extrasOpen, setExtrasOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState(line.correctedInvoiceName || line.rawName);
   const [updatingCategory, setUpdatingCategory] = useState(false);
   const match = ingredients.find((item) => item.id === line.productId);
   const status = invoiceLineReviewStatus(line, { product: match });
@@ -525,6 +538,63 @@ function LineEditor({
   const priceUp = invoicePriceIncrease(line);
   const categories = inventoryCategories(ingredients, [line.category, match?.category]);
   const displayCategory = match?.category || line.category || "";
+  const shown = shownLinePrices(line);
+  const basis = linePriceBasis(line);
+  const commitName = () => {
+    onEdit(editInvoiceLineName(line, nameDraft), "now");
+    setRenaming(false);
+  };
+  const nameEditor = renaming ? (
+    <Input
+      value={nameDraft}
+      autoFocus
+      className="h-8"
+      aria-label={t("admin.inventory.editLineName")}
+      onChange={(event) => setNameDraft(event.target.value)}
+      onBlur={commitName}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") commitName();
+        if (event.key === "Escape") setRenaming(false);
+      }}
+    />
+  ) : (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button type="button" className="inline-flex items-center gap-1 text-start font-medium" onClick={() => { setNameDraft(line.correctedInvoiceName || line.rawName); setRenaming(true); }}>
+        <span>{line.correctedInvoiceName || line.originalDescription || line.rawName}</span>
+        <Pencil className="h-3.5 w-3.5 text-coffee/50" />
+      </button>
+      {match ? (
+        <button
+          type="button"
+          className="text-[11px] text-turquoise"
+          onClick={() => {
+            const next = (line.correctedInvoiceName || line.rawName).trim();
+            if (!next || !window.confirm(t("admin.inventory.renameInventoryConfirm").replace("{name}", next))) return;
+            void clientAdminFetch("/api/admin/inventory/invoice/line-name", {
+              invoiceId: invoiceId || undefined,
+              lineKey: invoiceId ? line.key : undefined,
+              name: next,
+              productId: match.id,
+              updateInventory: true,
+            }).then((result) => {
+              if (!result.ok) return;
+              onEdit({ inventoryProductName: next }, "now");
+            });
+          }}
+        >
+          {t("admin.inventory.renameInventory")}
+        </button>
+      ) : null}
+    </span>
+  );
+  const priceBreakdown = (
+    <p className="text-[11px] leading-4 text-coffee/60">
+      {shown.unitExcludingVat != null ? `${t("admin.inventory.priceExVat")}: ${formatIls(shown.unitExcludingVat)}` : ""}
+      {shown.unitIncludingVat != null ? ` · ${t("admin.inventory.priceIncVat")}: ${formatIls(shown.unitIncludingVat)}` : ""}
+      {shown.vatAmount != null ? ` · ${t("admin.inventory.vat")}: ${formatIls(shown.vatAmount)}` : ""}
+      {basis === "unknown" ? t("admin.inventory.vatChoose") : ""}
+    </p>
+  );
 
   const extras = (
     <div className="mt-2 rounded-xl bg-beige/40 p-3">
@@ -627,10 +697,12 @@ function LineEditor({
       id={`invoice-line-${line.key}-quantity`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "quantity" && "ring-2 ring-amber-500")}
+      step="0.01"
+      dir="ltr"
+      className={cn("h-8 text-end tabular-nums", highlightField === "quantity" && "ring-2 ring-amber-500")}
       value={line.quantity ?? ""}
       disabled={locked}
-      onChange={(e) => onEdit({ quantity: e.target.value === "" ? null : Number(e.target.value) })}
+      onChange={(e) => onEdit(applyInvoiceLineMoney(line, { field: "quantity", quantity: e.target.value === "" ? null : Number(e.target.value) }, vatRate))}
       onBlur={onFlush}
     />
   );
@@ -655,22 +727,53 @@ function LineEditor({
       id={`invoice-line-${line.key}-price`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "price" && "ring-2 ring-amber-500")}
-      value={line.unitPrice ?? ""}
+      step="0.01"
+      dir="ltr"
+      className={cn("h-8 text-end tabular-nums", highlightField === "price" && "ring-2 ring-amber-500")}
+      value={shown.unit ?? ""}
       disabled={locked}
-      onChange={(e) => onEdit({ unitPrice: e.target.value === "" ? null : Number(e.target.value) })}
+      onChange={(e) => onEdit(applyInvoiceLineMoney(line, { field: "unitPrice", unitPrice: e.target.value === "" ? null : Number(e.target.value) }, vatRate))}
       onBlur={onFlush}
     />
+  );
+  const lineTotalInput = (
+    <Input
+      id={`invoice-line-${line.key}-total`}
+      type="number"
+      min="0"
+      dir="ltr"
+      className={cn("h-8 text-end font-semibold tabular-nums", highlightField === "total" && "ring-2 ring-amber-500")}
+      value={shown.line ?? ""}
+      disabled={locked}
+      aria-label={t("admin.inventory.lineTotal")}
+      onChange={(e) => onEdit(applyInvoiceLineMoney(line, { field: "lineTotal", lineTotal: e.target.value === "" ? null : Number(e.target.value) }, vatRate))}
+      onBlur={onFlush}
+    />
+  );
+  const basisSelect = (
+    <select
+      className="h-8 w-full rounded-lg border px-1 text-xs"
+      value={basis}
+      disabled={locked}
+      aria-label={t("admin.inventory.priceBasis")}
+      onChange={(e) => onEdit(applyInvoiceLineMoney(line, { field: "basis", basis: e.target.value as LinePriceBasis }, vatRate), "now")}
+    >
+      <option value="unknown">{t("admin.inventory.vatChoose")}</option>
+      <option value="including">{t("admin.inventory.priceBasis.including")}</option>
+      <option value="excluding">{t("admin.inventory.priceBasis.excluding")}</option>
+      <option value="exempt">{t("admin.inventory.priceBasis.exempt")}</option>
+    </select>
   );
   const vatInput = (
     <Input
       id={`invoice-line-${line.key}-vat`}
       type="number"
       min="0"
-      className={cn("h-8", highlightField === "vat" && "ring-2 ring-amber-500")}
+      dir="ltr"
+      className={cn("h-8 text-end tabular-nums", highlightField === "vat" && "ring-2 ring-amber-500")}
       value={line.vatRate != null ? Math.round((line.vatRate > 1 ? line.vatRate : line.vatRate * 100)) : ""}
-      disabled={locked}
-      onChange={(e) => onEdit({ vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 })}
+      disabled={locked || basis === "exempt"}
+      onChange={(e) => onEdit(applyInvoiceLineMoney(line, { field: "vatRate", vatRate: e.target.value === "" ? null : Number(e.target.value) / 100 }, vatRate))}
       onBlur={onFlush}
     />
   );
@@ -681,7 +784,7 @@ function LineEditor({
         <div className="flex items-start justify-between gap-2">
           <label className="flex items-start gap-2">
             <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
-            <p className="font-medium">{line.originalDescription || line.rawName}</p>
+            {nameEditor}
           </label>
           <CareBadge status={status} />
         </div>
@@ -703,11 +806,19 @@ function LineEditor({
             {priceInput}
           </label>
           <label className="block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.lineTotal")}</span>
+            {lineTotalInput}
+          </label>
+          <label className="col-span-2 block">
+            <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.priceBasis")}</span>
+            {basisSelect}
+          </label>
+          <label className="block">
             <span className="mb-1 block text-[11px] text-coffee/50">{t("admin.inventory.vat")}</span>
             {vatInput}
           </label>
         </div>
-        <p className="text-sm">{t("admin.inventory.lineTotal")}: {line.grossAmount != null ? formatIls(line.grossAmount) : line.netAmount != null ? formatIls(line.netAmount) : "—"}</p>
+        {priceBreakdown}
         <SaveState state={saveState} error={saveError} highlight={highlightField === "update"} />
         <button type="button" className="text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
           {t("admin.inventory.smart.moreOptions")}
@@ -721,19 +832,28 @@ function LineEditor({
     <>
       <tr id={`invoice-line-${line.key}`} data-invoice-line={line.key} className={cn("border-t border-beige-dark/10 align-top", highlight && "bg-amber-50")}>
         <td className="px-2 py-1.5">
-          <input type="checkbox" checked={Boolean(selected)} onChange={onToggleSelect} />
-        </td>
-        <td className="max-w-[12rem] px-2 py-1.5">
-          <p className="font-medium leading-5">{line.originalDescription || line.rawName}</p>
-          <CareBadge status={status} />
-          {priceUp && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+          <label className="flex items-start gap-1">
+            <input type="checkbox" className="mt-1" checked={Boolean(selected)} onChange={onToggleSelect} />
+            <span className="min-w-0">
+              {nameEditor}
+              <CareBadge status={status} />
+              {priceUp && <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.priceIncrease")}: {Math.round(line.priceChangePercent ?? 0)}%</p>}
+            </span>
+          </label>
         </td>
         <td className="px-2 py-1.5">{matchField}</td>
-        <td className="min-w-[11rem] px-2 py-1.5">{categoryField}</td>
+        <td className="px-2 py-1.5">{categoryField}</td>
         <td className="px-2 py-1.5">{quantityInput}</td>
         <td className="px-2 py-1.5">{unitSelect}</td>
         <td className="px-2 py-1.5">{priceInput}</td>
-        <td className="px-2 py-1.5">{vatInput}</td>
+        <td className="px-2 py-1.5">
+          {lineTotalInput}
+          {priceBreakdown}
+        </td>
+        <td className="px-2 py-1.5 space-y-1">
+          {basisSelect}
+          {vatInput}
+        </td>
         <td className="px-2 py-1.5">
           <SaveState state={saveState} error={saveError} highlight={highlightField === "update"} />
           <button type="button" className="mt-1 block text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
@@ -747,6 +867,43 @@ function LineEditor({
         </tr>
       )}
     </>
+  );
+}
+
+function LineMoneySummary({
+  lines,
+  sourcePayable,
+  sourceNet,
+}: {
+  lines: PurchaseInvoiceLine[];
+  sourcePayable?: number | null;
+  sourceNet?: number | null;
+}) {
+  const t = useT();
+  const totals = invoiceTableTotals(lines);
+  const linesDiffer = Math.abs(totals.gross - totals.net) > 0.05;
+  const compared = linesDiffer ? sourcePayable : sourceNet ?? sourcePayable;
+  const comparedAmount = linesDiffer ? totals.gross : totals.net;
+  const difference = compared == null ? null : roundMoney(comparedAmount - compared);
+  const row = (label: string, value: string) => (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-coffee/70">{label}</span>
+      <span className="tabular-nums">{value}</span>
+    </div>
+  );
+  return (
+    <div className="rounded-2xl border border-beige-dark/15 bg-beige/30 p-3 text-sm">
+      {row(t("admin.inventory.table.beforeVat"), formatIls(totals.net))}
+      {row(t("admin.inventory.table.discounts"), formatIls(totals.discounts))}
+      {row(t("admin.inventory.table.adjustments"), formatIls(totals.adjustments))}
+      {row(t("admin.inventory.vat"), formatIls(totals.vat))}
+      {row(t("admin.inventory.table.includingVat"), formatIls(totals.gross))}
+      {row(t("admin.inventory.table.source"), compared == null ? "—" : formatIls(compared))}
+      <div className="mt-1 flex items-center justify-between gap-4 border-t border-beige-dark/20 pt-1 font-semibold">
+        <span>{t("admin.inventory.table.difference")}</span>
+        <span className="tabular-nums">{difference == null ? "—" : formatIls(difference)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -780,9 +937,10 @@ function MatchSelect({
     setQuery("");
   };
   return (
-    <div id={`invoice-line-${line.key}-product`} className={cn("min-w-[12rem] space-y-1", highlight && "rounded-xl ring-2 ring-amber-500")}>
+    <div id={`invoice-line-${line.key}-product`} className={cn("min-w-0 space-y-1", highlight && "rounded-xl ring-2 ring-amber-500")}>
+      <p className="text-[11px] text-coffee/50">{t("admin.inventory.scannedName")}: {line.originalScannedName || line.originalDescription || line.rawName}</p>
       {assigned ? (
-        <p className="text-sm font-medium">{selected?.name || plannedIngredientName(line)}</p>
+        <p className="text-sm font-medium">{t("admin.inventory.assignedProduct")}: {selected?.name || plannedIngredientName(line)}</p>
       ) : (
         <>
           <p className="text-xs font-medium text-coffee">{t("admin.inventory.smart.newProductPending")}</p>
@@ -803,6 +961,18 @@ function MatchSelect({
       {line.conversionNote === "pack-conflict" && assigned && (
         <p className="text-[11px] text-amber-800">{t("admin.inventory.smart.packReview")}</p>
       )}
+      {!assigned && suggestions[0] && (
+        <div className="rounded-lg bg-amber-50 p-1 text-[11px] text-amber-900">
+          <p>{t("admin.inventory.similarConfirm")}</p>
+          <button type="button" className="text-turquoise" disabled={locked} onClick={() => {
+            const product = ingredients.find((item) => item.id === suggestions[0].productId);
+            if (product) chooseExisting(product, suggestions[0].score);
+          }}>{suggestions[0].name}</button>
+        </div>
+      )}
+      <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={() => onEdit(planNewIngredientPatch(line), "now")}>
+        {t("admin.inventory.createSeparate")}
+      </button>
       <button type="button" className="text-xs text-turquoise" disabled={locked} onClick={() => setOpen((value) => !value)}>
         {t("admin.inventory.smart.changeAssignment")}
       </button>

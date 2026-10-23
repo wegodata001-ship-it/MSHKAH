@@ -8,8 +8,11 @@ import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-creat
 import { useT } from "@/components/providers/locale-provider";
 import type { CostingIngredient } from "@/lib/costing/types";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier } from "@/lib/inventory/types";
+import { formatIls } from "@/lib/costing/money";
 import { invoiceLineQuantityBase } from "@/lib/inventory/ingredient-core";
-import { invoiceStockStatus } from "@/lib/inventory/invoice-finance";
+import { invoiceMoneyCheck, invoiceStockStatus } from "@/lib/inventory/invoice-finance";
+import { intakeFailureMessageKey } from "@/lib/inventory/invoice-intake";
+import { invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
 
@@ -43,23 +46,35 @@ export function InvoiceStockTransfer({
 
   const postStock = async () => {
     if (saving) return;
+    const problems = invoiceLineBlockers(lines);
+    if (problems.length) {
+      const first = problems[0];
+      onToast(
+        t("admin.inventory.smart.lineIssue")
+          .replace("{line}", String(first?.lineIndex ?? ""))
+          .replace("{reason}", t(first?.labelKey ?? "admin.inventory.smart.linesIncomplete")),
+        "error"
+      );
+      return;
+    }
+    const money = invoiceMoneyCheck({ ...invoice, lines });
+    let accepted = invoice;
+    if (money.hasMismatch && !invoice.moneyGapAccepted) {
+      const amount = formatIls(Math.abs(money.difference ?? 0));
+      if (!window.confirm(t("admin.inventory.smart.moneyGapConfirm").replace("{amount}", amount))) {
+        onToast(t("admin.inventory.smart.moneyGapReady").replace("{amount}", amount), "error");
+        return;
+      }
+      accepted = { ...invoice, moneyGapAccepted: true };
+    }
     setSaving(true);
-    const result = await transferInvoiceLinesToStock({ ...invoice, lines }, selectedKeys, {
+    const result = await transferInvoiceLinesToStock({ ...accepted, lines }, selectedKeys, {
       skipFinanceSave,
     });
     setSaving(false);
     const postedCount = result.success ? result.data?.lines.filter((line) => line.postedToStock).length ?? 0 : 0;
     if (!result.success || !result.data || (result.data.stockStatus !== "posted" && result.data.stockStatus !== "partial") || postedCount === 0) {
-      onToast(
-        !result.success && result.error === "PERMISSION_DENIED"
-          ? t("admin.inventory.smart.permissionSystem")
-          : !result.success && result.error === "NO_STOCK_LINES"
-            ? t("admin.finance.noStockLines")
-            : !result.success && result.error === "ALREADY_POSTED"
-              ? t("admin.finance.alreadyPosted")
-              : t("admin.inventory.smart.stockNotPosted"),
-        "error"
-      );
+      onToast(t(intakeFailureMessageKey(result.success ? undefined : result.error)), "error");
       return;
     }
     setLines(result.data.lines);
@@ -71,6 +86,8 @@ export function InvoiceStockTransfer({
     () => lines.filter((line) => line.transferToInventory && !line.postedToStock && line.productId).map((line) => line.key),
     [lines]
   );
+  const lineProblems = invoiceLineBlockers(lines);
+  const money = invoiceMoneyCheck({ ...invoice, lines });
 
   const update = (key: string, patch: Partial<PurchaseInvoiceLine>) => {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
@@ -134,12 +151,26 @@ export function InvoiceStockTransfer({
             </div>
           ))}
         </div>
+        {lineProblems.length > 0 && (
+          <ul className="mt-3 space-y-1 text-sm text-amber-800">
+            {lineProblems.map((item) => (
+              <li key={item.lineKey}>
+                {t("admin.inventory.smart.lineIssue").replace("{line}", String(item.lineIndex)).replace("{reason}", t(item.labelKey))}
+              </li>
+            ))}
+          </ul>
+        )}
+        {lineProblems.length === 0 && money.hasMismatch && !invoice.moneyGapAccepted && (
+          <p className="mt-3 text-sm font-medium text-amber-800">
+            {t("admin.inventory.smart.moneyGapReady").replace("{amount}", formatIls(Math.abs(money.difference ?? 0)))}
+          </p>
+        )}
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
           <Button
             type="button"
             variant="turquoise"
-            disabled={saving || selectedKeys.length === 0}
+            disabled={saving || selectedKeys.length === 0 || lineProblems.length > 0}
             onClick={() => {
               if (!invoice.supplierId && !skipSupplierWarning) {
                 setWarnNoSupplier(true);

@@ -8,9 +8,9 @@ import { InvoiceCategorySelect } from "@/features/admin/inventory/invoice-catego
 import { InvoiceNewProductDialog } from "@/features/admin/inventory/invoice-new-product-dialog";
 import { InvoiceUnitField } from "@/features/admin/inventory/invoice-unit-field";
 import { useT } from "@/components/providers/locale-provider";
-import { formatIls } from "@/lib/costing/money";
 import type { BaseUnit, CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
-import { finalizeInvoiceLine, lineNetAmount } from "@/lib/inventory/invoice-lines";
+import { lineNetAmount } from "@/lib/inventory/invoice-lines";
+import { applyInvoiceLineMoney, shownLinePrices } from "@/lib/inventory/unit-price";
 import { packFactor } from "@/lib/inventory/pack-cost";
 import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 import { setIngredientCategory } from "@/services/costingService";
@@ -218,7 +218,6 @@ function sharedEditors(line: PurchaseInvoiceLine, locked: boolean | undefined, u
   return {
     product,
     expectedBase,
-    total: formatIls(finalizeInvoiceLine(line, vatRate).priceIncludingVat ?? net),
     category: (
       <InvoiceCategorySelect
         value={line.category ?? ""}
@@ -230,7 +229,7 @@ function sharedEditors(line: PurchaseInvoiceLine, locked: boolean | undefined, u
       />
     ),
     qty: (
-      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={line.quantity ?? ""} onChange={(event) => onChange({ quantity: event.target.value ? Number(event.target.value) : null })} />
+      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={line.quantity ?? ""} onChange={(event) => onChange(applyInvoiceLineMoney(line, { field: "quantity", quantity: event.target.value ? Number(event.target.value) : null }, vatRate))} />
     ),
     unit: (
       <InvoiceUnitField
@@ -246,10 +245,13 @@ function sharedEditors(line: PurchaseInvoiceLine, locked: boolean | undefined, u
       />
     ),
     price: (
-      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={line.unitPrice ?? ""} onChange={(event) => onChange({ unitPrice: event.target.value ? Number(event.target.value) : null })} />
+      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={shownLinePrices(line).unit ?? ""} onChange={(event) => onChange(applyInvoiceLineMoney(line, { field: "unitPrice", unitPrice: event.target.value ? Number(event.target.value) : null }, vatRate))} />
     ),
     discount: (
-      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={line.discount ?? ""} onChange={(event) => onChange({ discount: event.target.value ? Number(event.target.value) : null })} />
+      <Input className="h-11 text-base" type="number" min="0" step="0.01" disabled={locked} value={line.discount ?? ""} onChange={(event) => onChange(applyInvoiceLineMoney(line, { field: "discount", discount: event.target.value ? Number(event.target.value) : null }, vatRate))} />
+    ),
+    totalInput: (
+      <Input className="h-11 text-base font-semibold" type="number" min="0" step="0.01" disabled={locked} value={shownLinePrices(line).line ?? ""} aria-label="line total" onChange={(event) => onChange(applyInvoiceLineMoney(line, { field: "lineTotal", lineTotal: event.target.value ? Number(event.target.value) : null }, vatRate))} />
     ),
   };
 }
@@ -284,7 +286,7 @@ function LineCells(props: {
       <td className="px-1 align-top">{editors.price}</td>
       <td className="px-1 align-top">{editors.discount}</td>
       <td className="px-1 align-top">
-        <p className="flex h-11 items-center font-semibold">{editors.total}</p>
+        {editors.totalInput}
         {props.canRemove && !props.locked && (
           <Button type="button" variant="ghost" className="min-h-11" onClick={props.onRemove}><Trash2 className="h-4 w-4" /></Button>
         )}
@@ -326,7 +328,7 @@ function LineCard(props: {
         <label className="block text-sm text-coffee/70">{t("admin.inventory.discount")}{editors.discount}</label>
       </div>
       <div className="flex items-center justify-between">
-        <p className="text-base font-semibold">{t("admin.inventory.lineTotal")}: {editors.total}</p>
+        <label className="block text-sm text-coffee/70">{t("admin.inventory.lineTotal")}{editors.totalInput}</label>
         {props.canRemove && !props.locked && (
           <Button type="button" variant="ghost" className="min-h-11" onClick={props.onRemove}><Trash2 className="h-4 w-4" /></Button>
         )}

@@ -22,6 +22,8 @@ import { mapOrder } from "@/lib/mappers";
 import { selectedModifierToFirestore } from "@/lib/mappers/modifier-mappers";
 import { orderSchema, type OrderInput } from "@/lib/validation/schemas";
 import { forcePickupForNewOrder, NEW_ORDER_FULFILLMENT } from "@/lib/orders/fulfillment";
+import { toIsoTimestamp } from "@/lib/dates/normalize";
+import type { VerifiedPayment } from "@/lib/orders/dashboard";
 import { normalizeOrderStatus, toStoredOrderStatus } from "@/lib/orders/status";
 import { isViewOnlyMenuSurface } from "@/lib/domains/host-routing";
 import {
@@ -213,6 +215,44 @@ export async function getOrderStats(): Promise<{
       error instanceof Error ? error.message : "Failed to fetch order stats",
       "ORDER_STATS_FAILED"
     );
+  }
+}
+
+export function subscribeToPaymentFacts(
+  onData: (payments: VerifiedPayment[]) => void,
+  onError: (error: string) => void
+): Unsubscribe {
+  try {
+    return onSnapshot(
+      collection(getDb(), COLLECTIONS.payments),
+      (snapshot) => {
+        onData(
+          snapshot.docs.flatMap((item) => {
+            const data = item.data() as {
+              orderId?: string;
+              status?: string;
+              amount?: number;
+              paidAt?: unknown;
+              refundAmount?: number;
+              provider?: string;
+            };
+            if (!data.orderId) return [];
+            return [{
+              orderId: data.orderId,
+              status: data.status ?? null,
+              amount: typeof data.amount === "number" ? data.amount : null,
+              paidAt: toIsoTimestamp(data.paidAt),
+              refundAmount: typeof data.refundAmount === "number" ? data.refundAmount : null,
+              provider: data.provider ?? null,
+            }];
+          })
+        );
+      },
+      (error) => onError(error.message)
+    );
+  } catch (error) {
+    onError(error instanceof Error ? error.message : "Failed to subscribe to payments");
+    return () => {};
   }
 }
 

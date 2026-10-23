@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChefHat, Search } from "lucide-react";
+import { BadgeCheck, ChefHat, Inbox, PackageCheck, Search, Timer, Wallet } from "lucide-react";
 import { useOrders } from "@/hooks/useOrders";
 import { useClubMembers } from "@/hooks/useClubMembers";
 import { updateOrderStatus } from "@/services";
+import { subscribeToPaymentFacts } from "@/services/orderService";
 import { useAuth } from "@/components/providers/auth-provider";
 import { OrderItemExtrasDialog } from "@/features/admin/orders/order-item-extras-dialog";
 import { OrderCard } from "@/features/admin/orders/order-card";
@@ -29,7 +30,7 @@ import {
   isToday,
   orderSearchText,
 } from "@/lib/orders/operations";
-import { computeOrderDashboard, matchesOperationalFilter } from "@/lib/orders/dashboard";
+import { computeOrderDashboard, matchesOperationalFilter, type OrderStatsPeriod, type VerifiedPayment } from "@/lib/orders/dashboard";
 import {
   OPERATIONAL_FILTERS,
   type OperationalOrderStatus,
@@ -46,6 +47,8 @@ type OrdersTab = "active" | "history";
 type DateFilter = "today" | "week" | "all";
 type StatusFilter = OperationalOrderStatus | "all" | "overdue";
 
+const PERIODS: OrderStatsPeriod[] = ["today", "yesterday", "7d", "30d", "all"];
+
 export function OrdersAdmin() {
   const t = useT();
   const { user } = useAuth();
@@ -56,6 +59,9 @@ export function OrdersAdmin() {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [statsPeriod, setStatsPeriod] = useState<OrderStatsPeriod>("today");
+  const [payments, setPayments] = useState<VerifiedPayment[] | null>(null);
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [now, setNow] = useState(() => Date.now());
   const [paymentFilter, setPaymentFilter] = useState<PaymentStatus | "all">("all");
@@ -80,6 +86,19 @@ export function OrdersAdmin() {
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    return subscribeToPaymentFacts(
+      (rows) => {
+        setPayments(rows);
+        setPaymentsError(null);
+      },
+      (message) => {
+        setPayments(null);
+        setPaymentsError(message);
+      }
+    );
   }, []);
 
   useEffect(() => {
@@ -119,7 +138,11 @@ export function OrdersAdmin() {
     [orders, optimistic]
   );
 
-  const stats = useMemo(() => computeOrderDashboard(effectiveOrders, new Date(now)), [effectiveOrders, now]);
+  const stats = useMemo(
+    () => computeOrderDashboard(effectiveOrders, new Date(now), { period: statsPeriod, payments }),
+    [effectiveOrders, now, payments, statsPeriod]
+  );
+  const statsUnavailable = Boolean(error) && orders.length === 0;
 
   const filtered = useMemo(() => {
     return effectiveOrders
@@ -226,12 +249,23 @@ export function OrdersAdmin() {
     }
   };
 
-  const kpis: { key: StatusFilter; value: string | number; hint: string; danger?: boolean }[] = [
-    { key: "received", value: stats.received, hint: t("admin.orders.kpi.receivedHint") },
-    { key: "preparing", value: stats.preparing, hint: t("admin.orders.kpi.preparingHint") },
-    { key: "ready", value: stats.ready, hint: t("admin.orders.kpi.readyHint") },
-    { key: "delivered", value: stats.deliveredToday, hint: t("admin.orders.kpi.deliveredHint") },
-    { key: "overdue", value: stats.overdue, hint: t("admin.orders.overdueHint"), danger: true },
+  const periodLabel = t(
+    statsPeriod === "today"
+      ? "admin.orders.today"
+      : statsPeriod === "yesterday"
+        ? "admin.orders.period.yesterday"
+        : statsPeriod === "7d"
+          ? "admin.orders.lastWeek"
+          : statsPeriod === "30d"
+            ? "admin.orders.period.days30"
+            : "admin.orders.period.all"
+  );
+  const countText = (value: number) => (statsUnavailable || (loading && orders.length === 0) ? "—" : value);
+  const kpis: { key: StatusFilter; icon: typeof Inbox; value: string | number; hint: string }[] = [
+    { key: "received", icon: Inbox, value: countText(stats.received), hint: t("admin.orders.kpi.receivedHint") },
+    { key: "preparing", icon: ChefHat, value: countText(stats.preparing), hint: t("admin.orders.kpi.preparingHint") },
+    { key: "ready", icon: BadgeCheck, value: countText(stats.ready), hint: t("admin.orders.kpi.readyHint") },
+    { key: "delivered", icon: PackageCheck, value: countText(stats.deliveredToday), hint: t("admin.orders.kpi.deliveredHint") },
   ];
 
   return (
@@ -247,46 +281,101 @@ export function OrdersAdmin() {
         }
       />
 
-      <div className="mt-5 flex gap-3 overflow-x-auto pb-1 xl:grid xl:grid-cols-7 xl:overflow-visible">
-        {kpis.map(({ key, value, hint, danger }) => (
+      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-coffee/60">{periodLabel}</p>
+        <Select value={statsPeriod} onValueChange={(value) => setStatsPeriod(value as OrderStatsPeriod)}>
+          <SelectTrigger className="w-full sm:w-48"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {PERIODS.map((value) => (
+              <SelectItem key={value} value={value}>
+                {t(
+                  value === "today"
+                    ? "admin.orders.today"
+                    : value === "yesterday"
+                      ? "admin.orders.period.yesterday"
+                      : value === "7d"
+                        ? "admin.orders.lastWeek"
+                        : value === "30d"
+                          ? "admin.orders.period.days30"
+                          : "admin.orders.period.all"
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {statsUnavailable && (
+        <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>
+      )}
+      {paymentsError && (
+        <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{t("admin.orders.paymentsError")}</p>
+      )}
+
+      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {kpis.map(({ key, icon: Icon, value, hint }) => (
           <button
             key={key}
             type="button"
             onClick={() => {
               setTab(key === "delivered" ? "history" : "active");
-              setDateFilter(key === "delivered" ? "today" : "all");
+              setDateFilter(statsPeriod === "today" ? "today" : statsPeriod === "7d" ? "week" : "all");
               setStatusFilter(key);
             }}
             className={cn(
-              "min-w-[148px] rounded-2xl border bg-warm-white p-4 text-start shadow-soft transition hover:border-turquoise/40 xl:min-w-0",
-              statusFilter === key ? "border-turquoise" : "border-beige-dark/15",
-              danger && Number(value) > 0 && "border-amber-300"
+              "min-w-0 rounded-2xl border bg-warm-white p-4 text-start shadow-soft transition hover:border-turquoise/40",
+              statusFilter === key ? "border-turquoise" : "border-beige-dark/15"
             )}
           >
-            <p className={cn("text-2xl font-bold", danger && Number(value) > 0 ? "text-amber-800" : "text-dark-brown dark:text-warm-white")}>
-              {value}
-            </p>
-            <p className="text-sm text-coffee/55">
-              {key === "overdue" ? t("admin.orders.overdue") : t(`admin.status.${key}`)}
-            </p>
+            <Icon className="mb-2 h-4 w-4 text-turquoise" />
+            <p className="text-2xl font-bold text-dark-brown dark:text-warm-white">{loading && orders.length === 0 ? <Skeleton className="h-8 w-16" /> : value}</p>
+            <p className="text-sm text-coffee/55">{t(`admin.status.${key}`)}</p>
             <p className="mt-1 text-[11px] leading-4 text-coffee/40">{hint}</p>
+            <p className="mt-1 text-[11px] text-coffee/35">{periodLabel}</p>
           </button>
         ))}
-        <div className="min-w-[148px] rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft xl:min-w-0">
-          <p className="text-xl font-bold text-turquoise">{formatPrice(stats.todayRevenue)}</p>
-          <p className="text-sm text-coffee/55">{t("admin.orders.todayRevenue")}</p>
+        <div className="min-w-0 rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft">
+          <Wallet className="mb-2 h-4 w-4 text-turquoise" />
+          <p className="text-xl font-bold text-turquoise">
+            {loading && orders.length === 0 ? <Skeleton className="h-7 w-20" /> : stats.todayRevenue == null ? "—" : formatPrice(stats.todayRevenue)}
+          </p>
+          <p className="text-sm text-coffee/55">{statsPeriod === "today" ? t("admin.orders.todayRevenue") : t("admin.orders.periodRevenue")}</p>
+          {stats.cashRevenue != null && stats.cardRevenue != null && (
+            <p className="mt-1 text-[11px] leading-4 text-coffee/50">
+              {t("admin.orders.cashCard").replace("{cash}", formatPrice(stats.cashRevenue)).replace("{card}", formatPrice(stats.cardRevenue))}
+            </p>
+          )}
           <p className="mt-1 text-[11px] leading-4 text-coffee/40">{t("admin.orders.kpi.revenueHint")}</p>
+          <p className="mt-1 text-[11px] text-coffee/35">{periodLabel}</p>
         </div>
-        <div className="min-w-[148px] rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft xl:min-w-0">
+        <div className="min-w-0 rounded-2xl border border-beige-dark/15 bg-warm-white p-4 shadow-soft">
+          <Timer className="mb-2 h-4 w-4 text-turquoise" />
           <p className="text-xl font-bold text-coffee">
-            {stats.averagePrepMinutes == null
-              ? "—"
-              : formatDuration(t, stats.averagePrepMinutes * 60_000)}
+            {loading && orders.length === 0 ? (
+              <Skeleton className="h-7 w-16" />
+            ) : stats.averagePrepMinutes == null ? (
+              "—"
+            ) : (
+              formatDuration(t, stats.averagePrepMinutes * 60_000)
+            )}
           </p>
           <p className="text-sm text-coffee/55">{t("admin.orders.averagePrep")}</p>
           <p className="mt-1 text-[11px] leading-4 text-coffee/40">{t("admin.orders.kpi.prepHint")}</p>
+          <p className="mt-1 text-[11px] text-coffee/35">{periodLabel}</p>
         </div>
       </div>
+      {stats.overdue > 0 && !statsUnavailable && (
+        <button
+          type="button"
+          className="mt-3 text-sm font-medium text-amber-800"
+          onClick={() => {
+            setTab("active");
+            setStatusFilter("overdue");
+          }}
+        >
+          {t("admin.orders.overdue")}: {stats.overdue}
+        </button>
+      )}
 
       <div className="mt-5 flex gap-2 border-b border-beige-dark/20">
         {(["active", "history"] as const).map((value) => (
@@ -360,7 +449,7 @@ export function OrdersAdmin() {
         </button>
       )}
 
-      {error && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {error && orders.length > 0 && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
       {loading ? (
         <div className="mt-5 grid gap-4 md:grid-cols-2">

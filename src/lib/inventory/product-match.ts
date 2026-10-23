@@ -45,6 +45,48 @@ function coreTokens(tokens: string[]): string[] {
   return tokens.filter((token) => !isMeasureToken(token));
 }
 
+const QUALIFIER_GROUPS = [
+  ["ללא סוכר", "sugar free", "sugarfree", "بدون سكر", "خالي من السكر"],
+  ["דיאט", "diet", "دايت"],
+  ["נטול גלוטן", "ללא גלוטן", "gluten free", "glutenfree", "خالي من الغلوتين"],
+  ["רגיל", "רגילה", "רגילות", "regular", "عادي", "عادية"],
+  ["גדול", "גדולה", "גדולים", "large", "كبير", "كبيرة"],
+  ["קטן", "קטנה", "קטנים", "small", "صغير", "صغيرة"],
+];
+
+/** Words that make a different product. They stay in the name and block automatic matching. */
+export function productQualifiers(name: string): string[] {
+  const text = normalizeMatchText(name);
+  const tokens = new Set(matchTokens(text));
+  const found: string[] = [];
+  for (const group of QUALIFIER_GROUPS) {
+    const canonical = group[0];
+    const hit = group.some((phrase) => {
+      const normalized = normalizeMatchText(phrase);
+      if (!normalized) return false;
+      if (normalized.includes(" ")) return text.includes(normalized);
+      return tokens.has(normalized);
+    });
+    if (hit) found.push(canonical);
+  }
+  const flavor = text.match(/(?:בטעם|טעם|بنكهة|flavour|flavor)\s+(\S+)/);
+  if (flavor?.[1]) found.push(`flavor:${flavor[1]}`);
+  return found;
+}
+
+export function sameProductCore(leftName: string, rightName: string): boolean {
+  const left = coreTokens(matchTokens(normalizeMatchText(leftName))).join(" ");
+  const right = coreTokens(matchTokens(normalizeMatchText(rightName))).join(" ");
+  return Boolean(left) && left === right;
+}
+
+export function qualifiersConflict(leftName: string, rightName: string): boolean {
+  const left = productQualifiers(leftName);
+  const right = productQualifiers(rightName);
+  if (left.length !== right.length) return true;
+  return left.some((item) => !right.includes(item));
+}
+
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (!a.length) return b.length;
@@ -79,6 +121,10 @@ export function productNameSimilarity(invoiceName: string, inventoryName: string
   const left = normalizeMatchText(invoiceName);
   const right = normalizeMatchText(inventoryName);
   if (!left || !right) return 0;
+  const limit = (score: number) => {
+    if (qualifiersConflict(invoiceName, inventoryName)) return Math.min(score, 0.74);
+    return score;
+  };
   if (left === right) return 1;
 
   const leftTokens = matchTokens(left);
@@ -87,14 +133,14 @@ export function productNameSimilarity(invoiceName: string, inventoryName: string
   const rightCore = coreTokens(rightTokens);
   if (!leftCore.length || !rightCore.length) return 0;
 
-  if (leftCore.join(" ") === rightCore.join(" ")) return 0.96;
+  if (leftCore.join(" ") === rightCore.join(" ")) return limit(0.96);
 
   const smaller = leftCore.length <= rightCore.length ? leftCore : rightCore;
   const larger = leftCore.length <= rightCore.length ? rightCore : leftCore;
   const contained = smaller.every((token) => larger.some((item) => tokenSimilarity(token, item) >= 0.82));
   if (contained && smaller.length >= 1) {
     const extra = Math.max(0, larger.length - smaller.length);
-    return Math.max(0.78, 0.97 - extra * 0.03);
+    return limit(Math.min(MATCH_SAFE_MIN - 0.01, Math.max(0.78, 0.97 - extra * 0.03)));
   }
 
   const scores = leftCore.map((token) => Math.max(...rightCore.map((item) => tokenSimilarity(token, item))));
@@ -102,7 +148,8 @@ export function productNameSimilarity(invoiceName: string, inventoryName: string
   const alias = aliasOverlap(invoiceName, inventoryName);
   const charDist = levenshtein(leftCore.join(" "), rightCore.join(" "));
   const charScore = 1 - charDist / Math.max(leftCore.join(" ").length, rightCore.join(" ").length);
-  return Math.max(tokenAvg * 0.72 + charScore * 0.18 + alias * 0.1, alias, contained ? 0.78 : 0);
+  const score = Math.max(tokenAvg * 0.72 + charScore * 0.18 + alias * 0.1, alias, contained ? 0.78 : 0);
+  return limit(Math.min(score, leftCore.join(" ") === rightCore.join(" ") ? score : MATCH_SAFE_MIN - 0.01));
 }
 
 export function rankProductMatches(
@@ -130,7 +177,6 @@ export function inventoryCategories(
   return mergeCategoryNames(extras, ingredients.map((item) => item.category));
 }
 
-export function isSafeInvoiceMatch(score: number | null | undefined, kind?: string): boolean {
-  if (kind === "exact" || kind === "mapped") return true;
-  return (score ?? 0) >= MATCH_SAFE_MIN;
+export function isSafeInvoiceMatch(_score: number | null | undefined, kind?: string): boolean {
+  return kind === "exact" || kind === "mapped";
 }

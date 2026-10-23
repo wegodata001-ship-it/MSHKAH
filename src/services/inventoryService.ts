@@ -23,6 +23,7 @@ import { nowTimestamp, timestampToIso } from "@/types/firestore";
 import { toDateOnly } from "@/lib/dates/normalize";
 import { invoiceLineQuantityBase, planIngredientMerge } from "@/lib/inventory/ingredient-core";
 import { sanitizeInventoryDocId } from "@/lib/inventory/invoice-stock-post";
+import { purchaseRecordBaseCost, verifiedLastPurchase } from "@/lib/inventory/last-price";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { costPerBaseUnit } from "@/lib/costing/units";
 import { createIngredient } from "@/services/costingService";
@@ -38,7 +39,8 @@ import {
 } from "@/lib/inventory/purchase-list";
 import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
 import { splitVat } from "@/lib/inventory/vat";
-import { currentStockBase, movementSignedBase, unitCostFromPackage } from "@/lib/inventory/stock";
+import { currentStockBase, movementSignedBase, purchaseRecordUnitCost, unitCostFromPackage } from "@/lib/inventory/stock";
+import { roundMoney } from "@/lib/costing/money";
 import { excelImportPayload, periodReviewCleared } from "@/lib/inventory/pos-excel";
 import {
   movementAlreadyWritten,
@@ -169,7 +171,13 @@ function mapRecord(id: string, data: Record<string, unknown>): PurchasePriceReco
     purchaseDate: String(data.purchaseDate ?? ""),
     quantity: asNumber(data.quantity),
     packageQuantity: asNumber(data.packageQuantity),
+    purchaseQuantity: data.purchaseQuantity != null ? asNumber(data.purchaseQuantity) : undefined,
     unit: (data.unit as PurchaseUnit) || "kg",
+    purchaseUnit: data.purchaseUnit ? (data.purchaseUnit as PurchaseUnit) : undefined,
+    unitPriceNet: data.unitPriceNet != null ? asNumber(data.unitPriceNet) : undefined,
+    unitPriceGross: data.unitPriceGross != null ? asNumber(data.unitPriceGross) : undefined,
+    lineTotalNet: data.lineTotalNet != null ? asNumber(data.lineTotalNet) : undefined,
+    lineTotalGross: data.lineTotalGross != null ? asNumber(data.lineTotalGross) : undefined,
     priceBeforeVat: asNumber(data.priceBeforeVat),
     vatAmount: asNumber(data.vatAmount),
     priceIncludingVat: asNumber(data.priceIncludingVat),
@@ -536,7 +544,10 @@ export async function saveSupplierOffer(input: {
       vatType: input.vatType,
       vatRate: input.vatRate ?? 0.18,
     });
-    const normalized = unitCostFromPackage(vat.priceIncludingVat, input.packageQuantity, input.purchaseUnit);
+    const packageQty = input.packageQuantity > 0 ? input.packageQuantity : 1;
+    const unitEx = roundMoney(vat.priceBeforeVat / packageQty);
+    const unitInc = roundMoney(vat.priceIncludingVat / packageQty);
+    const normalized = unitCostFromPackage(unitInc, 1, input.purchaseUnit);
     const quotedAt = input.quotedAt || new Date().toISOString().slice(0, 10);
     const existing = await findOfferDocs(input.productId, input.supplierId);
     const payload = sanitizeFirestoreData({
@@ -552,6 +563,10 @@ export async function saveSupplierOffer(input: {
       lastUnitCost: normalized,
       lastPriceIncludingVat: vat.priceIncludingVat,
       lastPriceBeforeVat: vat.priceBeforeVat,
+      lastUnitPriceNet: unitEx,
+      lastUnitPriceGross: unitInc,
+      lastLineTotalNet: vat.priceBeforeVat,
+      lastLineTotalGross: vat.priceIncludingVat,
       lastPackageQuantity: input.packageQuantity,
       lastUnit: input.purchaseUnit,
       lastQuotedAt: quotedAt,
@@ -577,7 +592,11 @@ export async function saveSupplierOffer(input: {
         ...vat,
         vatType: input.vatType,
         vatRate: input.vatRate ?? 0.18,
-        unitCost: normalized,
+        unitPriceNet: unitEx,
+        unitPriceGross: unitInc,
+        lineTotalNet: vat.priceBeforeVat,
+        lineTotalGross: vat.priceIncludingVat,
+        unitCost: unitCostFromPackage(unitEx, 1, input.purchaseUnit),
         source: "MANUAL",
         createdAt: now,
       })
@@ -622,7 +641,9 @@ export async function recordSupplierPurchase(input: {
   try {
     const now = nowTimestamp();
     const existing = await findOfferDocs(input.productId, input.supplierId);
-    const normalized = unitCostFromPackage(input.priceIncludingVat, input.packageQuantity, input.purchaseUnit);
+    const normalized = input.unitPriceGross != null && input.unitPriceGross > 0
+      ? unitCostFromPackage(input.unitPriceGross, 1, input.purchaseUnit)
+      : unitCostFromPackage(input.priceIncludingVat, input.packageQuantity, input.purchaseUnit);
     const current = existing.docs[0]?.data() as Record<string, unknown> | undefined;
     const existingDate = String(current?.lastPurchaseDate || current?.lastPurchasedAt || "");
     if (!shouldUpdateLastPurchase(existingDate, input.purchasedAt)) {
@@ -876,7 +897,13 @@ export async function saveFinanceInvoice(invoice: PurchaseInvoice): Promise<Serv
           priceIncludingVat: gross,
           vatType: line.vatType,
           vatRate: line.vatRate,
-          unitCost: unitCostFromPackage(net || gross, line.quantity, line.unit),
+          unitCost: purchaseRecordUnitCost({
+            unitPriceNet: line.unitPriceNet,
+            lineNet: net,
+            lineGross: gross,
+            quantity: line.quantity,
+            unit: line.unit || "unit",
+          }),
           source: "PURCHASE_INVOICE",
           createdAt: now,
         })
@@ -1558,16 +1585,16 @@ export function latestUnitCost(
   }
   if (basis === "weighted") {
     const qty = rows.reduce((sum, row) => sum + purchaseQuantityInBase(row.quantity || row.packageQuantity, row.unit), 0);
-    const inc = qty > 0 ? rows.reduce((sum, row) => sum + row.unitCost * purchaseQuantityInBase(row.quantity || row.packageQuantity, row.unit), 0) / qty : product.costPerBaseUnit;
-    const before =
-      qty > 0
-        ? rows.reduce((sum, row) => sum + (row.priceBeforeVat / Math.max(purchaseQuantityInBase(row.quantity || row.packageQuantity, row.unit), 1)) * purchaseQuantityInBase(row.quantity || row.packageQuantity, row.unit), 0) / qty
-        : inc;
-    return { including: inc, before };
+    if (qty <= 0) return { including: product.costPerBaseUnit, before: product.costPerBaseUnit };
+    const totals = rows.reduce((sum, row) => {
+      const base = purchaseQuantityInBase(row.quantity || row.packageQuantity, row.unit);
+      const cost = purchaseRecordBaseCost(row, rows);
+      return { including: sum.including + cost.including * base, before: sum.before + cost.before * base };
+    }, { including: 0, before: 0 });
+    return { including: totals.including / qty, before: totals.before / qty };
   }
-  const latest = rows.slice().sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate) || b.createdAt.localeCompare(a.createdAt))[0];
-  const baseQty = purchaseQuantityInBase(latest.quantity || latest.packageQuantity, latest.unit) || 1;
-  return { including: latest.unitCost, before: latest.priceBeforeVat / baseQty };
+  const latest = verifiedLastPurchase(rows, product.id) ?? rows.slice().sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate) || b.createdAt.localeCompare(a.createdAt))[0];
+  return purchaseRecordBaseCost(latest, rows);
 }
 
 export async function recordManualStockIn(input: {

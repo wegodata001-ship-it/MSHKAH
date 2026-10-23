@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Camera, Plus } from "lucide-react";
+import { Camera, Pencil, Plus } from "lucide-react";
+import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
@@ -13,7 +14,9 @@ import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { filterUnifiedIngredients } from "@/lib/inventory/ingredient-core";
 import { ComparePane } from "@/features/admin/inventory/compare-pane";
-import { cheapestOffer, currentStockBase, labeledPurchaseUnitPrice, latestPurchase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { cheapestOffer, currentStockBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
+import { attributedPurchaseQty, displayedLastPrice } from "@/lib/inventory/last-price";
+import { InventoryRowCorrection } from "@/features/admin/inventory/inventory-row-correction";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import type { PurchaseUnit } from "@/lib/costing/types";
@@ -73,6 +76,8 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   }
   const adminPath = useAdminPath();
   const [search, setSearch] = useState("");
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [category, setCategory] = useState("");
@@ -126,7 +131,18 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
       const current = currentStockBase(props.movements, item.id);
       const incoming = stockInBase(props.movements, item.id);
       const outgoing = stockOutBase(props.movements, item.id);
-      const last = latestPurchase(props.records, item.id);
+      const lastPrice = displayedLastPrice(item, props.records);
+      const last = props.records.find((row) => row.productId === item.id && row.invoiceId && row.invoiceId === lastPrice?.invoiceId) ?? props.records.find((row) => row.productId === item.id);
+      const stockNames = attributedPurchaseQty({
+        productId: item.id,
+        movements: props.movements,
+        lines: props.invoices.flatMap((invoice) => (invoice.lines ?? []).filter((line) => line.productId === item.id).map((line) => ({
+          invoiceId: invoice.id,
+          lineKey: line.key,
+          name: line.correctedInvoiceName || line.rawName,
+          quantity: line.quantity,
+        }))),
+      });
       const itemOffers = props.offers.filter((offer) => offer.productId === item.id && offer.active !== false);
       const lastOffer = itemOffers
         .slice()
@@ -148,6 +164,8 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
         incoming,
         outgoing,
         last,
+        lastPrice,
+        stockNames,
         cheap,
         cheapName,
         supplierName,
@@ -250,6 +268,12 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                 {t("admin.inventory.current")}: {stockInDisplayUnit(row.current, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}
               </p>
               <p className="mt-1 text-sm text-coffee/70" data-product-source={row.item.id}>{sourceSummaryText(row.source, t)}</p>
+              {row.lastPrice?.excludingVat != null ? (
+                <p className="mt-1 text-sm">
+                  {t("admin.inventory.priceExVat")}: {moneyWithUnit(row.lastPrice.excludingVat, row.lastPrice.unit, t)}
+                  {row.lastPrice.includingVat != null ? ` · ${t("admin.inventory.priceIncVat")}: ${moneyWithUnit(row.lastPrice.includingVat, row.lastPrice.unit, t)}` : ""}
+                </p>
+              ) : null}
               <div className="mt-2 flex flex-wrap gap-2">
                 <button type="button" className="text-sm text-turquoise" onClick={() => setSourceId(row.item.id)}>{t("admin.inventory.sourceDetails")}</button>
                 <button type="button" className="text-sm text-turquoise" onClick={() => setIssueId(row.item.id)}>{t("admin.inventory.issue")}</button>
@@ -280,9 +304,29 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
               {rows.map((row) => (
                 <tr key={row.item.id} className="border-t border-beige-dark/10">
                   <td className="px-3 py-2">
-                    <button type="button" className="font-medium text-start" onClick={() => setDetailsId(row.item.id)}>
-                      {row.item.name}
-                    </button>
+                    {renameId === row.item.id ? (
+                      <Input
+                        value={renameDraft}
+                        autoFocus
+                        className="h-8"
+                        onChange={(event) => setRenameDraft(event.target.value)}
+                        onBlur={() => {
+                          const name = renameDraft.trim();
+                          setRenameId(null);
+                          if (!name || name === row.item.name) return;
+                          void clientAdminFetch("/api/admin/inventory/invoice/line-name", { productId: row.item.id, name, updateInventory: true });
+                        }}
+                      />
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <button type="button" className="font-medium text-start" onClick={() => setDetailsId(row.item.id)}>
+                          {row.item.name}
+                        </button>
+                        <button type="button" aria-label={t("admin.inventory.renameProduct")} onClick={() => { setRenameId(row.item.id); setRenameDraft(row.item.name); }}>
+                          <Pencil className="h-3.5 w-3.5 text-coffee/50" />
+                        </button>
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2" data-product-source={row.item.id}>
                     <div className="max-w-[16rem]">{sourceSummaryText(row.source, t)}</div>
@@ -294,12 +338,52 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
                   <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.opening, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
                   <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.incoming, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
                   <td className="px-3 py-2 text-end">{stockInDisplayUnit(row.outgoing, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
-                  <td className="px-3 py-2 text-end font-semibold">{stockInDisplayUnit(row.current, row.item).toFixed(2)} {t(unitLabelKey(row.item.purchaseUnit))}</td>
+                  <td className="px-3 py-2 text-end font-semibold">
+                    <InventoryRowCorrection
+                      mode="quantity"
+                      product={row.item}
+                      suppliers={props.suppliers}
+                      currentBase={row.current}
+                      stockNames={row.stockNames.byName}
+                      invoiceId={row.lastPrice?.invoiceId}
+                      invoiceNumber={props.invoices.find((invoice) => invoice.id === row.lastPrice?.invoiceId)?.invoiceNumber}
+                      onOpenInvoice={props.onOpenInvoice}
+                      onToast={props.onToast}
+                    />
+                  </td>
                   <td className="px-3 py-2">{row.supplierName || "—"}</td>
                   <td className="px-3 py-2 text-end">
-                    {row.last && labeledPurchaseUnitPrice(row.last)
-                      ? moneyWithUnit(labeledPurchaseUnitPrice(row.last)!.amount, labeledPurchaseUnitPrice(row.last)!.unit, t)
-                      : "—"}
+                    {row.lastPrice ? (
+                      <div>
+                        <p>{t("admin.inventory.priceExVat")}: {moneyWithUnit(row.lastPrice.excludingVat ?? 0, row.lastPrice.unit, t)}</p>
+                        {row.lastPrice.includingVat != null && (
+                          <p className="text-[11px] text-coffee/55">{t("admin.inventory.priceIncVat")}: {moneyWithUnit(row.lastPrice.includingVat, row.lastPrice.unit, t)}</p>
+                        )}
+                        <p className="text-[11px] text-coffee/45">
+                          {row.supplierName ? `${row.supplierName} · ` : ""}
+                          {row.last?.quantity ?? ""} {row.last ? t(unitLabelKey(row.last.unit)) : ""}
+                          {row.lastPrice.purchaseDate ? ` · ${row.lastPrice.purchaseDate.slice(0, 10)}` : ""}
+                          {props.invoices.find((invoice) => invoice.id === row.lastPrice?.invoiceId)?.invoiceNumber
+                            ? ` · ${props.invoices.find((invoice) => invoice.id === row.lastPrice?.invoiceId)?.invoiceNumber}`
+                            : ""}
+                        </p>
+                        {row.stockNames.byName.length > 1 && (
+                          <p className="text-[11px] text-amber-800">{row.stockNames.byName.map((item) => `${item.name} ${item.quantity}`).join(" · ")}</p>
+                        )}
+                        <InventoryRowCorrection
+                          mode="price"
+                          product={row.item}
+                          suppliers={props.suppliers}
+                          currentBase={row.current}
+                          stockNames={row.stockNames.byName}
+                          price={row.lastPrice}
+                          invoiceId={row.lastPrice.invoiceId}
+                          invoiceNumber={props.invoices.find((invoice) => invoice.id === row.lastPrice?.invoiceId)?.invoiceNumber}
+                          onOpenInvoice={props.onOpenInvoice}
+                          onToast={props.onToast}
+                        />
+                      </div>
+                    ) : "—"}
                   </td>
                   <td className="px-3 py-2 text-end">
                     {row.cheap

@@ -1,6 +1,7 @@
 import { roundMoney } from "@/lib/costing/money";
 import { toDateOnly } from "@/lib/dates/normalize";
 import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
+import { invoiceMoneyCheck } from "@/lib/inventory/invoice-finance";
 import {
   invoiceLineBlockers,
   invoiceLineReviewStatus,
@@ -42,6 +43,8 @@ export function intakeFailureMessageKey(code?: string): string {
   if (code === "NO_STOCK_LINES") return "admin.finance.noStockLines";
   if (code === "DUPLICATE_INVOICE") return "admin.inventory.smart.duplicate";
   if (code === "ALREADY_POSTED") return "admin.inventory.smart.alreadyPosted";
+  if (code === "LINES_INCOMPLETE") return "admin.inventory.smart.linesIncomplete";
+  if (code === "MONEY_GAP") return "admin.inventory.smart.moneyGapBlocked";
   return "admin.inventory.smart.stockNotPosted";
 }
 
@@ -87,16 +90,20 @@ export function invoiceApproveBlockers(
   } else if (invoice.duplicateOf && invoice.duplicateSnapshot?.posted) {
     blockers.push({ key: "posted", labelKey: "admin.inventory.smart.blockPosted" });
   }
-  const totals = invoiceFinanceTotals(invoice.lines);
-  const sourceGross = invoice.sourceGross ?? invoice.grossAmount ?? invoice.grandTotal;
-  if (sourceGross != null && totals.itemCount > 0 && Math.abs(totals.gross - sourceGross) > 1) {
-    blockers.push({ key: "amounts", labelKey: "admin.inventory.smart.blockAmounts", field: "amounts" });
-  }
   return blockers;
 }
 
+export function readyProductLineCount(lines: PurchaseInvoiceLine[]): number {
+  return lines.filter((line) => {
+    const status = invoiceLineReviewStatus(line);
+    return status.kind === "ready" || status.kind === "posted";
+  }).length;
+}
+
 export function canApproveInvoice(invoice: PurchaseInvoice): boolean {
-  return invoiceApproveBlockers(invoice).length === 0 && !isPostedInvoice(invoice);
+  if (invoiceApproveBlockers(invoice).length > 0 || isPostedInvoice(invoice)) return false;
+  const money = invoiceMoneyCheck(invoice);
+  return !money.hasMismatch || invoice.moneyGapAccepted === true;
 }
 
 export function applyComputedTotals(invoice: PurchaseInvoice): PurchaseInvoice {
@@ -105,14 +112,14 @@ export function applyComputedTotals(invoice: PurchaseInvoice): PurchaseInvoice {
   const payable = invoice.manuallyEdited && invoice.editedInvoiceTotal != null
     ? invoice.editedInvoiceTotal
     : original ?? invoice.grossAmount ?? invoice.grandTotal ?? null;
-  const difference = payable == null || !totals.itemCount ? null : roundMoney(totals.gross - payable);
+  const money = invoiceMoneyCheck(invoice);
   return {
     ...invoice,
     originalInvoiceTotal: invoice.originalInvoiceTotal ?? original,
     invoiceTotalFromSource: invoice.invoiceTotalFromSource ?? original,
     calculatedLinesTotal: totals.itemCount ? totals.gross : null,
-    differenceAmount: difference,
-    validationStatus: payable == null ? "missing" : difference != null && Math.abs(difference) <= 0.05 ? "pass" : "review",
+    differenceAmount: money.difference,
+    validationStatus: payable == null ? "missing" : !totals.itemCount ? "review" : money.hasMismatch ? "review" : "pass",
     computedNet: totals.net,
     computedVat: totals.vat,
     computedGross: totals.gross,

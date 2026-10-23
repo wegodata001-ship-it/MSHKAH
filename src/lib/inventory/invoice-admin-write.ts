@@ -1,15 +1,17 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { baseUnitFor, costPerBaseUnit, isPackUnit, purchaseQuantityInBase } from "@/lib/costing/units";
 import { invoiceLineQuantityBase, packNeedsCompletion } from "@/lib/inventory/ingredient-core";
-import { findDuplicateInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
+import { findDuplicateInvoice, isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { isConfirmedInvoiceMatch } from "@/lib/inventory/invoice-line-review";
-import { syncInvoiceTotals } from "@/lib/inventory/invoice-finance";
+import { invoiceMoneyCheck, syncInvoiceTotals } from "@/lib/inventory/invoice-finance";
+import { invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { invoicePurchaseMovementId, selectStockPostLines } from "@/lib/inventory/invoice-stock-post";
+import { sharedProductQualifierConflicts } from "@/lib/inventory/product-split";
 import { evaluateStockPostPolicy } from "@/lib/inventory/stock-post-policy";
 import { correctionMovementId, planQuantityCorrection } from "@/lib/inventory/quantity-correction";
 import type { BaseUnit, CostingIngredient } from "@/lib/costing/types";
 import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
-import { unitCostFromPackage } from "@/lib/inventory/stock";
+import { purchaseRecordUnitCost, unitCostFromPackage } from "@/lib/inventory/stock";
 import { COLLECTIONS } from "@/lib/firebase/collections";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap } from "@/lib/inventory/types";
@@ -36,7 +38,9 @@ async function upsertSupplierOffer(
   const current = existing.docs[0]?.data() as Record<string, unknown> | undefined;
   const existingDate = String(current?.lastPurchaseDate || current?.lastPurchasedAt || "");
   if (!shouldUpdateLastPurchase(existingDate, invoice.invoiceDate || invoice.receivedAt)) return;
-  const normalized = unitCostFromPackage(gross, line.quantity || 1, line.unit || "unit");
+  const normalized = line.unitPriceGross != null && line.unitPriceGross > 0
+    ? unitCostFromPackage(line.unitPriceGross, 1, line.unit || "unit")
+    : unitCostFromPackage(gross, line.quantity || 1, line.unit || "unit");
   const payload = sanitizeFirestoreData({
     productId: line.productId,
     supplierId: invoice.supplierId,
@@ -202,7 +206,13 @@ export async function persistInvoiceDocument(
           priceIncludingVat: gross,
           vatType: line.vatType,
           vatRate: line.vatRate,
-          unitCost: unitCostFromPackage(net || gross, line.quantity, line.unit),
+          unitCost: purchaseRecordUnitCost({
+            unitPriceNet: line.unitPriceNet,
+            lineNet: net,
+            lineGross: gross,
+            quantity: line.quantity,
+            unit: line.unit,
+          }),
           source: "PURCHASE_INVOICE",
           createdAt: now,
         })
@@ -242,6 +252,27 @@ export async function postInvoiceStock(
     throw new Error("INVOICE_CANCELLED");
   }
   const merged: PurchaseInvoice = { ...live, ...invoice, id: invoice.id, lines: invoice.lines?.length ? invoice.lines : live.lines };
+  const alreadyPosted = isPostedInvoice(live);
+  if (!alreadyPosted) {
+    const lineProblems = invoiceLineBlockers(merged.lines ?? []);
+    if (lineProblems.length > 0) {
+      const error = new Error("LINES_INCOMPLETE") as Error & { detail?: unknown };
+      error.detail = lineProblems.map((item) => ({ line: item.lineIndex, kind: item.kind, name: item.productName }));
+      throw error;
+    }
+    const money = invoiceMoneyCheck(merged);
+    if (money.hasMismatch && !merged.moneyGapAccepted) {
+      const error = new Error("MONEY_GAP") as Error & { detail?: unknown };
+      error.detail = { basis: money.basis, difference: money.difference };
+      throw error;
+    }
+    if (money.hasMismatch && merged.moneyGapAccepted && !live.moneyGapAccepted) {
+    const at = new Date().toISOString();
+    merged.moneyGapAcceptedBy = actor;
+    merged.moneyGapAcceptedAt = at;
+    merged.audit = [...(merged.audit ?? []), { at, actor, action: "money-gap-accepted", detail: String(money.difference ?? ""), before: String(money.lineAmount ?? ""), after: String(money.headerAmount ?? "") }];
+    }
+  }
   const supplierId = await resolveSupplierId(db, merged);
   if (supplierId) merged.supplierId = supplierId;
 
@@ -275,6 +306,12 @@ export async function postInvoiceStock(
   }
 
   const selected = selectStockPostLines(merged, lineKeys);
+  const conflicts = sharedProductQualifierConflicts(selected.map((line) => ({ productId: line.productId, name: line.correctedInvoiceName || line.rawName })));
+  if (conflicts.length) {
+    const error = new Error("PRODUCT_CONFLICT") as Error & { detail?: unknown };
+    error.detail = { conflicts };
+    throw error;
+  }
   if (!selected.length) {
     const anyPosted = merged.lines.some((line) => line.postedToStock || postedKeys.has(line.key));
     if (anyPosted) {
@@ -370,9 +407,15 @@ export async function postInvoiceStock(
           invoiceLineId: line.key,
           lineTotalNet: net,
           lineTotalGross: gross,
-          unitCost: qtyBase > 0 ? (net || gross) / qtyBase : 0,
-          unitCostNet: qtyBase > 0 ? net / qtyBase : 0,
-          unitCostGross: qtyBase > 0 ? gross / qtyBase : 0,
+          unitCost: line.unitPriceNet != null && line.unitPriceNet > 0
+            ? purchaseRecordUnitCost({ unitPriceNet: line.unitPriceNet, lineNet: net, lineGross: gross, quantity: line.quantity ?? 1, unit: line.unit || "unit" })
+            : qtyBase > 0 ? (net || gross) / qtyBase : 0,
+          unitCostNet: line.unitPriceNet != null && line.unitPriceNet > 0
+            ? purchaseRecordUnitCost({ unitPriceNet: line.unitPriceNet, lineNet: net, lineGross: gross, quantity: line.quantity ?? 1, unit: line.unit || "unit" })
+            : qtyBase > 0 ? net / qtyBase : 0,
+          unitCostGross: line.unitPriceGross != null && line.unitPriceGross > 0
+            ? unitCostFromPackage(line.unitPriceGross, 1, line.unit || "unit")
+            : qtyBase > 0 ? gross / qtyBase : 0,
           vatRate: line.vatRate ?? null,
           quantityIn: qtyBase,
           quantityBefore: before,

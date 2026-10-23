@@ -148,6 +148,7 @@ export function buildReviewedInvoice(input: {
         key: newInvoiceLineKey(),
         rawName: line.originalDescription || line.name,
         originalDescription: line.originalDescription || line.name,
+        originalScannedName: line.originalDescription || line.name,
         quantity: qty,
         unit,
         unitPrice: line.unitPriceNet ?? unitPrice,

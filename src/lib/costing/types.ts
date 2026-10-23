@@ -28,6 +28,16 @@ export type CostingIngredient = {
   recommendedStock?: number;
   lastSupplierId?: string;
   lastReceivedAt?: string;
+  adminPriceCorrection?: {
+    unitPriceExcludingVat: number;
+    unitPriceIncludingVat: number | null;
+    basis: "including" | "excluding" | "exempt";
+    supplierId?: string | null;
+    reason: string;
+    at: string;
+    actor?: string | null;
+    invoiceId?: string | null;
+  } | null;
   compareGroupId?: string;
   compareGroupName?: string;
   active: boolean;

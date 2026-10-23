@@ -57,6 +57,35 @@ export function isJerusalemToday(value: string | Date | null | undefined, now = 
   return date.getTime() >= today.start.getTime() && date.getTime() < today.end.getTime();
 }
 
+export type OrderStatsPeriod = "today" | "yesterday" | "7d" | "30d" | "all";
+
+export function jerusalemPeriodBounds(
+  period: Exclude<OrderStatsPeriod, "all">,
+  now = new Date()
+): { start: Date; end: Date } {
+  const today = jerusalemDayBounds(now);
+  if (period === "today") return { start: today.start, end: today.end };
+  if (period === "yesterday") {
+    const yesterday = jerusalemDayBounds(new Date(today.start.getTime() - 60_000));
+    return { start: yesterday.start, end: yesterday.end };
+  }
+  const days = period === "7d" ? 7 : 30;
+  const shifted = jerusalemDayBounds(new Date(today.start.getTime() - (days - 1) * 86_400_000));
+  return { start: shifted.start, end: today.end };
+}
+
+export function isInJerusalemPeriod(
+  value: string | Date | null | undefined,
+  period: OrderStatsPeriod,
+  now = new Date()
+): boolean {
+  if (period === "all") return true;
+  const ms = parseTimestamp(value);
+  if (ms == null) return false;
+  const bounds = jerusalemPeriodBounds(period, now);
+  return ms >= bounds.start.getTime() && ms < bounds.end.getTime();
+}
+
 export function parseTimestamp(value: string | Date | null | undefined): number | null {
   if (!value) return null;
   const ms = value instanceof Date ? value.getTime() : new Date(value).getTime();

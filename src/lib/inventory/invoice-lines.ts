@@ -1,4 +1,5 @@
 import { roundMoney } from "@/lib/costing/money";
+import { deriveLineUnitPrices, shownLinePrices } from "@/lib/inventory/unit-price";
 import { LINE_UNITS } from "@/lib/costing/units";
 import type { PurchaseUnit } from "@/lib/costing/types";
 import { DEFAULT_VAT_RATE, splitVat } from "@/lib/inventory/vat";
@@ -31,6 +32,7 @@ export function emptyInvoiceLine(vatRate: number | null = DEFAULT_VAT_RATE): Pur
 const MONEY_TOLERANCE = 0.05;
 
 const SUMMARY_LABEL = /^(?:סה["״']?כ(?:\s+(?:לתשלום|כולל מע["״']?מ|לפני מע["״']?מ|לפני הנחה))?|מע["״']?מ|יתרה(?:\s+לתשלום)?|total|subtotal|grand total|vat|المجموع|الإجمالي|الضريبة)$/i;
+const ADJUSTMENT_LABEL = /^(?:התאמה(?:\s+עיגול)?|עיגול|rounding|adjustment|تعديل)$/i;
 const DISCOUNT_LABEL = /^(?:הנחה|خصم|discount)$/i;
 const RETURN_LABEL = /^(?:זיכוי|החזרה|החזר|return|credit|مرتجع)$/i;
 const DEPOSIT_LABEL = /^(?:פיקדון|deposit|تأمين)$/i;
@@ -40,22 +42,30 @@ function lineLabel(line: { rawName?: string; originalDescription?: string | null
 }
 
 export function detectedLineType(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription">): InvoiceLineType | null {
-  if (line.lineType && line.lineType !== "UNKNOWN") return line.lineType;
   const label = lineLabel(line);
+  if (label && ADJUSTMENT_LABEL.test(label)) return "ADJUSTMENT";
+  if (label && SUMMARY_LABEL.test(label)) return "SUMMARY";
+  if (line.lineType && line.lineType !== "UNKNOWN") return line.lineType;
   if (!label) return line.lineType ?? null;
-  if (SUMMARY_LABEL.test(label)) return "SUMMARY";
   if (DISCOUNT_LABEL.test(label)) return "DISCOUNT";
   if (RETURN_LABEL.test(label)) return "RETURN";
   if (DEPOSIT_LABEL.test(label)) return "DEPOSIT";
   return line.lineType ?? null;
 }
 
-export function invoiceLineRole(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription">): "product" | "discount" | "return" | "deposit" | "summary" | "shipping" | "service" {
+export function isNonStockInvoiceLine(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription" | "skipInventory">): boolean {
+  if (line.skipInventory) return true;
+  const type = detectedLineType(line);
+  return type === "SUMMARY" || type === "DISCOUNT" || type === "ADJUSTMENT" || type === "RETURN" || type === "DEPOSIT" || type === "SHIPPING" || type === "SERVICE";
+}
+
+export function invoiceLineRole(line: Pick<PurchaseInvoiceLine, "lineType" | "rawName" | "originalDescription">): "product" | "discount" | "return" | "deposit" | "summary" | "shipping" | "service" | "adjustment" {
   const type = detectedLineType(line);
   if (type === "SUMMARY") return "summary";
   if (type === "DISCOUNT") return "discount";
   if (type === "RETURN") return "return";
   if (type === "DEPOSIT") return "deposit";
+  if (type === "ADJUSTMENT") return "adjustment";
   if (type === "SHIPPING") return "shipping";
   if (type === "SERVICE") return "service";
   return "product";
@@ -159,35 +169,48 @@ function signedMoney(value: number, role: ReturnType<typeof invoiceLineRole>): n
   return value > 0 ? -value : value;
 }
 
-export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
+function finalizeInvoiceLineCalculated(line: PurchaseInvoiceLine, vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
   const role = detectedLineType(line);
   const taxMode = line.vatType || line.taxMode || line.vatMode;
   const printed = resolvePrintedLineMoney(line, vatRate);
   if (printed) {
     const qty = Number(line.quantity);
     const hasQty = Number.isFinite(qty) && qty !== 0;
+    const prices = deriveLineUnitPrices({
+      quantity: qty,
+      vatRate: line.vatRate ?? vatRate,
+      taxMode: taxMode === "exempt" ? "exempt" : taxMode === "exclusive" ? "excluding" : taxMode === "unknown" ? "unknown" : "including",
+      unitPrice: line.unitPrice,
+      unitPriceIncludingVat: line.unitPriceGross,
+      unitPriceExcludingVat: line.unitPriceNet,
+      lineTotalIncludingVat: printed.gross,
+      lineTotalExcludingVat: printed.net,
+    });
     const nonProduct = role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || role === "SHIPPING" || role === "SERVICE" || role === "ADJUSTMENT";
+    const lineNet = prices.lineTotalExcludingVat ?? printed.net;
+    const lineGross = prices.lineTotalIncludingVat ?? printed.gross;
     return {
       ...line,
       lineType: role ?? line.lineType,
       skipInventory: nonProduct || line.skipInventory,
-      unitPrice: line.unitPrice ?? (hasQty && printed.net != null ? roundMoney(printed.net / qty) : line.unitPrice),
+      unitPrice: line.unitPrice ?? prices.unitPriceExcludingVat ?? (hasQty && printed.net != null ? roundMoney(printed.net / qty) : line.unitPrice),
+      sourcePriceType: prices.sourcePriceType,
       vatType: taxMode === "unknown" ? "unknown" : ((taxMode || "inclusive") as VatType),
       vatMode: taxMode === "unknown" ? "unknown" : ((taxMode || "inclusive") as VatType),
       taxMode: taxMode === "unknown" ? "unknown" : ((taxMode || "inclusive") as VatType),
       vatRate: line.vatRate ?? (taxMode === "unknown" ? null : vatRate),
-      lineTotal: printed.gross ?? printed.net,
-      priceBeforeVat: printed.net,
-      vatAmount: printed.vat,
-      priceIncludingVat: printed.gross,
-      netAmount: printed.net,
-      grossAmount: printed.gross,
-      lineNet: printed.net ?? line.lineNet ?? null,
-      lineGross: printed.gross ?? line.lineGross ?? null,
+      lineTotal: lineGross ?? lineNet,
+      priceBeforeVat: lineNet,
+      vatAmount: prices.vatAmount ?? printed.vat,
+      priceIncludingVat: lineGross,
+      netAmount: lineNet,
+      grossAmount: lineGross,
+      lineNet: lineNet ?? line.lineNet ?? null,
+      lineGross: lineGross ?? line.lineGross ?? null,
       needsReview: Boolean(line.needsReview) || printed.conflict,
       rowStatus: printed.conflict ? "review" : line.rowStatus,
-      unitPriceNet: hasQty && printed.net != null ? roundMoney(printed.net / qty) : line.unitPriceNet ?? null,
-      unitPriceGross: hasQty && printed.gross != null ? roundMoney(printed.gross / qty) : line.unitPriceGross ?? null,
+      unitPriceNet: prices.unitPriceExcludingVat ?? line.unitPriceNet ?? null,
+      unitPriceGross: prices.unitPriceIncludingVat ?? line.unitPriceGross ?? null,
     };
   }
   const classified: PurchaseInvoiceLine = role && role !== line.lineType ? { ...line, lineType: role, skipInventory: role === "SUMMARY" || role === "DISCOUNT" || role === "RETURN" || role === "DEPOSIT" || role === "ADJUSTMENT" || line.skipInventory } : line;
@@ -252,6 +275,72 @@ export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number |
     unitPriceNet: hasQty ? roundMoney(vat.priceBeforeVat / qty) : null,
     unitPriceGross: hasQty ? roundMoney(vat.priceIncludingVat / qty) : null,
   };
+}
+
+function editedLineMoney(line: PurchaseInvoiceLine): Partial<PurchaseInvoiceLine> {
+  return {
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    discount: line.discount,
+    discountAmount: line.discountAmount,
+    lineTotal: line.lineTotal,
+    vatType: line.vatType,
+    taxMode: line.taxMode,
+    vatMode: line.vatMode,
+    vatRate: line.vatRate,
+    vatAmount: line.vatAmount,
+    priceBeforeVat: line.priceBeforeVat,
+    priceIncludingVat: line.priceIncludingVat,
+    netAmount: line.netAmount,
+    grossAmount: line.grossAmount,
+    lineNet: line.lineNet,
+    lineGross: line.lineGross,
+    unitPriceNet: line.unitPriceNet,
+    unitPriceGross: line.unitPriceGross,
+    unitPriceExcludingVat: line.unitPriceExcludingVat,
+    unitPriceIncludingVat: line.unitPriceIncludingVat,
+    lineTotalExcludingVat: line.lineTotalExcludingVat,
+    lineTotalIncludingVat: line.lineTotalIncludingVat,
+    priceIncludesVat: line.priceIncludesVat,
+    lastEditedField: line.lastEditedField,
+    sourcePriceType: line.sourcePriceType,
+    originalUnitPrice: line.originalUnitPrice,
+    originalLineTotal: line.originalLineTotal,
+    priceManuallyEdited: line.priceManuallyEdited,
+  };
+}
+
+export function finalizeInvoiceLine(line: PurchaseInvoiceLine, vatRate: number | null = DEFAULT_VAT_RATE): PurchaseInvoiceLine {
+  const computed = finalizeInvoiceLineCalculated(line, vatRate);
+  if (!line.lastEditedField) return computed;
+  return { ...computed, ...editedLineMoney(line) };
+}
+
+export function invoiceTableTotals(lines: PurchaseInvoiceLine[]) {
+  let net = 0;
+  let vat = 0;
+  let gross = 0;
+  let discounts = 0;
+  let adjustments = 0;
+  for (const line of lines) {
+    const role = invoiceLineRole(line);
+    if (role === "summary") continue;
+    const shown = shownLinePrices(line);
+    const amount = shown.lineExcludingVat ?? shown.line ?? 0;
+    if (role === "discount" || role === "return") {
+      discounts = roundMoney(discounts + Math.abs(amount));
+      continue;
+    }
+    if (role === "adjustment") {
+      adjustments = roundMoney(adjustments + amount);
+      continue;
+    }
+    net = roundMoney(net + (shown.lineExcludingVat ?? (shown.basis === "unknown" ? shown.line ?? 0 : 0)));
+    vat = roundMoney(vat + (shown.vatAmount ?? 0));
+    gross = roundMoney(gross + (shown.lineIncludingVat ?? (shown.basis === "unknown" ? shown.line ?? 0 : 0)));
+    discounts = roundMoney(discounts + shown.discount);
+  }
+  return { net, vat, gross, discounts, adjustments };
 }
 
 export function invoiceFinanceTotals(lines: PurchaseInvoiceLine[], vatRate = DEFAULT_VAT_RATE) {

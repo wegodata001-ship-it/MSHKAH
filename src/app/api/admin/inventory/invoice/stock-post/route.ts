@@ -58,6 +58,10 @@ export async function POST(request: NextRequest) {
     if (message === "CREDIT_NO_AUTO_IN" || message === "ALREADY_RECEIVED") {
       return Response.json({ error: message, code: message, invoice: current }, { status: 409 });
     }
+    if (message === "LINES_INCOMPLETE" || message === "MONEY_GAP" || message === "PRODUCT_CONFLICT") {
+      const detail = (error as Error & { detail?: unknown }).detail;
+      return Response.json({ error: message, code: message, invoice: current, detail }, { status: 409 });
+    }
     if (message === "PACK_UNRESOLVED") {
       const detail = (error as Error & { detail?: unknown }).detail;
       return Response.json(

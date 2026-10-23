@@ -1,4 +1,5 @@
 import { baseUnitFor, purchaseQuantityInBase } from "@/lib/costing/units";
+import { storedPurchaseUnitPrices } from "@/lib/inventory/unit-price";
 import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
 import type { InventoryMovement, PurchasePriceRecord, SupplierOffer } from "@/lib/inventory/types";
 
@@ -34,6 +35,18 @@ export function unitCostFromPackage(
   const base = purchaseQuantityInBase(packageQuantity, unit);
   if (base <= 0) return 0;
   return priceIncludingVat / base;
+}
+
+/** Cost of one purchase unit. Uses the stored unit price when the line amount is a total. */
+export function purchaseRecordUnitCost(input: {
+  unitPriceNet?: number | null;
+  lineNet?: number | null;
+  lineGross?: number | null;
+  quantity: number;
+  unit: PurchaseUnit;
+}): number {
+  if (input.unitPriceNet != null && input.unitPriceNet > 0) return unitCostFromPackage(input.unitPriceNet, 1, input.unit);
+  return unitCostFromPackage(input.lineNet || input.lineGross || 0, input.quantity || 1, input.unit);
 }
 
 export function offerPurchaseUnit(offer: SupplierOffer): PurchaseUnit | undefined {
@@ -84,6 +97,7 @@ export function cheapestOffer(offers: SupplierOffer[], productBase?: BaseUnit): 
 export function offerNormalizedNet(offer: SupplierOffer): number | undefined {
   const qty = offer.lastPackageQuantity ?? offer.packageQuantity;
   const unit = offer.lastUnit ?? offer.purchaseUnit;
+  if (offer.lastUnitPriceNet != null && offer.lastUnitPriceNet > 0 && unit) return unitCostFromPackage(offer.lastUnitPriceNet, 1, unit);
   if (offer.lastPriceBeforeVat != null && qty && unit) return unitCostFromPackage(offer.lastPriceBeforeVat, qty, unit);
   const gross = offerNormalizedLastPurchase(offer);
   if (gross == null) return undefined;
@@ -95,6 +109,7 @@ export function offerNormalizedNet(offer: SupplierOffer): number | undefined {
 export function offerNormalizedLastPurchase(offer: SupplierOffer): number | undefined {
   const qty = offer.lastPackageQuantity ?? offer.packageQuantity;
   const unit = offer.lastUnit ?? offer.purchaseUnit;
+  if (offer.lastUnitPriceGross != null && offer.lastUnitPriceGross > 0 && unit) return unitCostFromPackage(offer.lastUnitPriceGross, 1, unit);
   if (offer.lastPriceIncludingVat != null && qty && unit) return unitCostFromPackage(offer.lastPriceIncludingVat, qty, unit);
   return offer.lastPurchasePrice ?? offer.lastUnitCost ?? undefined;
 }
@@ -118,18 +133,15 @@ export function cheapestLastPurchase(
   })[0];
 }
 
-/** Invoice unit cost is stored per base unit (gram/ml). Show it on the purchase unit, once. */
-export function labeledPurchaseUnitPrice(record: Pick<PurchasePriceRecord, "unit" | "purchaseUnit" | "quantity" | "packageQuantity" | "purchaseQuantity" | "priceBeforeVat" | "unitPriceNet" | "unitCost">): { amount: number; unit: PurchaseUnit } | null {
+/** Show the purchase-unit price once. A stored unit price is not divided by quantity again. */
+export function labeledPurchaseUnitPrice(record: Pick<PurchasePriceRecord, "unit" | "purchaseUnit" | "quantity" | "packageQuantity" | "purchaseQuantity" | "priceBeforeVat" | "priceIncludingVat" | "unitPriceNet" | "unitPriceGross" | "lineTotalNet" | "lineTotalGross" | "vatRate" | "unitCost">): { amount: number; amountIncludingVat: number | null; unit: PurchaseUnit } | null {
   const unit = record.purchaseUnit || record.unit;
   if (!unit) return null;
-  const qty = record.purchaseQuantity || record.packageQuantity || record.quantity;
-  const net = record.priceBeforeVat;
-  if (record.unitPriceNet != null && record.unitPriceNet > 0 && qty > 0 && net > 0) {
-    const extended = record.unitPriceNet * qty;
-    if (Math.abs(extended - net) <= Math.max(0.05, net * 0.02)) return { amount: record.unitPriceNet, unit };
+  const resolved = storedPurchaseUnitPrices(record);
+  if (resolved.unitExcludingVat != null && resolved.unitExcludingVat > 0) {
+    return { amount: resolved.unitExcludingVat, amountIncludingVat: resolved.unitIncludingVat, unit };
   }
-  if (net > 0 && qty > 0) return { amount: net / qty, unit };
-  if (record.unitCost > 0) return { amount: record.unitCost * purchaseQuantityInBase(1, unit), unit };
+  if (record.unitCost > 0) return { amount: record.unitCost * purchaseQuantityInBase(1, unit), amountIncludingVat: null, unit };
   return null;
 }
 

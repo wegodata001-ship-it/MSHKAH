@@ -2,7 +2,7 @@ import type { BaseUnit, PurchaseUnit } from "@/lib/costing/types";
 import { unitsCompatible } from "@/lib/costing/units";
 import { packNeedsCompletion } from "@/lib/inventory/ingredient-core";
 import { isIntakeAssignmentReady } from "@/lib/inventory/invoice-line-review";
-import { lineHasAmount } from "@/lib/inventory/invoice-lines";
+import { isNonStockInvoiceLine, lineHasAmount } from "@/lib/inventory/invoice-lines";
 import type { PurchaseInvoiceLine } from "@/lib/inventory/types";
 
 export type InvoiceLineCareKind =
@@ -50,7 +50,7 @@ export function invoiceLineReviewStatus(
   if (line.postedToStock) {
     return { kind: "posted", ready: true, labelKey: "admin.inventory.smart.rowPosted", field: "product" };
   }
-  if (isAncillaryInvoiceLine(line)) {
+  if (isAncillaryInvoiceLine(line) || isNonStockInvoiceLine(line)) {
     return { kind: "ancillary", ready: true, labelKey: "admin.inventory.smart.rowAncillary", field: "product" };
   }
   if (isPackagingInvoiceLine(line)) {
@@ -134,7 +134,11 @@ export function invoiceLineEditStamp(line: PurchaseInvoiceLine): string {
     quantity: line.quantity ?? null,
     unit: line.unit ?? null,
     unitPrice: line.unitPrice ?? null,
+    lineTotal: line.lineTotal ?? null,
+    vatType: line.vatType ?? null,
     vatRate: line.vatRate ?? null,
+    discount: line.discount ?? null,
+    lastEditedField: line.lastEditedField ?? null,
     conversionFactor: line.conversionFactor ?? null,
     conversionNote: line.conversionNote ?? null,
   });

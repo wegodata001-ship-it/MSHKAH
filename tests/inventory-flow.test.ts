@@ -20,7 +20,7 @@ import {
   invoiceReviewCounts,
   isConfirmedInvoiceMatch,
 } from "@/lib/inventory/invoice-line-review";
-import { inventoryCategories, MATCH_SUGGEST_MIN, MATCH_TOP_N, productNameSimilarity, rankProductMatches } from "@/lib/inventory/product-match";
+import { inventoryCategories, isSafeInvoiceMatch, MATCH_SUGGEST_MIN, MATCH_TOP_N, productNameSimilarity, rankProductMatches } from "@/lib/inventory/product-match";
 import type { ExtractedInvoice } from "@/lib/inventory/invoice-extract";
 import { invoiceFinanceTotals } from "@/lib/inventory/invoice-lines";
 import { cheapestLastPurchase, offerNormalizedNet } from "@/lib/inventory/stock";
@@ -305,7 +305,9 @@ describe("smart invoice matching", () => {
     expect(invoice.lines.filter((line) => invoiceLineMatchesFilter(line, "unmapped", "")).length).toBe(counts.none);
     const weak = { ...invoice.lines[5], productId: "barilla", matchKind: "suggest" as const, matchConfirmed: false, matchConfidence: 0.72 };
     expect(confirmSafeInvoiceMatches([weak])[0].matchConfirmed).toBe(false);
-    expect(confirmSafeInvoiceMatches([{ ...weak, matchConfidence: 0.94 }])[0].matchConfirmed).toBe(true);
+    expect(confirmSafeInvoiceMatches([{ ...weak, matchConfidence: 0.94 }])[0].matchConfirmed).toBe(false);
+    expect(isSafeInvoiceMatch(0.94, "suggest")).toBe(false);
+    expect(isSafeInvoiceMatch(0.94, "exact")).toBe(true);
     expect(inventoryCategories(stock)).toEqual(["חלב", "מזון", "קפה"]);
   });
 });

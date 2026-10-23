@@ -21,10 +21,10 @@ import type { InvoiceExtractResponse } from "@/lib/inventory/invoice-extract";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap, SupplierOffer } from "@/lib/inventory/types";
 import { rememberSupplierAlias, saveFinanceInvoice, savePurchaseInvoiceDraft, saveSupplierItemMap, transferInvoiceLinesToStock } from "@/services/inventoryService";
 import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/inventory/invoice-supplier-field";
-import { headerGross } from "@/lib/inventory/invoice-finance";
+import { headerGross, invoiceMoneyCheck, payableInvoiceGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
-import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers } from "@/lib/inventory/invoice-intake";
+import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers, readyProductLineCount } from "@/lib/inventory/invoice-intake";
 import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
 import { InvoiceCaptureStage } from "@/features/admin/inventory/invoice-capture-stage";
@@ -296,6 +296,8 @@ export function SmartInvoiceFlow({
   const productById = Object.fromEntries(ingredients.map((item) => [item.id, { baseUnit: item.baseUnit, purchaseUnit: item.purchaseUnit }]));
   const blockers = invoiceApproveBlockers({ ...invoice, lines: reviewLines }, { dirtyKeys });
   const lineBlockers = invoiceLineBlockers(reviewLines, { dirtyKeys, productById });
+  const moneyCheck = invoiceMoneyCheck({ ...invoice, lines: reviewLines });
+  const readyCount = readyProductLineCount(reviewLines);
   const assignmentPlan = invoiceAssignmentPlan(reviewLines, ingredients);
   const supplierGuess = !invoice.supplierId && invoice.supplierName
     ? matchSupplier(invoice.supplierName, invoice.supplierTaxId, suppliers)
@@ -499,6 +501,40 @@ export function SmartInvoiceFlow({
     const message = t(key);
     onToast(message, "error");
     setIntakeError(message);
+  };
+
+  const gateReadyInvoice = (current: PurchaseInvoice): PurchaseInvoice | null => {
+    const nextLineBlockers = invoiceLineBlockers(current.lines, {
+      productById: Object.fromEntries(ingredientsRef.current.map((item) => [item.id, { baseUnit: item.baseUnit, purchaseUnit: item.purchaseUnit }])),
+    });
+    if (nextLineBlockers.length) {
+      setHoldIntake(true);
+      const first = nextLineBlockers[0];
+      setIntakeError(
+        t("admin.inventory.smart.lineIssue")
+          .replace("{line}", String(first?.lineIndex ?? ""))
+          .replace("{reason}", t(first?.labelKey ?? "admin.inventory.smart.linesIncomplete"))
+      );
+      if (first) focusBlocker(first.lineKey, first.field);
+      return null;
+    }
+    const nextHeader = invoiceApproveBlockers(current).filter((item) => item.field !== "lines");
+    if (nextHeader.length) {
+      setHoldIntake(true);
+      setIntakeError(t(nextHeader[0]?.labelKey ?? "admin.inventory.smart.linesIncomplete").replace("{count}", String(nextHeader[0]?.count ?? 0)));
+      document.getElementById("invoice-intake-notice")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return null;
+    }
+    const moneyNow = invoiceMoneyCheck(current);
+    if (moneyNow.hasMismatch && !current.moneyGapAccepted) {
+      const amount = formatIls(Math.abs(moneyNow.difference ?? 0));
+      if (!window.confirm(t("admin.inventory.smart.moneyGapConfirm").replace("{amount}", amount))) {
+        setIntakeError(t("admin.inventory.smart.moneyGapReady").replace("{amount}", amount));
+        return null;
+      }
+      return { ...current, moneyGapAccepted: true };
+    }
+    return current;
   };
 
   const postReadyInvoice = async (ready: PurchaseInvoice) => {
@@ -728,6 +764,8 @@ export function SmartInvoiceFlow({
             supplierId={invoice.supplierId}
             supplierName={invoice.supplierName}
             vatRate={vatRate}
+            sourcePayable={payableInvoiceGross(invoice)}
+            sourceNet={invoice.sourceNet ?? invoice.netAmount ?? invoice.subtotal ?? null}
             invoiceId={invoice.id}
             locked={locked || postedDuplicate}
             highlightKey={highlightKey}
@@ -827,12 +865,22 @@ export function SmartInvoiceFlow({
                 {lineBlockers.map((item) => (
                   <li key={item.lineKey}>
                     <button type="button" className="underline" onClick={() => focusBlocker(item.lineKey, item.field)}>
-                      {item.lineIndex}. {item.productName || "—"} — {t(item.labelKey)}
+                      {t("admin.inventory.smart.lineIssue").replace("{line}", String(item.lineIndex)).replace("{reason}", t(item.labelKey))}
                     </button>
                   </li>
                 ))}
               </ul>
             </div>
+          )}
+          {lineBlockers.length === 0 && moneyCheck.hasMismatch && !invoice.moneyGapAccepted && (
+            <p className="text-sm font-medium text-amber-800">
+              {t("admin.inventory.smart.moneyGapReady").replace("{amount}", formatIls(Math.abs(moneyCheck.difference ?? 0)))}
+            </p>
+          )}
+          {lineBlockers.length === 0 && (!moneyCheck.hasMismatch || invoice.moneyGapAccepted) && readyCount > 0 && !stockPosted && !postedDuplicate && (
+            <p className="text-sm font-medium text-emerald-800">
+              {t("admin.inventory.smart.productsReady").replace("{count}", String(readyCount))}
+            </p>
           )}
           {blockers.filter((item) => item.field !== "lines").map((item) => (
             <button
@@ -855,7 +903,7 @@ export function SmartInvoiceFlow({
             variant="turquoise"
             data-intake-phase={phase}
             className="relative z-30 min-h-11 w-full touch-manipulation sm:w-auto"
-            disabled={saving || stockPosted || postedDuplicate}
+            disabled={saving || stockPosted || postedDuplicate || lineBlockers.length > 0}
             onClick={async () => {
               if (!invoice || savingRef.current) return;
     savingRef.current = true;
@@ -884,24 +932,13 @@ export function SmartInvoiceFlow({
                 }
                 const savedLines = invoiceRef.current?.lines ?? linesRef.current?.preview() ?? invoice.lines;
                 const base = invoiceRef.current ?? invoice;
-                const current = applyComputedTotals({ ...base, lines: savedLines });
+                const checked = applyComputedTotals({ ...base, lines: savedLines });
+                const current = gateReadyInvoice(checked);
+                if (!current) return;
                 invoiceRef.current = current;
                 setInvoice(current);
                 setWorkingLines(current.lines);
                 setDirtyKeys([]);
-                const nextLineBlockers = invoiceLineBlockers(current.lines, {
-                  productById: Object.fromEntries(ingredientsRef.current.map((item) => [item.id, { baseUnit: item.baseUnit, purchaseUnit: item.purchaseUnit }])),
-                });
-                const nextHeader = invoiceApproveBlockers(current);
-      if (nextLineBlockers.length || nextHeader.length) {
-        setHoldIntake(true);
-        const count = nextLineBlockers.length || nextHeader.length;
-        setIntakeError(t("admin.inventory.smart.intakeNotStarted").replace("{count}", String(count)));
-        const first = nextLineBlockers[0];
-        if (first) focusBlocker(first.lineKey, first.field);
-        else document.getElementById("invoice-intake-notice")?.scrollIntoView({ behavior: "smooth", block: "center" });
-        return;
-      }
                 let createdLines = current.lines;
                 try {
                   createdLines = await materializePlannedLines(current.lines, current.supplierName);
@@ -982,7 +1019,7 @@ export function SmartInvoiceFlow({
             <Button
               type="button"
               variant="turquoise"
-              disabled={saving}
+              disabled={saving || lineBlockers.length > 0}
               onClick={async () => {
                 if (!invoice || savingRef.current) return;
                 savingRef.current = true;
@@ -1001,7 +1038,9 @@ export function SmartInvoiceFlow({
                     if (error instanceof InvoiceLineSaveError) focusBlocker(error.lineKey, "update");
                     return;
                   }
-                  let ready = invoiceRef.current ?? invoice;
+                  const gated = gateReadyInvoice(applyComputedTotals(invoiceRef.current ?? invoice));
+                  if (!gated) return;
+                  let ready = gated;
                   if (!ready.supplierId && ready.supplierName) {
                     const match = matchSupplier(ready.supplierName, ready.supplierTaxId, suppliers);
                     if (match.kind === "exact" && match.supplier) {

@@ -74,11 +74,12 @@ describe("dashboard counters", () => {
       }),
     ];
     const stats = computeOrderDashboard(orders, now);
-    expect(stats.received).toBe(2);
+    expect(stats.received).toBe(1);
     expect(stats.preparing).toBe(0);
     expect(stats.ready).toBe(0);
     expect(stats.deliveredToday).toBe(0);
     expect(stats.todayRevenue).toBe(50);
+    expect(computeOrderDashboard(orders, now, { period: "all" }).received).toBe(3);
   });
 
   it("keeps stuck active orders in overdue even when they are not from today", () => {
@@ -90,7 +91,102 @@ describe("dashboard counters", () => {
     });
     expect(overdueLevel(stuck, now.getTime())).toBe("critical");
     expect(computeOrderDashboard([stuck], now).overdue).toBe(1);
-    expect(computeOrderDashboard([stuck], now).preparing).toBe(1);
+    expect(computeOrderDashboard([stuck], now).preparing).toBe(0);
+    expect(computeOrderDashboard([stuck], now, { period: "all" }).preparing).toBe(1);
+  });
+
+  it("counts a delivered history order on its delivery day and ignores a pending payment", () => {
+    const delivered = order({
+      id: "delivered-today",
+      status: "delivered",
+      paymentStatus: "pending",
+      paymentMethod: "cash",
+      createdAt: "2026-10-03T13:04:00+03:00",
+      deliveredAt: "2026-10-07T09:00:00+03:00",
+      total: 80,
+    });
+    const stats = computeOrderDashboard([delivered], now);
+    expect(stats.deliveredToday).toBe(1);
+    expect(stats.received).toBe(0);
+    expect(stats.todayRevenue).toBe(0);
+    expect(computeOrderDashboard([delivered], now, { period: "yesterday" }).deliveredToday).toBe(0);
+  });
+
+  it("uses a verified card payment once and subtracts a refund", () => {
+    const card = order({
+      id: "card-1",
+      status: "delivered",
+      paymentStatus: "pending",
+      paymentMethod: "card",
+      createdAt: "2026-10-07T08:00:00+03:00",
+      deliveredAt: "2026-10-07T08:20:00+03:00",
+      total: 40,
+    });
+    const stats = computeOrderDashboard([card, card], now, {
+      payments: [
+        { orderId: "card-1", status: "paid", amount: 40, paidAt: "2026-10-07T08:05:00+03:00", provider: "HYP" },
+        { orderId: "card-1", status: "paid", amount: 40, paidAt: "2026-10-07T08:05:00+03:00", provider: "HYP", refundAmount: 10 },
+      ],
+    });
+    expect(stats.loaded).toBe(2);
+    expect(stats.received).toBe(1);
+    expect(stats.cardRevenue).toBe(30);
+    expect(stats.cashRevenue).toBe(0);
+    expect(stats.todayRevenue).toBe(30);
+  });
+
+  it("keeps cash separate and drops cancelled or pending charges", () => {
+    const cash = order({
+      id: "cash-1",
+      status: "delivered",
+      paymentStatus: "paid",
+      paymentMethod: "cash",
+      paidAt: "2026-10-07T11:00:00+03:00",
+      deliveredAt: "2026-10-07T11:10:00+03:00",
+      total: 25,
+    });
+    const cancelled = order({
+      id: "cancelled-paid",
+      status: "cancelled",
+      paymentStatus: "paid",
+      paymentMethod: "card",
+      paidAt: "2026-10-07T11:00:00+03:00",
+      total: 25,
+    });
+    const waiting = order({
+      id: "waiting",
+      status: "delivered",
+      paymentStatus: "pending",
+      paymentMethod: "card",
+      deliveredAt: "2026-10-07T11:00:00+03:00",
+      total: 25,
+    });
+    const stats = computeOrderDashboard([cash, cancelled, waiting], now, { payments: [] });
+    expect(stats.cashRevenue).toBe(25);
+    expect(stats.cardRevenue).toBe(0);
+    expect(stats.todayRevenue).toBe(25);
+    expect(stats.deliveredToday).toBe(2);
+  });
+
+  it("shows no average when preparation did not actually start", () => {
+    const guessed = order({
+      id: "guess",
+      status: "delivered",
+      createdAt: "2026-10-07T08:00:00+03:00",
+      readyAt: "2026-10-07T09:00:00+03:00",
+      deliveredAt: "2026-10-07T09:10:00+03:00",
+    });
+    const measured = order({
+      id: "measured",
+      status: "delivered",
+      createdAt: "2026-10-07T08:00:00+03:00",
+      preparationStartedAt: "2026-10-07T08:10:00+03:00",
+      readyAt: "2026-10-07T08:25:00+03:00",
+      deliveredAt: "2026-10-07T08:40:00+03:00",
+    });
+    expect(computeOrderDashboard([guessed], now).averagePrepMinutes).toBeNull();
+    expect(computeOrderDashboard([measured], now).averagePrepMinutes).toBe(15);
+    expect(computeOrderDashboard([measured], now, { payments: null }).todayRevenue).toBeNull();
   });
 });
 

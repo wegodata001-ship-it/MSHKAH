@@ -255,6 +255,13 @@ export type PurchaseInvoiceLine = {
   key: string;
   rawName: string;
   originalDescription?: string;
+  /** Name as first scanned or typed. Kept after a correction. */
+  originalScannedName?: string | null;
+  /** Name corrected on this invoice line. Does not rename the inventory product. */
+  correctedInvoiceName?: string | null;
+  inventoryProductName?: string | null;
+  nameHistory?: { at: string; actor?: string; from: string; to: string; scope: "invoice" | "inventory" }[];
+  sourcePriceType?: "including" | "excluding" | "exempt" | "unknown" | null;
   productId?: string;
   quantity: number | null;
   unit: PurchaseUnit | null;
@@ -296,6 +303,17 @@ export type PurchaseInvoiceLine = {
   candidates?: { productId: string; name: string; score: number }[];
   unitPriceNet?: number | null;
   unitPriceGross?: number | null;
+  unitPriceExcludingVat?: number | null;
+  unitPriceIncludingVat?: number | null;
+  lineTotalExcludingVat?: number | null;
+  lineTotalIncludingVat?: number | null;
+  /** True when the entered unit and line amounts include VAT. Null until the document type is known. */
+  priceIncludesVat?: boolean | null;
+  /** Which entered amount stays fixed when quantity changes. */
+  lastEditedField?: "unitPrice" | "lineTotal" | null;
+  originalUnitPrice?: number | null;
+  originalLineTotal?: number | null;
+  priceManuallyEdited?: boolean | null;
   netAmount?: number | null;
   grossAmount?: number | null;
   vatMode?: VatType;
@@ -373,6 +391,10 @@ export type PurchaseInvoice = {
   differenceAmount?: number | null;
   validationStatus?: "pass" | "review" | "missing";
   manuallyEdited?: boolean;
+  /** Admin allowed stock intake even though the same-basis money check still differs. Does not change amounts. */
+  moneyGapAccepted?: boolean;
+  moneyGapAcceptedAt?: string;
+  moneyGapAcceptedBy?: string;
   editedAt?: string;
   editedBy?: string;
   totalHistory?: InvoiceTotalRevision[];

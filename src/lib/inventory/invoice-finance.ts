@@ -92,6 +92,60 @@ export function invoiceMismatch(invoice: PurchaseInvoice): InvoiceMismatch {
   };
 }
 
+const MONEY_TOLERANCE = 0.05;
+
+export type InvoiceMoneyCheck = {
+  basis: "net" | "gross";
+  lineAmount: number | null;
+  headerAmount: number | null;
+  difference: number | null;
+  hasMismatch: boolean;
+};
+
+/**
+ * Compare line totals with the header on one tax basis.
+ * A before-VAT line sum is not a mismatch against the VAT-inclusive payable total.
+ */
+export function invoiceMoneyCheck(
+  invoice: Pick<PurchaseInvoice, "sourceNet" | "netAmount" | "subtotal" | "sourceVat" | "vatAmount" | "vatTotal" | "sourceGross" | "grossAmount" | "grandTotal" | "lines" | "manuallyEdited" | "editedInvoiceTotal" | "originalInvoiceTotal" | "invoiceTotalFromSource">
+): InvoiceMoneyCheck {
+  const totals = invoiceFinanceTotals(invoice.lines);
+  const headerNet = invoice.sourceNet ?? invoice.netAmount ?? invoice.subtotal ?? null;
+  const headerGross = payableInvoiceGross(invoice);
+  if (!totals.itemCount) {
+    return { basis: "gross", lineAmount: null, headerAmount: headerGross, difference: null, hasMismatch: false };
+  }
+  const netGap = headerNet == null ? null : roundMoney(totals.net - headerNet);
+  const grossGap = headerGross == null ? null : roundMoney(totals.gross - headerGross);
+  const close = (value: number | null) => value != null && Math.abs(value) <= MONEY_TOLERANCE;
+  const linesAreNet = Math.abs(totals.gross - totals.net) <= MONEY_TOLERANCE;
+  if (!linesAreNet) {
+    return {
+      basis: "gross",
+      lineAmount: totals.gross,
+      headerAmount: headerGross,
+      difference: grossGap,
+      hasMismatch: grossGap == null ? false : !close(grossGap),
+    };
+  }
+  if (headerNet != null) {
+    return {
+      basis: "net",
+      lineAmount: totals.net,
+      headerAmount: headerNet,
+      difference: netGap,
+      hasMismatch: !close(netGap),
+    };
+  }
+  return {
+    basis: "gross",
+    lineAmount: totals.gross,
+    headerAmount: headerGross,
+    difference: grossGap,
+    hasMismatch: grossGap == null ? false : !close(grossGap),
+  };
+}
+
 export function compareInvoiceTotals(
   invoice: Pick<PurchaseInvoice, "sourceNet" | "netAmount" | "subtotal" | "sourceVat" | "vatAmount" | "vatTotal" | "sourceGross" | "grossAmount" | "grandTotal" | "lines" | "manuallyEdited" | "editedInvoiceTotal" | "originalInvoiceTotal" | "invoiceTotalFromSource" | "headerDiscount" | "discountTotal" | "adjustmentAmount" | "rounding" | "vatRate">
 ) {
@@ -101,9 +155,10 @@ export function compareInvoiceTotals(
   const payable = payableInvoiceGross(invoice);
   const totals = invoiceFinanceTotals(invoice.lines);
   const calculatedLinesTotal = totals.itemCount ? totals.gross : null;
-  const differenceAmount = payable == null || calculatedLinesTotal == null ? null : roundMoney(calculatedLinesTotal - payable);
+  const money = invoiceMoneyCheck(invoice);
+  const differenceAmount = money.difference;
   const headerConsistent = sourceNet != null && sourceVat != null && sourceGross != null && Math.abs(roundMoney(sourceNet + sourceVat - sourceGross)) <= TOLERANCE;
-  const validationStatus = payable == null ? "missing" : differenceAmount != null && Math.abs(differenceAmount) <= TOLERANCE ? "pass" : "review";
+  const validationStatus = payable == null ? "missing" : !totals.itemCount ? "review" : money.hasMismatch ? "review" : "pass";
   return {
     sourceNet,
     sourceVat,

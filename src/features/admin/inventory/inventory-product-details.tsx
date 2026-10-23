@@ -15,6 +15,7 @@ import { formatIls } from "@/lib/costing/money";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { canReverseMovement, stockInDisplayUnit } from "@/lib/inventory/issue";
+import { displayedLastPrice, shownRecordUnitPrices } from "@/lib/inventory/last-price";
 import {
   cheapestOffer,
   currentStockBase,
@@ -31,6 +32,7 @@ import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import type { Locale } from "@/lib/i18n/types";
 import type { Product } from "@/types";
 import { mergeIngredients, reverseInventoryMovement } from "@/services/inventoryService";
+import { SplitMergedProducts } from "@/features/admin/inventory/split-merged-products";
 import { planIngredientMerge } from "@/lib/inventory/ingredient-core";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +84,7 @@ export function InventoryProductDetails({
   const productOffers = offers.filter((offer) => offer.productId === product.id && offer.active !== false);
   const cheap = cheapestOffer(productOffers, product.baseUnit);
   const last = latestPurchase(records, product.id);
+  const shownPrice = displayedLastPrice(product, records);
   const aliases = itemMaps.filter((item) => item.inventoryProductId === product.id);
   const dishes = recipes.filter((recipe) => recipe.ingredients.some((line) => line.ingredientId === product.id));
   const tabs: { id: DetailTab; label: string }[] = [
@@ -126,12 +129,25 @@ export function InventoryProductDetails({
             <p>{t("admin.inventory.minStock")}: {product.minStock ?? "—"}</p>
             <p>{t("admin.inventory.barcode")}: {product.barcode || "—"}</p>
             <p>{t("admin.costing.notes")}: {product.notes || "—"}</p>
-            <p>
-              {t("admin.inventory.lastPaid")}:{" "}
-              {last && labeledPurchaseUnitPrice(last)
-                ? `${formatIls(labeledPurchaseUnitPrice(last)!.amount)} ${t(last.unit === "kg" || last.purchaseUnit === "kg" ? "admin.compare.eachKg" : last.unit === "g" ? "admin.costing.perGram" : "admin.compare.eachUnit")}`
-                : "—"}
-            </p>
+            <div>
+              <p>{t("admin.inventory.lastPaid")}:</p>
+              {shownPrice?.excludingVat != null ? (
+                <>
+                  <p>{t("admin.inventory.priceExVat")}: {formatIls(shownPrice.excludingVat)}</p>
+                  {shownPrice.includingVat != null ? (
+                    <p>{t("admin.inventory.priceIncVat")}: {formatIls(shownPrice.includingVat)}</p>
+                  ) : null}
+                  <p className="text-coffee/60">
+                    {suppliers.find((item) => item.id === (shownPrice.invoiceId ? records.find((row) => row.invoiceId === shownPrice.invoiceId)?.supplierId : last?.supplierId))?.name || "—"}
+                    {` · ${shownPrice.quantity} ${t(unitLabelKey(shownPrice.unit))}`}
+                    {shownPrice.purchaseDate ? ` · ${shownPrice.purchaseDate.slice(0, 10)}` : ""}
+                    {invoices.find((invoice) => invoice.id === shownPrice.invoiceId)?.invoiceNumber
+                      ? ` · ${invoices.find((invoice) => invoice.id === shownPrice.invoiceId)?.invoiceNumber}`
+                      : ""}
+                  </p>
+                </>
+              ) : "—"}
+            </div>
             <div>
               <p className="font-medium">{t("admin.inventory.linkedDishes")}</p>
               {dishes.length === 0 ? (
@@ -144,6 +160,13 @@ export function InventoryProductDetails({
               )}
             </div>
             <Button type="button" variant="outline" onClick={onEdit}>{t("common.edit")}</Button>
+            <SplitMergedProducts
+              product={product}
+              products={allIngredients ?? []}
+              invoices={invoices}
+              movements={movements}
+              onDone={(message) => onToast(message)}
+            />
             {allIngredients && allIngredients.length > 1 && (
               <div className="rounded-xl bg-beige/40 p-3">
                 <p className="mb-2 font-medium">{t("admin.inventory.mergeTitle")}</p>
@@ -279,7 +302,14 @@ export function InventoryProductDetails({
                   <span>
                     {row.purchaseDate} · {suppliers.find((item) => item.id === row.supplierId)?.name || "—"}
                   </span>
-                  <span>{formatIls(row.unitCost, 4)}</span>
+                  <span>
+                    {(() => {
+                      const prices = shownRecordUnitPrices(row, records.filter((item) => item.productId === product.id));
+                      return prices.excludingVat != null
+                        ? `${t("admin.inventory.priceExVat")} ${formatIls(prices.excludingVat)}${prices.includingVat != null ? ` · ${t("admin.inventory.priceIncVat")} ${formatIls(prices.includingVat)}` : ""}`
+                        : formatIls(row.unitCost, 4);
+                    })()}
+                  </span>
                 </div>
               ))}
           </div>

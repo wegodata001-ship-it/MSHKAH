@@ -14,6 +14,7 @@ import type {
   Supplier,
   SupplierOffer,
 } from "@/lib/inventory/types";
+import { shownRecordUnitPrices } from "@/lib/inventory/last-price";
 import { inDateRange, monthBounds } from "@/lib/reports/format";
 import type {
   BlankCountRow,
@@ -392,6 +393,7 @@ export function buildPurchaseRows(
       const haystack = `${product?.name ?? ""} ${supplierName} ${invoice?.invoiceNumber ?? ""}`;
       if (!matchesSearch(haystack, filters.search)) return [];
       const qty = row.quantity > 0 ? row.quantity : null;
+      const unitPrices = shownRecordUnitPrices(row, records.filter((item) => item.productId === row.productId));
       return [{
         date: row.purchaseDate,
         supplierId: row.supplierId,
@@ -401,9 +403,9 @@ export function buildPurchaseRows(
         quantity: row.quantity,
         unit: row.unit,
         unitPrice: row.unitCost,
-        netUnitPrice: qty ? row.priceBeforeVat / qty : null,
-        vatUnit: qty ? row.vatAmount / qty : null,
-        grossUnitPrice: qty ? row.priceIncludingVat / qty : null,
+        netUnitPrice: unitPrices.excludingVat,
+        vatUnit: qty && unitPrices.excludingVat != null && unitPrices.includingVat != null ? unitPrices.includingVat - unitPrices.excludingVat : qty ? row.vatAmount / qty : null,
+        grossUnitPrice: unitPrices.includingVat,
         beforeVat: row.priceBeforeVat,
         vat: row.vatAmount,
         includingVat: row.priceIncludingVat,
