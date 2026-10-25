@@ -398,6 +398,7 @@ export type PurchaseInvoice = {
   editedAt?: string;
   editedBy?: string;
   totalHistory?: InvoiceTotalRevision[];
+  editHistory?: { at: string; actor?: string; field: string; lineKey?: string; before: string; after: string }[];
   computedNet?: number | null;
   computedVat?: number | null;
   computedGross?: number | null;

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireAdminOnly } from "@/lib/auth/verify-admin";
 import { getAdminDb } from "@/lib/firebase/admin";
+import { loadMeasureUnitCatalog } from "@/lib/inventory/measure-units-admin";
 import { readInvoiceSourceBytes } from "@/lib/inventory/invoice-source-store";
 import { buildReport, filterInvoices } from "@/lib/reports/export/documents";
 import { loadReportSource } from "@/lib/reports/export/load";
@@ -21,7 +22,9 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "EXPORT_INVALID", code: "EXPORT_INVALID" }, { status: 400 });
   }
   try {
-    const source = await loadReportSource(getAdminDb());
+    const db = getAdminDb();
+    await loadMeasureUnitCatalog(db);
+    const source = await loadReportSource(db);
     const period = periodOf(body.filters);
     if (body.format === "zip" || body.kind === "zip") {
       const bytes = await renderReportZip(source, period);

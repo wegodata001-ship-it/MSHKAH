@@ -9,14 +9,14 @@ import { Label } from "@/components/ui/label";
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import { findDuplicateIngredient } from "@/lib/costing/names";
-import { liveCostPreview, PURCHASE_UNITS } from "@/lib/costing/units";
+import { liveCostPreview } from "@/lib/costing/units";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { emptyIngredientForm } from "@/features/admin/costing/ingredient-form";
 import { createIngredient } from "@/services/costingService";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { inventoryCategories } from "@/lib/inventory/product-match";
 import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
-import { cn } from "@/lib/utils";
 
 const LAST_UNIT_KEY = "mishkah.costing.lastPurchaseUnit";
 
@@ -238,22 +238,8 @@ export function QuickCreateIngredientPanel({
             )}
             <div>
               <Label>{t("admin.costing.purchaseUnit")} *</Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {PURCHASE_UNITS.map((unit) => (
-                  <button
-                    key={unit}
-                    type="button"
-                    onClick={() => setPurchaseUnit(unit)}
-                    className={cn(
-                      "h-10 min-w-[3rem] flex-1 rounded-xl border px-2 text-sm font-medium",
-                      purchaseUnit === unit
-                        ? "border-turquoise bg-turquoise/10 text-turquoise"
-                        : "border-beige-dark/30 bg-warm-white text-coffee/70"
-                    )}
-                  >
-                    {t(unitLabelKey(unit))}
-                  </button>
-                ))}
+              <div className="mt-2">
+                <MeasureUnitSelect value={purchaseUnit} onChange={(unit) => setPurchaseUnit(unit as PurchaseUnit)} />
               </div>
             </div>
             <div className="rounded-2xl bg-turquoise/8 px-4 py-3">

@@ -6,8 +6,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import type { PurchaseUnit } from "@/lib/costing/types";
-import { PURCHASE_UNITS } from "@/lib/costing/units";
 import {
   compareFormulaParts,
   compareHistoryLines,
@@ -235,13 +235,7 @@ function CompletionForm({
           </>
         )}
         <Input className="h-9 w-16" value={packQty} inputMode="decimal" onChange={(e) => setPackQty(e.target.value)} />
-        <select className="h-9 rounded-lg border px-1 text-xs" value={packUnit} onChange={(e) => setPackUnit(e.target.value as PurchaseUnit)}>
-          {PURCHASE_UNITS.map((unit) => (
-            <option key={unit} value={unit}>
-              {t(unitLabelKey(unit))}
-            </option>
-          ))}
-        </select>
+        <MeasureUnitSelect className="h-9 rounded-lg border px-1 text-xs" value={packUnit} onChange={(unit) => setPackUnit(unit as PurchaseUnit)} />
         <Button
           type="button"
           size="sm"

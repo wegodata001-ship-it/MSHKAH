@@ -17,6 +17,7 @@ import { ComparePane } from "@/features/admin/inventory/compare-pane";
 import { cheapestOffer, currentStockBase, offerNormalizedNet, reorderQty, stockInBase, stockOutBase } from "@/lib/inventory/stock";
 import { attributedPurchaseQty, displayedLastPrice } from "@/lib/inventory/last-price";
 import { InventoryRowCorrection } from "@/features/admin/inventory/inventory-row-correction";
+import { InvoiceEditDialog } from "@/features/admin/inventory/invoice-edit-dialog";
 import { purchaseQuantityInBase } from "@/lib/costing/units";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import type { PurchaseUnit } from "@/lib/costing/types";
@@ -88,6 +89,7 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   const [purchaseImport, setPurchaseImport] = useState(false);
   const [sourceKind, setSourceKind] = useState<"" | ProductSourceKind>("");
   const [sourceId, setSourceId] = useState<string | null>(null);
+  const [editInvoiceId, setEditInvoiceId] = useState<string | null>(null);
   const [highlightMovementId, setHighlightMovementId] = useState<string | null>(null);
   const categories = Array.from(new Set(props.ingredients.map((item) => item.category).filter(Boolean))) as string[];
   const sources = useMemo(() => {
@@ -455,6 +457,10 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             setSourceId(null);
             props.onOpenInvoice?.(invoiceId, lineId);
           }}
+          onEditInvoice={(invoiceId) => {
+            setSourceId(null);
+            setEditInvoiceId(invoiceId);
+          }}
           onOpenMovement={(movementId) => {
             setSourceId(null);
             setLedgerId(sourceId);
@@ -463,6 +469,18 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
           }}
         />
       )}
+      {editInvoiceId && props.invoices.some((invoice) => invoice.id === editInvoiceId) ? (
+        <InvoiceEditDialog
+          invoice={props.invoices.find((invoice) => invoice.id === editInvoiceId)!}
+          suppliers={props.suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name }))}
+          products={props.ingredients.map((item) => ({ id: item.id, name: item.name }))}
+          onClose={() => setEditInvoiceId(null)}
+          onSaved={() => {
+            setEditInvoiceId(null);
+            props.onToast(t("admin.inventory.editInvoice.saved"));
+          }}
+        />
+      ) : null}
       {issueId != null && (
         <IssueIngredientForm
           open
@@ -678,6 +696,7 @@ function InvoicesPane(props: InventoryHubProps & { onViewInventory?: () => void;
       <InvoiceArchivePanel
         invoices={props.invoices}
         suppliers={props.suppliers}
+        products={props.ingredients.map((item) => ({ id: item.id, name: item.name }))}
         aiState={ai}
         onAddAction={handleAddAction}
         onOpen={(invoice) => {

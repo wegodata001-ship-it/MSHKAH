@@ -13,6 +13,7 @@ import type { BaseUnit, CostingIngredient } from "@/lib/costing/types";
 import { reconcileSupplierItemMap, shouldUpdateLastPurchase } from "@/lib/inventory/material-group";
 import { purchaseRecordUnitCost, unitCostFromPackage } from "@/lib/inventory/stock";
 import { COLLECTIONS } from "@/lib/firebase/collections";
+import { loadMeasureUnitCatalog } from "@/lib/inventory/measure-units-admin";
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import type { PurchaseInvoice, PurchaseInvoiceLine, Supplier, SupplierItemMap } from "@/lib/inventory/types";
 
@@ -243,6 +244,7 @@ export async function postInvoiceStock(
   actor?: string
 ): Promise<{ invoice: PurchaseInvoice; postedKeys: string[]; reusedKeys: string[] }> {
   if (!invoice.id) throw new Error("Invoice required");
+  await loadMeasureUnitCatalog(db);
   const liveSnap = await db.collection(COLLECTIONS.purchaseInvoices).doc(invoice.id).get();
   const live = liveSnap.exists ? ({ id: liveSnap.id, ...liveSnap.data() } as PurchaseInvoice) : invoice;
   // Refuse to re-post a cancelled invoice. Clients that still hold an old

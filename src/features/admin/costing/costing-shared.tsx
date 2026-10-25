@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { findMeasureUnit } from "@/lib/inventory/measure-units";
 import type { ProfitStatus } from "@/lib/costing/types";
 
 export const STATUS_DOT: Record<ProfitStatus, string> = {
@@ -36,6 +37,8 @@ export function unitLabelKey(unit: string): string {
   if (unit === "bag") return "admin.costing.unit.bag";
   if (unit === "bundle") return "admin.costing.unit.bundle";
   if (unit === "tray") return "admin.costing.unit.tray";
+  const custom = findMeasureUnit(unit);
+  if (custom) return custom.abbreviation || custom.nameHe;
   return "admin.costing.unit.unit";
 }
 

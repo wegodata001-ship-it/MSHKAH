@@ -16,7 +16,7 @@ import { ServiceError, failure, success, type ServiceResult } from "@/lib/errors
 import { sanitizeFirestoreData } from "@/lib/firebase/sanitize-firestore-data";
 import { nowTimestamp, timestampToIso } from "@/types/firestore";
 import { recipeIngredientCost } from "@/lib/costing/calc";
-import { baseUnitFor, costPerBaseUnit, isPackUnit, purchaseQuantityInBase } from "@/lib/costing/units";
+import { baseUnitFor, costPerBaseUnit, purchaseQuantityInBase, resolveUnitFactor } from "@/lib/costing/units";
 import { packFactor } from "@/lib/inventory/pack-cost";
 import {
   DEFAULT_COSTING_SETTINGS,
@@ -225,7 +225,7 @@ export function isCostingPermissionError(error: unknown): boolean {
 function ingredientPayload(input: IngredientWriteInput) {
   const purchaseUnit = input.purchaseUnit;
   const packed =
-    isPackUnit(purchaseUnit) && input.packContentUnit && input.packCount
+    !resolveUnitFactor(purchaseUnit) && input.packContentUnit && input.packCount
       ? packFactor({ contentCount: input.packCount, contentUnit: input.packContentUnit })
       : null;
   const baseUnit = packed?.ok ? packed.base : baseUnitFor(purchaseUnit);

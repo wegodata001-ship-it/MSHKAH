@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useLocale, useT } from "@/components/providers/locale-provider";
 import { getProductDisplayName } from "@/lib/i18n/localized-content";
 import { AdminModal, AdminModalBody, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
-import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import {
   componentRecipeLines,
   parseUnitCost,
@@ -17,7 +17,7 @@ import {
 import type { BreakEvenVatBasis, ProductContribution } from "@/lib/breakeven/types";
 import { formatIls } from "@/lib/costing/money";
 import { recipeForProduct } from "@/lib/costing/model";
-import type { CostingIngredient, DishRecipe, PurchaseUnit } from "@/lib/costing/types";
+import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
 import { completeProductCost } from "@/services/costingService";
 import type { Product } from "@/types";
 
@@ -25,7 +25,6 @@ function fill(template: string, vars: Record<string, string>) {
   return Object.entries(vars).reduce((text, [key, value]) => text.replaceAll(`{${key}}`, value), template);
 }
 
-const UNITS: PurchaseUnit[] = ["unit", "g", "kg", "ml", "liter"];
 
 function blankPart(): CostPartDraft {
   return { source: "ingredient", refId: "", quantity: "", unit: "unit" };
@@ -295,16 +294,11 @@ function PartRow({
         {portion ? (
           <p className="flex h-10 items-center text-sm text-coffee/70">{t("admin.breakeven.cost.portion")}</p>
         ) : (
-          <select
-            className="h-10 w-full rounded-xl border border-beige-dark/40 bg-white px-2 text-base"
+          <MeasureUnitSelect
             value={part.unit}
-            aria-label={t("admin.breakeven.cost.unitCol")}
-            onChange={(event) => onChange({ ...part, unit: event.target.value })}
-          >
-            {UNITS.map((unit) => (
-              <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>
-            ))}
-          </select>
+            className="h-10 w-full rounded-xl border border-beige-dark/40 bg-white px-2 text-base"
+            onChange={(unit) => onChange({ ...part, unit })}
+          />
         )}
       </td>
       <td className="p-1">

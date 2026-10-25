@@ -7,10 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AdminModal, AdminModalBody, AdminModalFooter, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useLocale, useT } from "@/components/providers/locale-provider";
 import type { CostingIngredient, DishRecipe } from "@/lib/costing/types";
-import { compatibleRecipeUnits } from "@/lib/costing/units";
 import { ISSUE_REASONS, recipeIssueDraft, stockInDisplayUnit, validateIssueLines, type IssueDraftLine } from "@/lib/inventory/issue";
 import { currentStockBase } from "@/lib/inventory/stock";
 import type { InventoryIssueReason, InventoryMovement } from "@/lib/inventory/types";
@@ -213,19 +213,15 @@ export function IssueIngredientForm({
                 </div>
                 <div>
                   <Label>{t("admin.costing.unit")}</Label>
-                  <select
-                    className="mt-1 h-10 w-full rounded-xl border px-2 text-sm"
+                  <MeasureUnitSelect
                     value={line.unit}
-                    onChange={(e) =>
+                    compatibleWith={item?.baseUnit ?? line.unit}
+                    onChange={(unit) =>
                       setLines((current) =>
-                        current.map((row) => (row.key === line.key ? { ...row, unit: e.target.value as IssueDraftLine["unit"] } : row))
+                        current.map((row) => (row.key === line.key ? { ...row, unit: unit as IssueDraftLine["unit"] } : row))
                       )
                     }
-                  >
-                    {(item ? compatibleRecipeUnits(item.baseUnit) : ["unit", "kg", "g", "liter", "ml"]).map((unit) => (
-                      <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <button type="button" className="self-end text-coffee/40" onClick={() => setLines((current) => current.filter((row) => row.key !== line.key || current.length === 1))} aria-label={t("common.delete")}>
                   <Trash2 className="h-4 w-4" />

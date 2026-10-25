@@ -26,6 +26,7 @@ export const COLLECTIONS = {
   ingredients: "ingredients",
   ingredientCategories: "ingredientCategories",
   purchaseUnits: "purchaseUnits",
+  measureUnits: "measureUnits",
   dishRecipes: "dishRecipes",
   productCostLinks: "productCostLinks",
   ingredientPriceHistory: "ingredientPriceHistory",

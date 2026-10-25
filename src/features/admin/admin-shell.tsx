@@ -7,6 +7,7 @@ import { AdminSidebar, AdminMobileDrawer } from "./admin-sidebar";
 import { AdminMobileNav } from "./components/admin-mobile-nav";
 import { AdminHeader } from "./admin-header";
 import { AuthGuard } from "./auth-guard";
+import { MeasureUnitsProvider } from "@/features/admin/measure-units-provider";
 import { isAdminLoginPath } from "@/lib/domains/host-routing";
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
@@ -20,6 +21,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthGuard>
+      <MeasureUnitsProvider>
       <div
         className="min-h-screen overflow-x-hidden bg-cream dark:bg-[#120e0c]"
         data-admin
@@ -53,6 +55,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </div>
+      </MeasureUnitsProvider>
     </AuthGuard>
   );
 }

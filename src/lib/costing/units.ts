@@ -1,4 +1,5 @@
 import type { BaseUnit, PackUnit, PurchaseUnit } from "@/lib/costing/types";
+import { findMeasureUnit, getMeasureUnitCatalog } from "@/lib/inventory/measure-units";
 
 export const MEASURE_UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
 export const PACK_UNITS: PackUnit[] = ["pack", "carton", "bottle", "bag", "bundle", "tray"];
@@ -24,8 +25,24 @@ export function isPackUnit(unit: string | null | undefined): unit is PackUnit {
   return PACK_UNITS.includes(unit as PackUnit);
 }
 
+export function resolveUnitFactor(unit: string | null | undefined): { base: BaseUnit; factor: number } | null {
+  if (!unit) return null;
+  const known = UNIT_TO_BASE[unit as keyof typeof UNIT_TO_BASE];
+  if (known) return known.factor > 0 ? known : null;
+  const custom = getMeasureUnitCatalog().find((item) => item.id === unit);
+  if (!custom?.baseUnitId || custom.factorToBase == null || custom.factorToBase <= 0) return null;
+  return { base: custom.baseUnitId, factor: custom.factorToBase };
+}
+
 export function baseUnitFor(purchaseUnit: PurchaseUnit): BaseUnit {
-  return UNIT_TO_BASE[purchaseUnit].base;
+  const known = UNIT_TO_BASE[purchaseUnit as keyof typeof UNIT_TO_BASE];
+  if (known) return known.base;
+  const resolved = resolveUnitFactor(purchaseUnit);
+  if (resolved) return resolved.base;
+  const custom = findMeasureUnit(purchaseUnit);
+  if (custom?.kind === "weight") return "g";
+  if (custom?.kind === "volume") return "ml";
+  return "unit";
 }
 
 export function purchaseQuantityInBase(
@@ -33,7 +50,7 @@ export function purchaseQuantityInBase(
   purchaseUnit: PurchaseUnit
 ): number {
   if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) return 0;
-  const factor = UNIT_TO_BASE[purchaseUnit]?.factor ?? 0;
+  const factor = resolveUnitFactor(purchaseUnit)?.factor ?? 0;
   if (factor <= 0) return 0;
   return purchaseQuantity * factor;
 }
@@ -77,18 +94,21 @@ export function liveCostPreview(
 ): LiveCostPreview | null {
   if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) return null;
   if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) return null;
-  const baseUnit = baseUnitFor(purchaseUnit);
+  const resolved = resolveUnitFactor(purchaseUnit);
+  const baseUnit = resolved?.base ?? baseUnitFor(purchaseUnit);
   return {
     purchaseUnitCost: costPerPurchaseUnit(purchasePrice, purchaseQuantity),
     purchaseUnit,
-    baseUnitCost: costPerBaseUnit(purchasePrice, purchaseQuantity, purchaseUnit),
+    baseUnitCost: resolved ? costPerBaseUnit(purchasePrice, purchaseQuantity, purchaseUnit) : 0,
     baseUnit,
-    showBase: purchaseUnit !== baseUnit,
+    showBase: Boolean(resolved && purchaseUnit !== resolved.base),
   };
 }
 
 export function asPurchaseUnit(unit: string | undefined): PurchaseUnit {
-  return PURCHASE_UNITS.includes(unit as PurchaseUnit) ? (unit as PurchaseUnit) : "g";
+  if (!unit || !unit.trim()) return "g";
+  if (PURCHASE_UNITS.includes(unit as PurchaseUnit) || findMeasureUnit(unit)) return unit as PurchaseUnit;
+  return "g";
 }
 
 export function defaultRecipeUnit(purchaseUnit: PurchaseUnit): PurchaseUnit {
@@ -99,14 +119,28 @@ export function defaultRecipeUnit(purchaseUnit: PurchaseUnit): PurchaseUnit {
 }
 
 export function compatibleRecipeUnits(unit: PurchaseUnit | BaseUnit): PurchaseUnit[] {
-  const base = UNIT_TO_BASE[asPurchaseUnit(unit)].base;
-  if (base === "g") return ["g", "kg"];
-  if (base === "ml") return ["ml", "liter"];
-  return ["unit"];
+  const current = asPurchaseUnit(unit);
+  const source = resolveUnitFactor(current);
+  if (!source) return [current];
+  const preferred: Record<BaseUnit, PurchaseUnit[]> = {
+    g: ["g", "kg"],
+    ml: ["ml", "liter"],
+    unit: ["unit"],
+  };
+  const extras = getMeasureUnitCatalog()
+    .filter((item) => item.active && resolveUnitFactor(item.id)?.base === source.base && !preferred[source.base].includes(item.id as PurchaseUnit))
+    .map((item) => item.id as PurchaseUnit);
+  const list = [...preferred[source.base], ...extras];
+  if (!list.includes(current)) list.unshift(current);
+  return list;
 }
 
-export function unitsCompatible(from: PurchaseUnit, to: PurchaseUnit): boolean {
-  return UNIT_TO_BASE[from].base === UNIT_TO_BASE[to].base;
+export function unitsCompatible(from: string, to: string): boolean {
+  if (from === to) return true;
+  const left = resolveUnitFactor(from);
+  const right = resolveUnitFactor(to);
+  if (!left || !right) return false;
+  return left.base === right.base;
 }
 
 export function convertRecipeQuantity(
@@ -116,7 +150,7 @@ export function convertRecipeQuantity(
 ): number {
   if (!unitsCompatible(from, to)) return quantity;
   const baseQty = purchaseQuantityInBase(quantity, from);
-  const factor = UNIT_TO_BASE[to].factor;
+  const factor = resolveUnitFactor(to)?.factor ?? 0;
   return factor > 0 ? baseQty / factor : quantity;
 }
 

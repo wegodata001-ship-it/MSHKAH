@@ -17,6 +17,7 @@ import {
   deleteImageByUrl,
 } from "@/services/storageService";
 import { SystemStatusCard } from "@/features/admin/system-status-card";
+import { MeasureUnitsSettings } from "@/features/admin/measure-units-settings";
 import { useT } from "@/components/providers/locale-provider";
 import { AdminPageHeader } from "./components/admin-page-header";
 import { AdminCard } from "./components/admin-card";
@@ -181,6 +182,8 @@ export function SettingsAdmin() {
             </div>
           </div>
         </AdminCard>
+
+        <MeasureUnitsSettings />
 
         <SystemStatusCard />
 

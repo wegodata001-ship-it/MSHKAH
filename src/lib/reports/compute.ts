@@ -1,5 +1,4 @@
 import type { CostingIngredient } from "@/lib/costing/types";
-import { PURCHASE_UNITS } from "@/lib/costing/units";
 import {
   currentStockBase,
   latestPurchase,
@@ -98,7 +97,7 @@ export function hasSupplier(productId: string, offers: SupplierOffer[], product?
 }
 
 export function isInvalidUnit(product: CostingIngredient): boolean {
-  if (!PURCHASE_UNITS.includes(product.purchaseUnit)) return true;
+  if (!String(product.purchaseUnit || "").trim()) return true;
   if (!product.baseUnit) return true;
   return !(product.purchaseQuantity > 0);
 }

@@ -17,19 +17,18 @@ import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import { liveCostPreview } from "@/lib/costing/units";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import type { PurchasePriceRecord, Supplier, SupplierOffer } from "@/lib/inventory/types";
 import { SupplierOffersPanel } from "@/features/admin/inventory/supplier-offers-panel";
 import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
 import { cn } from "@/lib/utils";
 
-const UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
 const LAST_UNIT_KEY = "mishkah.costing.lastPurchaseUnit";
 
 function readLastUnit(): PurchaseUnit {
   if (typeof window === "undefined") return "kg";
-  const stored = window.localStorage.getItem(LAST_UNIT_KEY);
-  return UNITS.includes(stored as PurchaseUnit) ? (stored as PurchaseUnit) : "kg";
+  return (window.localStorage.getItem(LAST_UNIT_KEY) as PurchaseUnit) || "kg";
 }
 
 export type IngredientFormValue = {
@@ -217,25 +216,14 @@ export function IngredientFormModal({
 
             <div>
               <Label>{t("admin.costing.unit")} *</Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {UNITS.map((unit) => (
-                  <button
-                    key={unit}
-                    type="button"
-                    onClick={() => {
-                      setForm({ ...form, purchaseUnit: unit });
-                      persistLastUnit(unit);
-                    }}
-                    className={cn(
-                      "h-11 min-w-[3.2rem] flex-1 rounded-xl border px-2 text-sm font-medium transition-colors",
-                      form.purchaseUnit === unit
-                        ? "border-turquoise bg-turquoise/10 text-turquoise"
-                        : "border-beige-dark/30 bg-warm-white text-coffee/70"
-                    )}
-                  >
-                    {t(unitLabelKey(unit))}
-                  </button>
-                ))}
+              <div className="mt-2">
+                <MeasureUnitSelect
+                  value={form.purchaseUnit}
+                  onChange={(unit) => {
+                    setForm({ ...form, purchaseUnit: unit as PurchaseUnit });
+                    persistLastUnit(unit as PurchaseUnit);
+                  }}
+                />
               </div>
             </div>
 

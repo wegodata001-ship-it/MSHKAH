@@ -6,9 +6,9 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { formatIls } from "@/lib/costing/money";
-import { PURCHASE_UNITS } from "@/lib/costing/units";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import { planInventoryAdjustment, type ShownUnitPrice } from "@/lib/inventory/last-price";
 import type { Supplier } from "@/lib/inventory/types";
@@ -110,9 +110,7 @@ export function InventoryRowCorrection({
                 <option value="exempt">{t("admin.inventory.priceBasis.exempt")}</option>
               </select>
               <Input value={nextPrice} className="h-8" onChange={(event) => setNextPrice(event.target.value)} />
-              <select className="h-8 w-full rounded-lg border px-2" value={unit} onChange={(event) => setUnit(event.target.value as PurchaseUnit)}>
-                {PURCHASE_UNITS.map((item) => <option key={item} value={item}>{t(unitLabelKey(item))}</option>)}
-              </select>
+              <MeasureUnitSelect className="h-8 w-full rounded-lg border px-2" value={unit} onChange={(next) => setUnit(next as PurchaseUnit)} />
               <select className="h-8 w-full rounded-lg border px-2" value={supplierId} onChange={(event) => setSupplierId(event.target.value)}>
                 <option value="">—</option>
                 {suppliers.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}

@@ -16,6 +16,7 @@ import {
 import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import {
   cheapestOffer,
@@ -26,8 +27,6 @@ import {
 } from "@/lib/inventory/stock";
 import type { PurchasePriceRecord, Supplier, SupplierOffer, VatType } from "@/lib/inventory/types";
 import { saveSupplier, saveSupplierOffer, unlinkSupplierOffer } from "@/services/inventoryService";
-
-const UNITS: PurchaseUnit[] = ["kg", "g", "liter", "ml", "unit"];
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -242,11 +241,7 @@ function SupplierOfferModal({
             </div>
             <div>
               <Label>{t("admin.costing.purchaseUnit")} *</Label>
-              <select className="mt-1 h-10 w-full rounded-xl border px-2 text-sm" value={unit} onChange={(e) => setUnit(e.target.value as PurchaseUnit)}>
-                {UNITS.map((item) => (
-                  <option key={item} value={item}>{t(unitLabelKey(item))}</option>
-                ))}
-              </select>
+              <MeasureUnitSelect value={unit} onChange={(next) => setUnit(next as PurchaseUnit)} />
             </div>
           </div>
           <div>

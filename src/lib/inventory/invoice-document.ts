@@ -1,6 +1,7 @@
 import { formatIls, roundMoney } from "@/lib/costing/money";
 import type { PurchaseUnit } from "@/lib/costing/types";
 import { headerGross, headerNet, headerVat } from "@/lib/inventory/invoice-finance";
+import { measureUnitLabel } from "@/lib/inventory/measure-units";
 import type {
   InventoryMovement,
   InvoiceAuditEvent,
@@ -130,7 +131,7 @@ function moneyOrMissing(value: number | null | undefined): string {
 
 export function unitDocumentLabel(unit: PurchaseUnit | string | null | undefined): string {
   if (!unit) return "—";
-  return UNIT_LABELS[unit] ?? String(unit);
+  return UNIT_LABELS[unit] ?? measureUnitLabel(unit) ?? String(unit);
 }
 
 export function formatVatRate(rate: number | null | undefined): string {

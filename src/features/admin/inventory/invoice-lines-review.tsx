@@ -8,7 +8,6 @@ import { useT } from "@/components/providers/locale-provider";
 import { clientAdminFetch } from "@/lib/auth/client-admin-fetch";
 import { AdminModal, AdminModalBody, AdminModalHeader, AdminModalTitle } from "@/features/admin/components/admin-modal";
 import { IngredientCategoryField } from "@/features/admin/costing/ingredient-category-field";
-import { unitLabelKey } from "@/features/admin/costing/costing-shared";
 import { formatIls, roundMoney } from "@/lib/costing/money";
 import { applyInvoiceLineMoney, linePriceBasis, shownLinePrices, type LinePriceBasis } from "@/lib/inventory/unit-price";
 import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
@@ -30,7 +29,8 @@ import {
   newInvoiceProductPatch,
   type InvoiceReviewFilter,
 } from "@/lib/inventory/invoice-line-review";
-import { finalizeInvoiceLine, INVOICE_UNITS, invoiceTableTotals } from "@/lib/inventory/invoice-lines";
+import { finalizeInvoiceLine, invoiceTableTotals } from "@/lib/inventory/invoice-lines";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import {
   applyInvoiceUnitChange,
   invoiceLineEditStamp,
@@ -708,16 +708,13 @@ function LineEditor({
   );
   const unitSelect = (
     <div>
-      <select
-        id={`invoice-line-${line.key}-unit`}
+      <MeasureUnitSelect
+        value={line.unit}
+        emptyLabel={t("admin.inventory.smart.unitPick")}
         className={cn("h-8 w-full rounded-lg border px-2 text-sm", highlightField === "unit" && "ring-2 ring-amber-500")}
-        value={line.unit ?? ""}
         disabled={Boolean(locked && !invoiceId)}
-        onChange={(e) => onEdit(applyInvoiceUnitChange(line, (e.target.value || null) as PurchaseUnit | null), "now")}
-      >
-        <option value="">{t("admin.inventory.smart.unitPick")}</option>
-        {INVOICE_UNITS.map((unit) => <option key={unit} value={unit}>{t(unitLabelKey(unit))}</option>)}
-      </select>
+        onChange={(unit) => onEdit(applyInvoiceUnitChange(line, (unit || null) as PurchaseUnit | null), "now")}
+      />
       {status.kind === "missing-unit" && <p className="mt-1 text-[11px] text-amber-800">{t(status.labelKey)}</p>}
       {unitGap === "mismatch" && <p className="mt-1 text-[11px] text-amber-800">{t("admin.inventory.smart.unitMismatch")}</p>}
     </div>
@@ -1072,10 +1069,7 @@ function UnitDialog({
       <AdminModalBody className="space-y-3">
         <label className="block space-y-1 text-sm">
           <span>{t("admin.costing.unit")}</span>
-          <select className="h-10 w-full rounded-xl border px-2 text-base" value={unit} onChange={(event) => onUnit(event.target.value as PurchaseUnit | "")}>
-            <option value="">{t("admin.inventory.smart.unitPick")}</option>
-            {INVOICE_UNITS.map((item) => <option key={item} value={item}>{t(unitLabelKey(item))}</option>)}
-          </select>
+          <MeasureUnitSelect value={unit} emptyLabel={t("admin.inventory.smart.unitPick")} onChange={(next) => onUnit(next as PurchaseUnit | "")} />
         </label>
         <div className="space-y-1 text-sm">
           {(["all", "selected", "missing"] as InvoiceUnitScope[]).map((item) => (

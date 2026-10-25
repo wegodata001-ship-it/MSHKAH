@@ -16,12 +16,12 @@ import { useT } from "@/components/providers/locale-provider";
 import { formatIls } from "@/lib/costing/money";
 import {
   asPurchaseUnit,
-  compatibleRecipeUnits,
   convertRecipeQuantity,
   defaultRecipeUnit,
   lineRecipeCost,
 } from "@/lib/costing/units";
 import { unitLabelKey } from "@/features/admin/costing/costing-shared";
+import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import { IngredientPicker } from "@/features/admin/costing/ingredient-picker";
 import { QuickCreateIngredientPanel } from "@/features/admin/costing/quick-create-ingredient";
 import { useSmartInvoiceEnabled } from "@/features/admin/inventory/smart-invoice-flow";
@@ -318,7 +318,6 @@ export function RecipeEditorModal({
   const renderRow = (line: DraftLine, index: number) => {
     const ingredient = lookup.get(line.ingredientId);
     const cost = ingredient ? lineRecipeCost(line.quantity, line.unit, ingredient.costPerBaseUnit) : 0;
-    const units = compatibleRecipeUnits(ingredient?.purchaseUnit ?? asPurchaseUnit(line.unit));
     return (
       <div key={line.key} className="rounded-2xl border border-beige-dark/15 bg-warm-white p-4">
         <div className="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_6.5rem_7rem_5.5rem_auto] md:items-start">
@@ -359,24 +358,18 @@ export function RecipeEditorModal({
           </div>
           <div>
             <Label className="mb-1 text-xs text-coffee/55">{t("admin.costing.recipeUnit")}</Label>
-            <select
-              className="h-10 w-full rounded-xl border border-beige-dark/30 bg-warm-white px-2 text-sm"
+            <MeasureUnitSelect
               value={asPurchaseUnit(line.unit)}
-              onChange={(e) => {
-                const next = asPurchaseUnit(e.target.value);
+              compatibleWith={ingredient?.purchaseUnit ?? asPurchaseUnit(line.unit)}
+              onChange={(nextUnit) => {
+                const next = asPurchaseUnit(nextUnit);
                 const from = asPurchaseUnit(line.unit);
                 updateLine(index, {
                   unit: next,
                   quantity: convertRecipeQuantity(line.quantity, from, next),
                 });
               }}
-            >
-              {units.map((unit) => (
-                <option key={unit} value={unit}>
-                  {t(unitLabelKey(unit))}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <p className="pt-6 text-end text-sm font-semibold md:pt-8">{formatIls(cost)}</p>
           <div className="flex justify-end gap-1 md:pt-6">

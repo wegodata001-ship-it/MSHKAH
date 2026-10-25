@@ -30,6 +30,7 @@ import { buildInvoiceDocument } from "@/lib/inventory/invoice-document";
 import { headerGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import { InvoiceLineNameEditor } from "@/features/admin/inventory/invoice-line-name-editor";
+import { InvoiceEditDialog } from "@/features/admin/inventory/invoice-edit-dialog";
 import type { InvoiceScanStatus, PurchaseInvoice, PurchaseInvoiceLine } from "@/lib/inventory/types";
 import { cn } from "@/lib/utils";
 import { InvoicePdfViewer } from "@/features/admin/inventory/invoice-pdf-viewer";
@@ -77,6 +78,7 @@ function stockState(invoice: PurchaseInvoice): StockState {
 export function InvoiceArchivePanel({
   invoices,
   suppliers = [],
+  products = [],
   aiState,
   onAddAction,
   onOpen,
@@ -87,6 +89,7 @@ export function InvoiceArchivePanel({
 }: {
   invoices: PurchaseInvoice[];
   suppliers?: Supplier[];
+  products?: Array<{ id: string; name: string }>;
   aiState?: AiState;
   onAddAction?: (action: AddDocumentAction) => void;
   onOpen: (invoice: PurchaseInvoice) => void;
@@ -117,6 +120,7 @@ export function InvoiceArchivePanel({
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
   const [totalsInvoice, setTotalsInvoice] = useState<PurchaseInvoice | null>(null);
   const [namesInvoice, setNamesInvoice] = useState<PurchaseInvoice | null>(null);
+  const [editInvoice, setEditInvoice] = useState<PurchaseInvoice | null>(null);
   const [savedTotals, setSavedTotals] = useState<Record<string, PurchaseInvoice>>({});
   const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -426,6 +430,21 @@ export function InvoiceArchivePanel({
           />
         </div>
       ) : null}
+      {editInvoice ? (
+        <InvoiceEditDialog
+          invoice={editInvoice}
+          suppliers={suppliers}
+          products={products}
+          onClose={() => setEditInvoice(null)}
+          onViewSource={(row) => void openSource(row)}
+          onSaved={(next) => {
+            setEditInvoice(null);
+            setSavedTotals((current) => ({ ...current, [next.id]: next }));
+            setArchived((rows) => rows.map((row) => (row.id === next.id ? next : row)));
+            onToast?.(t("admin.inventory.editInvoice.saved"), "success");
+          }}
+        />
+      ) : null}
       {namesInvoice ? (
         <InvoiceLineNameEditor
           invoice={namesInvoice}
@@ -497,7 +516,7 @@ export function InvoiceArchivePanel({
                       <td className="px-3 py-3"><StatusPill status={status} t={t} /></td>
                       <td className="px-3 py-3"><StockPill state={stock} t={t} /></td>
                       <td className="px-3 py-3">
-                        <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
+                        <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} onEdit={() => setEditInvoice(shown)} t={t} />
                       </td>
                       <td className="px-3 py-3 text-end">
                         <RowActions invoice={shown} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} onEditTotals={setTotalsInvoice} onEditNames={setNamesInvoice} t={t} />
@@ -534,7 +553,7 @@ export function InvoiceArchivePanel({
                     <StockPill state={stock} t={t} />
                   </div>
                   <div className="mt-3">
-                    <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} t={t} />
+                    <DocumentActions invoice={invoice} busy={pdfBusy === invoice.id} onView={() => void exportInvoice(invoice, "pdf", true)} onDownload={() => void exportInvoice(invoice, "pdf")} onExcel={() => void exportInvoice(invoice, "xlsx")} onSource={() => void openSource(invoice)} onEdit={() => setEditInvoice(shown)} t={t} />
                   </div>
                   <div className="mt-2 flex flex-wrap justify-end gap-1">
                     <RowActions invoice={shown} status={status} stock={stock} archived={scope === "archive"} onOpen={onOpen} onRescan={onRescan} onTransfer={onTransfer} onDelete={onDelete} onEditTotals={setTotalsInvoice} onEditNames={setNamesInvoice} t={t} />
@@ -826,6 +845,7 @@ function DocumentActions({
   onDownload,
   onExcel,
   onSource,
+  onEdit,
   t,
 }: {
   invoice: PurchaseInvoice;
@@ -834,6 +854,7 @@ function DocumentActions({
   onDownload: () => void;
   onExcel: () => void;
   onSource: () => void;
+  onEdit: () => void;
   t: (key: string) => string;
 }) {
   const hasSource = Boolean(invoice.sourceFile?.storagePath || invoice.fileUrl);
@@ -853,6 +874,9 @@ function DocumentActions({
       </Button>
       <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs" disabled={!hasSource || busy} onClick={onSource}>
         {t("admin.inventory.hub.pdf.source")}
+      </Button>
+      <Button type="button" variant="outline" className="h-8 rounded-lg px-2 text-xs" disabled={busy} onClick={onEdit}>
+        {t("admin.inventory.editInvoice")}
       </Button>
     </div>
   );

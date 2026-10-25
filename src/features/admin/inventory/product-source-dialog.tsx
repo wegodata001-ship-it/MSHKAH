@@ -78,12 +78,14 @@ export function ProductSourceDialog({
   onClose,
   onOpenInvoice,
   onOpenMovement,
+  onEditInvoice,
 }: {
   product: CostingIngredient;
   source: ProductSource;
   onClose: () => void;
   onOpenInvoice?: (invoiceId: string, lineId?: string) => void;
   onOpenMovement?: (movementId: string) => void;
+  onEditInvoice?: (invoiceId: string) => void;
 }) {
   const t = useT();
   const creationName = source.creation.supplierProductName;
@@ -122,6 +124,11 @@ export function ProductSourceDialog({
             {source.creation.invoiceId && onOpenInvoice ? (
               <button type="button" className="text-turquoise" onClick={() => onOpenInvoice(source.creation.invoiceId!)}>
                 {t("admin.inventory.source.openInvoice")}
+              </button>
+            ) : null}
+            {source.creation.invoiceId && onEditInvoice ? (
+              <button type="button" className="text-turquoise" onClick={() => onEditInvoice(source.creation.invoiceId!)}>
+                {t("admin.inventory.editInvoice")}
               </button>
             ) : null}
             {source.creation.fileUrl ? (
@@ -170,6 +177,11 @@ export function ProductSourceDialog({
                         {row.invoiceId && onOpenInvoice ? (
                           <button type="button" className="text-turquoise" onClick={() => onOpenInvoice(row.invoiceId!)}>
                             {t("admin.inventory.source.openInvoice")}
+                          </button>
+                        ) : null}
+                        {row.invoiceId && onEditInvoice ? (
+                          <button type="button" className="text-turquoise" onClick={() => onEditInvoice(row.invoiceId!)}>
+                            {t("admin.inventory.editInvoice")}
                           </button>
                         ) : null}
                         {row.fileUrl ? (
