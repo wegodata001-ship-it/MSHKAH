@@ -129,4 +129,27 @@ describe("saved invoice editing", () => {
     const unposted = planInvoiceEdit(invoice([line({ postedToStock: false })], { stockStatus: "none", inventoryPostedAt: undefined }), draft, { at: "t" });
     expect(unposted.stock).toEqual([]);
   });
+
+  it("adds five when quantity goes from 10 to 15 and removes four when it goes to 6", () => {
+    const current = invoice([line({ quantity: 10, unitPrice: 28, lineTotal: 280 })]);
+    const up = draftFromInvoice(current);
+    up.lines[0] = recalculateEditableLine(up.lines[0], { field: "quantity", quantity: 15 });
+    expect(planInvoiceEdit(current, up, { at: "t" }).stock[0]).toMatchObject({ kind: "update", fromBase: 10, toBase: 15, delta: 5 });
+    const down = draftFromInvoice(current);
+    down.lines[0] = recalculateEditableLine(down.lines[0], { field: "quantity", quantity: 6 });
+    expect(planInvoiceEdit(current, down, { at: "t" }).stock[0]).toMatchObject({ kind: "update", fromBase: 10, toBase: 6, delta: -4 });
+  });
+
+  it("moves the posted quantity to the newly assigned product", () => {
+    const current = invoice([line({ quantity: 10 })]);
+    const draft = draftFromInvoice(current);
+    draft.lines[0] = { ...draft.lines[0], productId: "towels" };
+    expect(planInvoiceEdit(current, draft, { at: "t" }).stock[0]).toMatchObject({
+      kind: "reassign",
+      fromProductId: "cookies",
+      toProductId: "towels",
+      fromBase: 10,
+      toBase: 10,
+    });
+  });
 });

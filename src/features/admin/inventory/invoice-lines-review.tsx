@@ -29,7 +29,7 @@ import {
   newInvoiceProductPatch,
   type InvoiceReviewFilter,
 } from "@/lib/inventory/invoice-line-review";
-import { finalizeInvoiceLine, invoiceTableTotals } from "@/lib/inventory/invoice-lines";
+import { emptyInvoiceLine, finalizeInvoiceLine, invoiceTableTotals, newInvoiceLineKey } from "@/lib/inventory/invoice-lines";
 import { MeasureUnitSelect } from "@/features/admin/measure-unit-select";
 import {
   applyInvoiceUnitChange,
@@ -175,6 +175,32 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
     onChangeLines(next);
     replaceDrafts({});
     return next;
+  };
+
+  const addProductLine = () => {
+    if (locked) return;
+    const created = emptyInvoiceLine(vatRate);
+    created.unit = "unit";
+    created.originalUnit = "unit";
+    onChangeLines([...flush(), created]);
+  };
+
+  const removeProductLine = (key: string) => {
+    if (locked) return;
+    onChangeLines(flush().filter((line) => line.key !== key));
+  };
+
+  const duplicateProductLine = (source: PurchaseInvoiceLine) => {
+    if (locked) return;
+    const copy = {
+      ...source,
+      key: newInvoiceLineKey(),
+      postedToStock: false,
+      quantityBefore: null,
+      quantityIn: null,
+      quantityAfter: null,
+    };
+    onChangeLines([...flush(), copy]);
   };
 
   const failLine = (key: string, line: PurchaseInvoiceLine, reason: string) => {
@@ -434,6 +460,8 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
                 onFlush={() => void flushKey(line.key)}
                 onCommit={(patch) => void commit(line.key, patch)}
                 onCreate={(name, category) => void createInline(line.key, name, category)}
+                onRemove={() => removeProductLine(line.key)}
+                onDuplicate={() => duplicateProductLine(line)}
               />
             ))}
           </tbody>
@@ -466,11 +494,18 @@ export const InvoiceLinesReview = forwardRef<InvoiceLinesReviewHandle, {
               onFlush={() => void flushKey(line.key)}
               onCommit={(patch) => void commit(line.key, patch)}
               onCreate={(name, category) => void createInline(line.key, name, category)}
+              onRemove={() => removeProductLine(line.key)}
+              onDuplicate={() => duplicateProductLine(line)}
               card
             />
           </div>
         ))}
       </div>
+      {!locked ? (
+        <Button type="button" variant="outline" onClick={addProductLine}>
+          {t("admin.inventory.editInvoice.addProduct")}
+        </Button>
+      ) : null}
       <LineMoneySummary lines={working} sourcePayable={sourcePayable} sourceNet={sourceNet} />
     </div>
   );
@@ -499,6 +534,8 @@ function LineEditor({
   onFlush,
   onCommit,
   onCreate,
+  onRemove,
+  onDuplicate,
   card,
 }: {
   line: PurchaseInvoiceLine;
@@ -523,6 +560,8 @@ function LineEditor({
   onFlush: () => void;
   onCommit: (patch: Partial<PurchaseInvoiceLine>) => void;
   onCreate: (name: string, category: string) => void;
+  onRemove?: () => void;
+  onDuplicate?: () => void;
   card?: boolean;
 }) {
   const t = useT();
@@ -820,6 +859,12 @@ function LineEditor({
         <button type="button" className="text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
           {t("admin.inventory.smart.moreOptions")}
         </button>
+        {!locked ? (
+          <div className="flex flex-wrap gap-3">
+            <button type="button" className="text-[11px] text-coffee/70" onClick={onDuplicate}>{t("admin.inventory.editInvoice.duplicateLine")}</button>
+            <button type="button" className="text-[11px] text-red-700" onClick={onRemove}>{t("admin.inventory.editInvoice.removeLine")}</button>
+          </div>
+        ) : null}
         {(extrasOpen || openCreate || status.kind === "missing-pack") && extras}
       </div>
     );
@@ -856,6 +901,12 @@ function LineEditor({
           <button type="button" className="mt-1 block text-[11px] text-coffee/55" onClick={() => setExtrasOpen((value) => !value)}>
             {t("admin.inventory.smart.moreOptions")}
           </button>
+          {!locked ? (
+            <div className="mt-1 flex flex-wrap gap-2">
+              <button type="button" className="text-[11px] text-coffee/70" onClick={onDuplicate}>{t("admin.inventory.editInvoice.duplicateLine")}</button>
+              <button type="button" className="text-[11px] text-red-700" onClick={onRemove}>{t("admin.inventory.editInvoice.removeLine")}</button>
+            </div>
+          ) : null}
         </td>
       </tr>
       {(extrasOpen || openCreate || status.kind === "missing-pack") && (

@@ -57,8 +57,10 @@ describe("invoice manual entry", () => {
     expect(lineMoneyUnchanged(before, next![0])).toBe(true);
   });
 
-  it("does not put a pack unit into stock until its contents are known", () => {
-    expect(invoiceLineQuantityBase({ quantity: 2, unit: "carton", conversionFactor: null })).toBeNull();
+  it("keeps an unconverted carton as cartons and applies a confirmed conversion once", () => {
+    expect(invoiceLineQuantityBase({ quantity: 2, unit: "carton", conversionFactor: null })).toBe(2);
+    expect(invoiceLineQuantityBase({ quantity: 2, unit: "bucket", conversionFactor: 10 })).toBe(2);
     expect(invoiceLineQuantityBase({ quantity: 1, unit: "carton", conversionFactor: 12000 })).toBe(12000);
+    expect(invoiceLineQuantityBase({ quantity: 12.7, unit: "unit", conversionFactor: 10 })).toBe(12.7);
   });
 });

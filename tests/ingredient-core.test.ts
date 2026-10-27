@@ -107,7 +107,8 @@ describe("unified material + two suppliers", () => {
 
 describe("pack conversion and compare", () => {
   it("adds 24 base units for two packs of 12", () => {
-    expect(invoiceLineQuantityBase(line({ quantity: 2, conversionFactor: 12, unit: "unit" }))).toBe(24);
+    expect(invoiceLineQuantityBase(line({ quantity: 2, conversionFactor: 12, unit: "carton" }))).toBe(24);
+    expect(invoiceLineQuantityBase(line({ quantity: 12.7, conversionFactor: 10, unit: "unit" }))).toBe(12.7);
     expect(invoiceLineQuantityBase(line({ quantity: 2, unit: "kg", conversionFactor: null }))).toBe(2000);
   });
 

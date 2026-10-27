@@ -1,5 +1,5 @@
 import type { BaseUnit, CostingIngredient, DishRecipe, PurchaseUnit, RecipeLine } from "@/lib/costing/types";
-import { asPurchaseUnit, baseUnitFor, purchaseQuantityInBase, unitsCompatible } from "@/lib/costing/units";
+import { asPurchaseUnit, baseUnitFor, purchaseQuantityInBase, resolveUnitFactor, unitsCompatible } from "@/lib/costing/units";
 import { confirmInvoiceMatchPatch } from "@/lib/inventory/invoice-line-review";
 import { currentStockBase, movementSignedBase, offerNormalizedCost, offerNormalizedLastPurchase, offerPurchaseUnit } from "@/lib/inventory/stock";
 import type {
@@ -9,14 +9,26 @@ import type {
   SupplierOffer,
 } from "@/lib/inventory/types";
 
-/** Invoice qty → base units. conversionFactor is base units per 1 invoice qty (e.g. 2 packs × 12 = 24). */
-export function invoiceLineQuantityBase(line: Pick<PurchaseInvoiceLine, "quantity" | "unit" | "conversionFactor">): number | null {
+function keepQuantity(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+/**
+ * Purchase quantity stays exact. A pack conversion is applied only when the
+ * unit has no built-in factor and a conversion was entered, or when the user
+ * confirmed one. A unit line is never multiplied by a stray factor.
+ */
+export function invoiceLineQuantityBase(line: Pick<PurchaseInvoiceLine, "quantity" | "unit" | "conversionFactor" | "conversionConfirmed">): number | null {
   const qty = Number(line.quantity);
   if (!Number.isFinite(qty) || qty <= 0) return null;
-  if (line.conversionFactor != null && line.conversionFactor > 0) return qty * line.conversionFactor;
-  if (!line.unit) return null;
-  const base = purchaseQuantityInBase(qty, line.unit);
-  return base > 0 ? base : null;
+  const universal = line.unit ? resolveUnitFactor(line.unit) : null;
+  const stated = line.conversionFactor != null && Number(line.conversionFactor) > 0 ? Number(line.conversionFactor) : null;
+  if (!universal) {
+    if (stated != null) return keepQuantity(qty * stated);
+    return keepQuantity(qty);
+  }
+  if (line.conversionConfirmed === true && stated != null) return keepQuantity(qty * stated);
+  return keepQuantity(qty * universal.factor);
 }
 
 export function packNeedsCompletion(

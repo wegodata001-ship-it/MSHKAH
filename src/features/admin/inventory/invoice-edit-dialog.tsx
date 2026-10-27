@@ -40,6 +40,7 @@ export function InvoiceEditDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const dirty = !draftsEqual(draft, initial);
+  const posted = invoice.stockStatus === "posted" || Boolean(invoice.inventoryPostedAt);
   const sourceUrl = invoice.sourceFile?.downloadUrl || invoice.fileUrl;
 
   useEffect(() => {
@@ -178,7 +179,10 @@ export function InvoiceEditDialog({
                     <Input className="text-end font-semibold" value={line.lineTotal ?? ""} onChange={(event) => updateLine(line.key, { field: "lineTotal", lineTotal: event.target.value === "" ? null : Number(event.target.value) })} />
                     <p className="mt-1 text-[11px] text-coffee/55">{t("admin.inventory.priceExVat")} {line.lineExcludingVat != null ? formatIls(line.lineExcludingVat) : "—"} · {t("admin.inventory.vat")} {line.vatAmount != null ? formatIls(line.vatAmount) : "—"} · {t("admin.inventory.priceIncVat")} {line.lineIncludingVat != null ? formatIls(line.lineIncludingVat) : "—"}</p>
                   </td>
-                  <td className="px-1 py-2"><Button type="button" variant="ghost" className="h-8 text-red-700" onClick={() => setDraft((current) => ({ ...current, lines: current.lines.filter((item) => item.key !== line.key) }))}>{t("admin.inventory.editInvoice.removeLine")}</Button></td>
+                  <td className="px-1 py-2">
+                    <Button type="button" variant="ghost" className="h-8" onClick={() => setDraft((current) => ({ ...current, lines: [...current.lines, { ...line, key: blankEditableLine(line.vatPercent, line.basis).key }] }))}>{t("admin.inventory.editInvoice.duplicateLine")}</Button>
+                    <Button type="button" variant="ghost" className="h-8 text-red-700" onClick={() => setDraft((current) => ({ ...current, lines: current.lines.filter((item) => item.key !== line.key) }))}>{t("admin.inventory.editInvoice.removeLine")}</Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -212,13 +216,16 @@ export function InvoiceEditDialog({
                 <Input className="col-span-2 text-end font-semibold" value={line.lineTotal ?? ""} placeholder={t("admin.inventory.lineTotal")} onChange={(event) => updateLine(line.key, { field: "lineTotal", lineTotal: event.target.value === "" ? null : Number(event.target.value) })} />
               </div>
               <p className="text-xs text-coffee/60">{t("admin.inventory.priceExVat")} {line.lineExcludingVat != null ? formatIls(line.lineExcludingVat) : "—"} · {t("admin.inventory.vat")} {line.vatAmount != null ? formatIls(line.vatAmount) : "—"}</p>
-              <Button type="button" variant="ghost" className="h-8 text-red-700" onClick={() => setDraft((current) => ({ ...current, lines: current.lines.filter((item) => item.key !== line.key) }))}>{t("admin.inventory.editInvoice.removeLine")}</Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="ghost" className="h-8" onClick={() => setDraft((current) => ({ ...current, lines: [...current.lines, { ...line, key: blankEditableLine(line.vatPercent, line.basis).key }] }))}>{t("admin.inventory.editInvoice.duplicateLine")}</Button>
+                <Button type="button" variant="ghost" className="h-8 text-red-700" onClick={() => setDraft((current) => ({ ...current, lines: current.lines.filter((item) => item.key !== line.key) }))}>{t("admin.inventory.editInvoice.removeLine")}</Button>
+              </div>
             </div>
           ))}
         </div>
 
         <Button type="button" variant="outline" onClick={() => setDraft((current) => ({ ...current, lines: [...current.lines, blankEditableLine(current.lines[0]?.vatPercent ?? 18, current.lines[0]?.basis ?? "excluding")] }))}>
-          {t("admin.inventory.editInvoice.addLine")}
+          {t("admin.inventory.editInvoice.addProduct")}
         </Button>
         <div className="rounded-2xl bg-beige/40 p-3 text-sm">
           <p>{t("admin.inventory.table.beforeVat")}: {formatIls(net)}</p>
@@ -228,7 +235,7 @@ export function InvoiceEditDialog({
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={close}>{t("admin.inventory.editInvoice.cancel")}</Button>
-          <Button type="button" variant="turquoise" disabled={busy || !dirty} onClick={() => void save()}>{t("admin.inventory.editInvoice.save")}</Button>
+          <Button type="button" variant="turquoise" disabled={busy || !dirty} onClick={() => void save()}>{posted ? t("admin.inventory.editInvoice.updateStock") : t("admin.inventory.editInvoice.save")}</Button>
         </div>
       </AdminModalBody>
     </AdminModal>

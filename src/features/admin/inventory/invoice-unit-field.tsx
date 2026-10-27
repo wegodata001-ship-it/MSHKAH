@@ -47,6 +47,7 @@ export function InvoiceUnitField({
     packCount: number | null;
     packContentUnit: PurchaseUnit | null;
     conversionFactor: number | null;
+    conversionConfirmed?: boolean;
   }) => void;
 }) {
   const t = useT();
@@ -67,11 +68,11 @@ export function InvoiceUnitField({
   const applyPack = (nextUnit: PurchaseUnit, nextCount: number | null, nextContent: PurchaseUnit | null) => {
     const universal = resolveUnitFactor(nextUnit);
     if (universal) {
-      onChange({ unit: nextUnit, customUnitId: undefined, packCount: null, packContentUnit: null, conversionFactor: universal.factor });
+      onChange({ unit: nextUnit, customUnitId: undefined, packCount: null, packContentUnit: null, conversionFactor: null, conversionConfirmed: false });
       return;
     }
     if (nextCount == null || !nextContent) {
-      onChange({ unit: nextUnit, customUnitId: undefined, packCount: nextCount, packContentUnit: nextContent, conversionFactor: null });
+      onChange({ unit: nextUnit, customUnitId: undefined, packCount: nextCount, packContentUnit: nextContent, conversionFactor: null, conversionConfirmed: false });
       return;
     }
     const priced = costPerBaseFromPack({
@@ -83,7 +84,7 @@ export function InvoiceUnitField({
     });
     if (!priced.ok) {
       setError(t("admin.invoice.manual.incompatible"));
-      onChange({ unit: nextUnit, customUnitId: undefined, packCount: nextCount, packContentUnit: nextContent, conversionFactor: null });
+      onChange({ unit: nextUnit, customUnitId: undefined, packCount: nextCount, packContentUnit: nextContent, conversionFactor: null, conversionConfirmed: false });
       return;
     }
     setError(null);
@@ -93,6 +94,7 @@ export function InvoiceUnitField({
       packCount: nextCount,
       packContentUnit: nextContent,
       conversionFactor: priced.factor,
+      conversionConfirmed: true,
     });
   };
 
@@ -127,6 +129,7 @@ export function InvoiceUnitField({
               packCount: item.contentCount ?? null,
               packContentUnit: item.contentUnit ?? null,
               conversionFactor: item.factor,
+              conversionConfirmed: true,
             });
             return;
           }

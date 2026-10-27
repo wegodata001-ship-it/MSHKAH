@@ -24,6 +24,7 @@ import { InvoiceSupplierField, NoSupplierStockWarning } from "@/features/admin/i
 import { headerGross, invoiceMoneyCheck, payableInvoiceGross } from "@/lib/inventory/invoice-finance";
 import { InvoiceTotalCard } from "@/features/admin/inventory/invoice-total-card";
 import { InvoiceLinesReview, type InvoiceLinesReviewHandle } from "@/features/admin/inventory/invoice-lines-review";
+import { InvoiceEditDialog } from "@/features/admin/inventory/invoice-edit-dialog";
 import { applyComputedTotals, intakeFailureMessageKey, intakeStatusUncertain, invoiceApproveBlockers, readyProductLineCount } from "@/lib/inventory/invoice-intake";
 import { invoiceAfterPersist, InvoiceLineSaveError, invoiceLineBlockers } from "@/lib/inventory/invoice-line-status";
 import { isPostedInvoice, matchSupplier } from "@/lib/inventory/invoice-smart-match";
@@ -145,6 +146,7 @@ export function SmartInvoiceFlow({
   const [error, setError] = useState<string | null>(null);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [createKey, setCreateKey] = useState<string | null>(null);
   const [askStock, setAskStock] = useState(false);
   const [receipt, setReceipt] = useState<PurchaseInvoice | null>(null);
@@ -903,8 +905,12 @@ export function SmartInvoiceFlow({
             variant="turquoise"
             data-intake-phase={phase}
             className="relative z-30 min-h-11 w-full touch-manipulation sm:w-auto"
-            disabled={saving || stockPosted || postedDuplicate || lineBlockers.length > 0}
+            disabled={saving || postedDuplicate || (!stockPosted && lineBlockers.length > 0)}
             onClick={async () => {
+              if (stockPosted) {
+                setEditOpen(true);
+                return;
+              }
               if (!invoice || savingRef.current) return;
     savingRef.current = true;
     flushSync(() => {
@@ -996,6 +1002,8 @@ export function SmartInvoiceFlow({
               <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.creatingIngredients")}</>
             ) : phase === "posting" ? (
               <><Loader2 className="me-2 h-4 w-4 animate-spin" /> {t("admin.inventory.smart.postingStock")}</>
+            ) : stockPosted ? (
+              t("admin.inventory.editInvoice.updateStock")
             ) : (
               t("admin.inventory.smart.approveStock")
             )}
@@ -1179,6 +1187,20 @@ export function SmartInvoiceFlow({
           setTransfer(true);
         }}
       />
+      {editOpen && invoice?.id ? (
+        <InvoiceEditDialog
+          invoice={invoice}
+          suppliers={suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name }))}
+          products={ingredients.map((item) => ({ id: item.id, name: item.name }))}
+          onClose={() => setEditOpen(false)}
+          onSaved={(saved) => {
+            invoiceRef.current = saved;
+            setInvoice(saved);
+            setEditOpen(false);
+            onToast?.(t("admin.inventory.editInvoice.saved"));
+          }}
+        />
+      ) : null}
     </div>
   );
 }

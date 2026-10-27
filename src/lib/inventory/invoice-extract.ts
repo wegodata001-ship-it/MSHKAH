@@ -99,7 +99,9 @@ export function guessUnit(raw: string | null | undefined): PurchaseUnit | null {
   if (/^g\b|גרם|غرام/.test(value)) return "g";
   if (/l\b|ליטר|لتر/.test(value)) return "liter";
   if (/ml|מ.?ל|مل/.test(value)) return "ml";
-  if (/unit|יח|pcs|piece|carton|קרטון|علبة|קארטון/.test(value)) return "unit";
+  if (/קרטון|קארטון|carton/.test(value)) return "carton";
+  if (/דלי|bucket/.test(value)) return "bucket";
+  if (/unit|יח|pcs|piece/.test(value)) return "unit";
   return null;
 }
 

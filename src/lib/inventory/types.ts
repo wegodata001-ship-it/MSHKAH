@@ -285,6 +285,10 @@ export type PurchaseInvoiceLine = {
   barcode?: string;
   conversionNote?: string;
   conversionFactor?: number | null;
+  /** The admin confirmed this conversion. A scanned factor alone must not change a unit quantity. */
+  conversionConfirmed?: boolean;
+  originalQuantity?: number | null;
+  originalUnit?: PurchaseUnit | null;
   needsReview?: boolean;
   rowStatus?: InvoiceRowStatus;
   previousNormalized?: number | null;

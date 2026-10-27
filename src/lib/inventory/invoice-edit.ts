@@ -125,6 +125,10 @@ function asInvoiceLine(row: EditableInvoiceLine, previous?: PurchaseInvoiceLine)
     priceIncludesVat: row.basis === "including" ? true : row.basis === "excluding" ? false : null,
     lastEditedField: row.anchor,
     productId: row.productId || previous?.productId,
+    originalQuantity: previous?.originalQuantity ?? previous?.quantity ?? row.quantity,
+    originalUnit: previous?.originalUnit ?? previous?.unit ?? row.unit,
+    conversionFactor: row.unit === previous?.unit ? previous?.conversionFactor ?? null : null,
+    conversionConfirmed: row.unit === previous?.unit ? previous?.conversionConfirmed === true : false,
   };
 }
 

@@ -241,7 +241,7 @@ function sharedEditors(line: PurchaseInvoiceLine, locked: boolean | undefined, u
         lineTotal={net}
         expectedBase={expectedBase}
         disabled={unitLocked}
-        onChange={(patch) => onChange(patch.unit === "bucket" ? { ...patch, conversionFactor: line.conversionFactor ?? null } : patch)}
+        onChange={(patch) => onChange(patch)}
       />
     ),
     price: (
