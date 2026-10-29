@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,10 @@ import type { CostingIngredient, PurchaseUnit } from "@/lib/costing/types";
 import { stockInDisplayUnit } from "@/lib/inventory/issue";
 import { planInventoryAdjustment, type ShownUnitPrice } from "@/lib/inventory/last-price";
 import { queryStockSheet, type StockSheetSort } from "@/lib/inventory/stock-sheet";
+import { INVENTORY_COLUMNS, clampColumnWidth, clampRowHeight, columnWidth, visibleInventoryColumns, type InventoryColumnId } from "@/lib/inventory/inventory-view";
+import { useInventoryView } from "@/features/admin/inventory-view-context";
+import { fetchReport, saveBlob } from "@/features/admin/reports/export-menu";
+import { cn } from "@/lib/utils";
 import type { Supplier } from "@/lib/inventory/types";
 
 export type InventorySheetRow = {
@@ -28,6 +32,8 @@ export type InventorySheetRow = {
   current: number;
   discrepancy: boolean;
   duplicate: boolean;
+  belowMin: boolean;
+  missingSupplier: boolean;
   lastPrice: ShownUnitPrice | null;
   bestText: string;
   paid: number | null;
@@ -52,6 +58,13 @@ export function InventorySheet({
   onEditProduct,
   onOpenDetails,
   onToast,
+  search = "",
+  onSearch,
+  category = "",
+  onCategory,
+  supplierId = "",
+  onSupplier,
+  onAddProduct,
 }: {
   rows: InventorySheetRow[];
   suppliers: Supplier[];
@@ -62,8 +75,24 @@ export function InventorySheet({
   onEditProduct: (product: CostingIngredient) => void;
   onOpenDetails: (productId: string) => void;
   onToast: (message: string) => void;
+  search?: string;
+  onSearch?: (value: string) => void;
+  category?: string;
+  onCategory?: (value: string) => void;
+  supplierId?: string;
+  onSupplier?: (value: string) => void;
+  onAddProduct?: () => void;
 }) {
   const t = useT();
+  const view = useInventoryView();
+  const full = view.prefs.mode === "full";
+  const columns = visibleInventoryColumns(view.prefs);
+  useEffect(() => {
+    view.setActive(true);
+    return () => view.setActive(false);
+  }, [view.setActive]);
+  const columnsPicker = INVENTORY_COLUMNS.filter((id) => id !== "product" && id !== "actions");
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const [zero, setZero] = useState(false);
   const [negative, setNegative] = useState(false);
   const [missingPrice, setMissingPrice] = useState(false);
@@ -171,8 +200,101 @@ export function InventorySheet({
 
   const menuRow = queried.find((row) => row.item.id === menu?.id);
 
+  async function exportVisible(format: "xlsx" | "pdf") {
+    try {
+      const file = await fetchReport({ kind: "inventory", format, scope: "all" });
+      saveBlob(file.blob, file.filename);
+    } catch {
+      onToast(t("admin.inventory.sheet.failed"));
+    }
+  }
+
+  function startResize(id: InventoryColumnId, event: ReactPointerEvent<HTMLElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const start = columnWidth(view.prefs, id);
+    const rtl = document.documentElement.dir === "rtl" || document.body.dir === "rtl";
+    const move = (pointer: PointerEvent) => {
+      const delta = rtl ? startX - pointer.clientX : pointer.clientX - startX;
+      view.setColumnWidth(id, clampColumnWidth(start + delta));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function renderColumn(id: InventoryColumnId, row: InventorySheetRow): ReactNode {
+    if (id === "product") {
+      return (
+        <>
+          <NameCell row={row} open={cell?.id === row.item.id && cell.field === "name"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "name" })} onTab={() => tabFrom(row.item.id, "name")} onSave={saveName} />
+          {row.duplicate ? <span className="ms-1 text-[10px] text-amber-800">{t("admin.inventory.sheet.duplicate")}</span> : null}
+        </>
+      );
+    }
+    if (id === "category") return <CategoryCell row={row} open={cell?.id === row.item.id && cell.field === "category"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "category" })} onTab={() => tabFrom(row.item.id, "category")} onSave={(next) => void patchOne(row, { category: next })} />;
+    if (id === "source") return <button type="button" className="block max-w-full truncate text-start text-turquoise" title={row.sourceText} onClick={() => onOpenSource(row.item.id)}>{row.sourceText}</button>;
+    if (id === "supplier") return <SupplierCell row={row} suppliers={suppliers} open={cell?.id === row.item.id && cell.field === "supplier"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "supplier" })} onTab={() => tabFrom(row.item.id, "supplier")} onSave={(lastSupplierId) => void patchOne(row, { lastSupplierId })} />;
+    if (id === "opening") return <QtyButton value={showQty(row.opening, row.item)} title={t("admin.inventory.sheet.openingTitle")} onClick={() => setEditor({ kind: "opening", row })} />;
+    if (id === "incoming") return <QtyButton value={showQty(row.incoming, row.item)} title={t("admin.inventory.sheet.incomingHint")} onClick={() => onOpenSource(row.item.id)} />;
+    if (id === "consumption") return <QtyButton value={showQty(row.consumption, row.item)} title={t("admin.inventory.sheet.consumptionHint")} onClick={() => onShowLedger(row.item.id)} />;
+    if (id === "current") return <QtyButton value={showQty(row.current, row.item)} title={t("admin.inventory.sheet.adjustTitle")} strong={row.discrepancy} onClick={() => setEditor({ kind: "adjust", row })} />;
+    if (id === "unit") return <UnitSelect value={row.item.purchaseUnit} onChange={(purchaseUnit) => { if (purchaseUnit) void patchOne(row, { purchaseUnit }); }} />;
+    if (id === "lastPrice") return <PriceCell row={row} part="ex" onEdit={() => setEditor({ kind: "price", row })} />;
+    if (id === "priceInc") return <PriceCell row={row} part="inc" onEdit={() => setEditor({ kind: "price", row })} />;
+    if (id === "best") return <button type="button" className="max-w-full truncate" title={row.bestText || t("admin.inventory.sheet.bestHint")} onClick={() => onOpenDetails(row.item.id)}>{row.bestText || "—"}</button>;
+    if (id === "paid") return <button type="button" className="tabular-nums" onClick={() => setEditor({ kind: "price", row })}>{row.paid != null ? formatIls(row.paid) : "—"}</button>;
+    if (id === "status") return <span className="truncate" title={statusText(row, t)}>{statusText(row, t)}</span>;
+    if (id === "conversion") return <PackCell row={row} onSave={(packCount, packContentUnit) => void patchOne(row, { packCount, packContentUnit })} />;
+    if (id === "notes") return <NotesCell row={row} open={cell?.id === row.item.id && cell.field === "notes"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "notes" })} onSave={(notes) => void patchOne(row, { notes })} />;
+    return <MenuButton row={row} onOpen={setMenu} />;
+  }
+
   return (
-    <div className="space-y-3">
+    <div className={cn("flex min-h-0 flex-col gap-3", full && "fixed inset-0 z-[80] overflow-hidden bg-cream p-3 dark:bg-[#120e0c]")}>
+      <div className="sticky top-0 z-30 flex shrink-0 flex-wrap items-center gap-2 bg-cream/95 py-1 dark:bg-[#120e0c]/95">
+        <Button type="button" variant={full ? "turquoise" : "outline"} onClick={() => view.setMode(full ? "normal" : "full")}>
+          {full ? t("admin.inventory.view.exit") : t("admin.inventory.view.enter")}
+        </Button>
+        <Button type="button" variant={view.prefs.mode === "normal" ? "turquoise" : "outline"} onClick={() => view.setMode("normal")}>{t("admin.inventory.view.normal")}</Button>
+        <Button type="button" variant={view.prefs.mode === "wide" ? "turquoise" : "outline"} onClick={() => view.setMode("wide")}>{t("admin.inventory.view.wide")}</Button>
+        <Button type="button" variant={full ? "turquoise" : "outline"} onClick={() => view.setMode("full")}>{t("admin.inventory.view.full")}</Button>
+        {onSearch ? <Input value={search} onChange={(event) => onSearch(event.target.value)} placeholder={t("admin.inventory.searchAlsoAlias")} className="h-9 max-w-xs" /> : null}
+        {onCategory ? (
+          <select className="h-9 rounded-xl border px-2 text-sm" value={category} onChange={(event) => onCategory(event.target.value)}>
+            <option value="">{t("admin.costing.category")}</option>
+            {categories.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        ) : null}
+        {onSupplier ? (
+          <select className="h-9 rounded-xl border px-2 text-sm" value={supplierId} onChange={(event) => onSupplier(event.target.value)}>
+            <option value="">{t("admin.costing.supplier")}</option>
+            {suppliers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        ) : null}
+        {onAddProduct ? <Button type="button" variant="turquoise" className="h-9" onClick={onAddProduct}>{t("admin.inventory.newProduct")}</Button> : null}
+        <Button type="button" variant="outline" className="h-9" onClick={() => {
+          const row = selected.length === 1 ? queried.find((item) => item.item.id === selected[0]) : undefined;
+          if (!row) {
+            onToast(t("admin.inventory.view.pickOne"));
+            return;
+          }
+          onEditProduct(row.item);
+        }}>{t("admin.inventory.view.quick")}</Button>
+        <select className="h-9 rounded-xl border px-2 text-sm" value={view.prefs.density} onChange={(event) => view.setDensity(event.target.value as "compact" | "regular" | "comfortable")}>
+          <option value="compact">{t("admin.inventory.view.compact")}</option>
+          <option value="regular">{t("admin.inventory.view.regular")}</option>
+          <option value="comfortable">{t("admin.inventory.view.comfortable")}</option>
+        </select>
+        <Button type="button" variant="outline" className="h-9" onClick={() => view.setRowHeight(clampRowHeight(view.prefs.rowHeight - 4))}>{t("admin.inventory.view.shorter")}</Button>
+        <Button type="button" variant="outline" className="h-9" onClick={() => view.setRowHeight(clampRowHeight(view.prefs.rowHeight + 4))}>{t("admin.inventory.view.taller")}</Button>
+        <Button type="button" variant="outline" className="h-9" onClick={() => setColumnsOpen((value) => !value)}>{t("admin.inventory.view.columns")}</Button>
+        <Button type="button" variant="outline" className="h-9" onClick={view.resetColumns}>{t("admin.inventory.view.reset")}</Button>
+        <Button type="button" variant="outline" className="h-9" onClick={() => void exportVisible("xlsx")}>{t("admin.export.excel")}</Button>
+        <Button type="button" variant="outline" className="h-9" onClick={() => void exportVisible("pdf")}>{t("admin.export.pdf")}</Button>
       <div className="flex flex-wrap items-center gap-2">
         <FilterButton active={zero} onClick={() => setZero((value) => !value)}>{t("admin.inventory.sheet.zero")}</FilterButton>
         <FilterButton active={negative} onClick={() => setNegative((value) => !value)}>{t("admin.inventory.sheet.negative")}</FilterButton>
@@ -186,6 +308,17 @@ export function InventorySheet({
         </select>
         <span className="text-sm text-coffee/60">{t("admin.inventory.sheet.count").replace("{count}", String(queried.length))}</span>
       </div>
+      </div>
+      {columnsOpen ? (
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-beige-dark/20 bg-white p-3">
+          {columnsPicker.map((id) => (
+            <label key={id} className="flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={!view.prefs.hidden.includes(id)} onChange={() => view.toggleColumn(id)} />
+              {columnTitle(id, t)}
+            </label>
+          ))}
+        </div>
+      ) : null}
 
       {selected.length > 0 && (
         <div className="grid gap-2 rounded-2xl border border-beige-dark/20 bg-beige/30 p-3 md:grid-cols-6">
@@ -205,7 +338,7 @@ export function InventorySheet({
         {categories.map((item) => <option key={item} value={item} />)}
       </datalist>
 
-      <div className="space-y-2 md:hidden">
+      <div className={cn("min-h-0 space-y-2 overflow-auto md:hidden", full && "flex-1")}>
         {queried.map((row) => (
           <article key={row.item.id} className="space-y-2 rounded-2xl border border-beige-dark/20 bg-white p-3">
             <div className="flex items-start justify-between gap-2">
@@ -227,60 +360,36 @@ export function InventorySheet({
         ))}
       </div>
 
-      <div className="hidden max-h-[70vh] overflow-auto rounded-2xl border border-beige-dark/20 md:block">
-        <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
+      <div className={cn("hidden min-h-0 md:flex md:flex-col", full && "flex-1")}>
+        <div className={cn("min-h-0 overflow-auto overscroll-contain rounded-2xl border border-beige-dark/20", full ? "flex-1" : "max-h-[calc(100dvh-13rem)]")}>
+        <table className="border-separate border-spacing-0 text-sm" style={{ width: 40 + columns.reduce((sum, id) => sum + columnWidth(view.prefs, id), 0) }}>
           <thead className="text-coffee/70">
             <tr>
               <Head className="sticky start-0 top-0 z-40 w-10 bg-beige">{""}</Head>
-              <Head className="sticky start-10 top-0 z-40 min-w-40 bg-beige">{t("admin.inventory.product")}</Head>
-              <Head>{t("admin.costing.category")}</Head>
-              <Head>{t("admin.inventory.source")}</Head>
-              <Head>{t("admin.inventory.lastSupplier")}</Head>
-              <Head align="end">{t("admin.inventory.opening")}</Head>
-              <Head align="end">{t("admin.inventory.stockIn")}</Head>
-              <Head align="end">{t("admin.inventory.consumption")}</Head>
-              <Head align="end">{t("admin.inventory.current")}</Head>
-              <Head>{t("admin.costing.unit")}</Head>
-              <Head align="end">{t("admin.inventory.priceExVat")}</Head>
-              <Head align="end">{t("admin.inventory.priceIncVat")}</Head>
-              <Head align="end">{t("admin.inventory.bestPrice")}</Head>
-              <Head align="end">{t("admin.inventory.sheet.paid")}</Head>
-              <Head>{t("admin.inventory.sheet.conversion")}</Head>
-              <Head>{t("admin.inventory.sheet.notes")}</Head>
-              <Head>{t("admin.inventory.actions")}</Head>
+              {columns.map((id) => (
+                <Head key={id} align={numericColumn(id) ? "end" : "start"} className={id === "product" ? "sticky start-10 top-0 z-40 bg-beige" : ""}>
+                  <span className="block truncate" style={{ width: columnWidth(view.prefs, id) }}>{columnTitle(id, t)}</span>
+                  <span className="absolute inset-y-0 end-0 w-1.5 cursor-col-resize touch-none" onPointerDown={(event) => startResize(id, event)} />
+                </Head>
+              ))}
             </tr>
           </thead>
           <tbody>
             {queried.map((row) => (
-              <tr key={row.item.id} className="h-10">
+              <tr key={row.item.id} style={{ height: view.prefs.rowHeight }}>
                 <Body className="sticky start-0 z-10 bg-white">
                   <input type="checkbox" checked={selected.includes(row.item.id)} onChange={() => setSelected((current) => current.includes(row.item.id) ? current.filter((id) => id !== row.item.id) : [...current, row.item.id])} />
                 </Body>
-                <Body className="sticky start-10 z-10 max-w-[16rem] bg-white">
-                  <NameCell row={row} open={cell?.id === row.item.id && cell.field === "name"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "name" })} onTab={() => tabFrom(row.item.id, "name")} onSave={saveName} />
-                  {row.duplicate ? <span className="ms-1 text-[10px] text-amber-800">{t("admin.inventory.sheet.duplicate")}</span> : null}
-                </Body>
-                <Body><CategoryCell row={row} open={cell?.id === row.item.id && cell.field === "category"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "category" })} onTab={() => tabFrom(row.item.id, "category")} onSave={(category) => void patchOne(row, { category })} /></Body>
-                <Body>
-                  <button type="button" className="block max-w-[12rem] truncate text-start text-turquoise" title={row.sourceText} onClick={() => onOpenSource(row.item.id)}>{row.sourceText}</button>
-                </Body>
-                <Body><SupplierCell row={row} suppliers={suppliers} open={cell?.id === row.item.id && cell.field === "supplier"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "supplier" })} onTab={() => tabFrom(row.item.id, "supplier")} onSave={(lastSupplierId) => void patchOne(row, { lastSupplierId })} /></Body>
-                <QtyCell value={showQty(row.opening, row.item)} title={t("admin.inventory.sheet.openingTitle")} onClick={() => setEditor({ kind: "opening", row })} />
-                <QtyCell value={showQty(row.incoming, row.item)} title={t("admin.inventory.sheet.incomingHint")} onClick={() => onOpenSource(row.item.id)} />
-                <QtyCell value={showQty(row.consumption, row.item)} title={t("admin.inventory.sheet.consumptionHint")} onClick={() => onShowLedger(row.item.id)} />
-                <QtyCell value={showQty(row.current, row.item)} title={t("admin.inventory.sheet.adjustTitle")} strong={row.discrepancy} onClick={() => setEditor({ kind: "adjust", row })} />
-                <Body><UnitSelect value={row.item.purchaseUnit} onChange={(purchaseUnit) => { if (purchaseUnit) void patchOne(row, { purchaseUnit }); }} /></Body>
-                <Body align="end"><PriceCell row={row} part="ex" onEdit={() => setEditor({ kind: "price", row })} /></Body>
-                <Body align="end"><PriceCell row={row} part="inc" onEdit={() => setEditor({ kind: "price", row })} /></Body>
-                <Body align="end"><button type="button" className="max-w-[9rem] truncate" title={row.bestText || t("admin.inventory.sheet.bestHint")} onClick={() => onOpenDetails(row.item.id)}>{row.bestText || "—"}</button></Body>
-                <Body align="end"><button type="button" className="tabular-nums" onClick={() => setEditor({ kind: "price", row })}>{row.paid != null ? formatIls(row.paid) : "—"}</button></Body>
-                <Body><PackCell row={row} onSave={(packCount, packContentUnit) => void patchOne(row, { packCount, packContentUnit })} /></Body>
-                <Body><NotesCell row={row} open={cell?.id === row.item.id && cell.field === "notes"} onClose={() => setCell(null)} onOpen={() => setCell({ id: row.item.id, field: "notes" })} onSave={(notes) => void patchOne(row, { notes })} /></Body>
-                <Body><MenuButton row={row} onOpen={setMenu} /></Body>
+                {columns.map((id) => (
+                  <Body key={id} align={numericColumn(id) ? "end" : "start"} className={id === "product" ? "sticky start-10 z-10 bg-white" : ""}>
+                    <div className="truncate" style={{ width: columnWidth(view.prefs, id) }}>{renderColumn(id, row)}</div>
+                  </Body>
+                ))}
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {menu && menuRow ? (
@@ -556,21 +665,51 @@ function UnitSelect({ value, onChange }: { value: string; onChange: (unit: strin
   );
 }
 
-function QtyCell({ value, title, onClick, strong }: { value: string; title: string; onClick: () => void; strong?: boolean }) {
-  return (
-    <td className="border-t border-beige-dark/10 px-2 text-end">
-      <button type="button" className={`tabular-nums whitespace-nowrap ${strong ? "font-semibold text-amber-800" : ""}`} title={title} onClick={onClick}>{value}</button>
-    </td>
-  );
-}
-
-function Head({ children, className = "", align = "start" }: { children: string; className?: string; align?: "start" | "end" }) {
+function Head({ children, className = "", align = "start" }: { children: ReactNode; className?: string; align?: "start" | "end" }) {
   const corner = className.includes("z-40");
-  return <th className={`sticky top-0 whitespace-nowrap border-b border-beige-dark/15 bg-beige px-2 py-2 font-medium ${corner ? "z-40" : "z-30"} ${align === "end" ? "text-end" : "text-start"} ${className.replace("z-40", "")}`}>{children}</th>;
+  return <th className={`relative sticky top-0 whitespace-nowrap border-b border-beige-dark/15 bg-beige px-2 py-2 font-medium ${corner ? "z-40" : "z-30"} ${align === "end" ? "text-end" : "text-start"} ${className.replace("z-40", "")}`}>{children}</th>;
 }
 
 function Body({ children, className = "", align = "start" }: { children: ReactNode; className?: string; align?: "start" | "end" }) {
-  return <td className={`h-10 whitespace-nowrap border-t border-beige-dark/10 px-2 ${align === "end" ? "text-end" : "text-start"} ${className}`}>{children}</td>;
+  return <td className={`whitespace-nowrap border-t border-beige-dark/10 px-2 ${align === "end" ? "text-end" : "text-start"} ${className}`}>{children}</td>;
+}
+
+function QtyButton({ value, title, onClick, strong }: { value: string; title: string; onClick: () => void; strong?: boolean }) {
+  return <button type="button" title={title} className={`tabular-nums underline decoration-dotted ${strong ? "font-semibold text-amber-800" : ""}`} onClick={onClick}>{value}</button>;
+}
+
+function numericColumn(id: InventoryColumnId): boolean {
+  return id === "opening" || id === "incoming" || id === "consumption" || id === "current" || id === "lastPrice" || id === "priceInc" || id === "best" || id === "paid";
+}
+
+function columnTitle(id: InventoryColumnId, t: (key: string) => string): string {
+  if (id === "product") return t("admin.inventory.product");
+  if (id === "category") return t("admin.costing.category");
+  if (id === "source") return t("admin.inventory.source");
+  if (id === "supplier") return t("admin.inventory.lastSupplier");
+  if (id === "opening") return t("admin.inventory.opening");
+  if (id === "incoming") return t("admin.inventory.stockIn");
+  if (id === "consumption") return t("admin.inventory.consumption");
+  if (id === "current") return t("admin.inventory.current");
+  if (id === "unit") return t("admin.costing.unit");
+  if (id === "lastPrice") return t("admin.inventory.lastPrice");
+  if (id === "priceInc") return t("admin.inventory.priceIncVat");
+  if (id === "best") return t("admin.inventory.bestPrice");
+  if (id === "paid") return t("admin.inventory.sheet.paid");
+  if (id === "status") return t("admin.inventory.view.status");
+  if (id === "conversion") return t("admin.inventory.sheet.conversion");
+  if (id === "notes") return t("admin.inventory.sheet.notes");
+  return t("admin.inventory.actions");
+}
+
+function statusText(row: InventorySheetRow, t: (key: string) => string): string {
+  const parts = [
+    row.belowMin ? t("admin.inventory.belowMin") : "",
+    row.missingSupplier ? t("admin.inventory.missingSupplier") : "",
+    row.discrepancy ? t("admin.inventory.sheet.gap") : "",
+    row.duplicate ? t("admin.inventory.sheet.duplicate") : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || t("admin.inventory.view.ok");
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

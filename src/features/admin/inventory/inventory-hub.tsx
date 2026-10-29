@@ -2,9 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Camera, Plus } from "lucide-react";
+import { Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useT } from "@/components/providers/locale-provider";
 import { useAdminPath } from "@/hooks/useAdminPath";
 import { AdminCard } from "@/features/admin/components/admin-card";
@@ -188,15 +187,6 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("admin.inventory.searchAlsoAlias")} className="max-w-sm" />
-        <select className="h-10 rounded-xl border px-2 text-sm" value={category} onChange={(e) => setCategory(e.target.value)}>
-          <option value="">{t("admin.costing.category")}</option>
-          {categories.map((item) => <option key={item} value={item}>{item}</option>)}
-        </select>
-        <select className="h-10 rounded-xl border px-2 text-sm" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-          <option value="">{t("admin.costing.supplier")}</option>
-          {props.suppliers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
         <select className="h-10 rounded-xl border px-2 text-sm" value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "" | ProductSourceKind)}>
           <option value="">{t("admin.inventory.source.filter")}</option>
           <option value="invoice">{t("admin.inventory.source.kind.invoice")}</option>
@@ -225,9 +215,6 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             <Camera className="h-5 w-5" />
             {t("admin.inventory.smart.camera")}
           </Link>
-        </Button>
-        <Button type="button" variant="turquoise" onClick={props.onAddProduct}>
-          <Plus className="h-4 w-4" /> {t("admin.inventory.newProduct")}
         </Button>
       </div>
       {purchaseImport && props.pane === "products" && <PurchaseListPanel {...props} />}
@@ -277,6 +264,8 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
             current: row.current,
             discrepancy: row.discrepancy,
             duplicate: row.duplicate,
+            belowMin: row.belowMin,
+            missingSupplier: row.missingSupplier,
             lastPrice: row.lastPrice,
             bestText: row.bestText,
             paid: row.paid,
@@ -295,6 +284,13 @@ export function InventorySection(props: InventoryHubProps & { pane: InventoryPan
           onEditProduct={props.onEditProduct}
           onOpenDetails={setDetailsId}
           onToast={props.onToast}
+          search={search}
+          onSearch={setSearch}
+          category={category}
+          onCategory={setCategory}
+          supplierId={supplierId}
+          onSupplier={setSupplierId}
+          onAddProduct={props.onAddProduct}
         />
       )}
       {detailsId && (() => {

@@ -8,7 +8,9 @@ import { AdminMobileNav } from "./components/admin-mobile-nav";
 import { AdminHeader } from "./admin-header";
 import { AuthGuard } from "./auth-guard";
 import { MeasureUnitsProvider } from "@/features/admin/measure-units-provider";
+import { InventoryViewProvider, useInventoryView } from "@/features/admin/inventory-view-context";
 import { isAdminLoginPath } from "@/lib/domains/host-routing";
+import { cn } from "@/lib/utils";
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -22,6 +24,31 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   return (
     <AuthGuard>
       <MeasureUnitsProvider>
+      <InventoryViewProvider>
+      <AdminFrame mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} pathname={pathname}>
+        {children}
+      </AdminFrame>
+      </InventoryViewProvider>
+      </MeasureUnitsProvider>
+    </AuthGuard>
+  );
+}
+
+function AdminFrame({
+  children,
+  mobileOpen,
+  setMobileOpen,
+  pathname,
+}: {
+  children: React.ReactNode;
+  mobileOpen: boolean;
+  setMobileOpen: (open: boolean) => void;
+  pathname: string;
+}) {
+  const { prefs, active } = useInventoryView();
+  const wide = active && prefs.mode === "wide";
+  const full = active && prefs.mode === "full";
+  return (
       <div
         className="min-h-screen overflow-x-hidden bg-cream dark:bg-[#120e0c]"
         data-admin
@@ -35,27 +62,23 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           Desktop layout (lg+): CSS Grid — Sidebar | Main (Header + Content)
           No fixed overlay; sidebar is a real grid column.
         */}
-        <div className="lg:grid lg:min-h-screen lg:grid-cols-[280px_minmax(0,1fr)]">
-          {/* Column 1: Sidebar — in-flow, sticky, 100vh */}
-          <AdminSidebar />
+        <div className={cn("lg:grid lg:min-h-screen", full ? "lg:grid-cols-1" : wide ? "lg:grid-cols-[72px_minmax(0,1fr)]" : "lg:grid-cols-[280px_minmax(0,1fr)]")}>
+          {!full ? <AdminSidebar collapsed={wide} /> : null}
 
-          {/* Column 2: Header + Main — never under sidebar */}
-          <div className="flex min-h-screen min-w-0 flex-col">
-            <AdminHeader onMenuClick={() => setMobileOpen(true)} />
+          <div className={cn("flex min-w-0 flex-col", full ? "h-dvh" : "min-h-screen")}>
+            {!full ? <AdminHeader onMenuClick={() => setMobileOpen(true)} /> : null}
             <motion.main
               key={pathname}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25 }}
-              className="min-w-0 flex-1 px-4 py-6 pb-28 print:p-0 md:px-6 md:py-8 lg:pb-8"
+              className={cn("min-w-0 flex-1 print:p-0", full ? "overflow-hidden p-2" : "px-4 py-6 pb-28 md:px-6 md:py-8 lg:pb-8")}
             >
-              <div className="mx-auto w-full max-w-7xl print:max-w-none">{children}</div>
+              <div className={cn("mx-auto h-full w-full print:max-w-none", full || wide ? "max-w-none" : "max-w-7xl")}>{children}</div>
             </motion.main>
-            <AdminMobileNav onMore={() => setMobileOpen(true)} />
+            {!full ? <AdminMobileNav onMore={() => setMobileOpen(true)} /> : null}
           </div>
         </div>
       </div>
-      </MeasureUnitsProvider>
-    </AuthGuard>
   );
 }

@@ -23,10 +23,12 @@ function NavItemLink({
   item,
   isActive,
   onNavigate,
+  collapsed,
 }: {
   item: AdminNavItem & { href: string };
   isActive: boolean;
   onNavigate?: () => void;
+  collapsed?: boolean;
 }) {
   const t = useT();
   const Icon = item.icon;
@@ -56,12 +58,12 @@ function NavItemLink({
           isActive ? "scale-110" : "group-hover:scale-105"
         )}
       />
-      <span className="relative">{t(item.labelKey)}</span>
+      {collapsed ? <span className="sr-only">{t(item.labelKey)}</span> : <span className="relative">{t(item.labelKey)}</span>}
     </Link>
   );
 }
 
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+function NavLinks({ onNavigate, collapsed }: { onNavigate?: () => void; collapsed?: boolean }) {
   const t = useT();
   const pathname = usePathname();
   const { user } = useAuth();
@@ -78,9 +80,11 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 
         return (
           <div key={group.labelKey}>
+            {collapsed ? null : (
             <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-coffee/40 dark:text-warm-white/40">
               {t(group.labelKey)}
             </p>
+            )}
             <nav className="space-y-0.5">
               {items.map((item) => {
                 const href = getAdminNavHref(item.segment, surface);
@@ -95,6 +99,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
                     item={{ ...item, href }}
                     isActive={isActive}
                     onNavigate={onNavigate}
+                    collapsed={collapsed}
                   />
                 );
               })}
@@ -110,7 +115,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
  * Desktop sidebar — part of CSS Grid column, NOT fixed overlay.
  * Sticky within column, 100vh, internal scroll when nav is long.
  */
-export function AdminSidebar() {
+export function AdminSidebar({ collapsed = false }: { collapsed?: boolean }) {
   const t = useT();
   const adminPath = useAdminPath();
   const storeHref =
@@ -125,13 +130,13 @@ export function AdminSidebar() {
         "sticky top-0 h-screen shrink-0 flex-col print:hidden",
         "border-e border-beige-dark/20 bg-warm-white dark:border-white/10 dark:bg-[#1a1412]"
       )}
-      style={{ width: ADMIN_SIDEBAR_WIDTH_PX }}
+      style={{ width: collapsed ? 72 : ADMIN_SIDEBAR_WIDTH_PX }}
       aria-label={t("admin.subtitle")}
     >
-      <div className="flex h-full flex-col p-5">
-        <Logo size="md" href={adminPath("")} className="h-12 w-auto max-w-[180px]" />
+      <div className={cn("flex h-full flex-col", collapsed ? "p-2" : "p-5")}>
+        <Logo size="md" href={adminPath("")} className={cn("h-12 w-auto", collapsed ? "max-w-[48px]" : "max-w-[180px]")} />
         <div className="mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <NavLinks />
+          <NavLinks collapsed={collapsed} />
         </div>
         <div className="shrink-0 border-t border-beige-dark/20 pt-4 dark:border-white/10">
           <Link
@@ -139,7 +144,7 @@ export function AdminSidebar() {
             className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-coffee/60 transition-colors hover:bg-beige/40 dark:text-warm-white/60 dark:hover:bg-white/10"
           >
             <Store className="h-4 w-4" />
-            {t("admin.backToStore")}
+            {collapsed ? <span className="sr-only">{t("admin.backToStore")}</span> : t("admin.backToStore")}
           </Link>
           <p className="mt-2 px-3 text-[10px] text-coffee/40 dark:text-warm-white/40">{BRAND.name}</p>
         </div>
